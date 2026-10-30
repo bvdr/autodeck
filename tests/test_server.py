@@ -309,3 +309,35 @@ def test_beat_to_beat_mode_is_used_for_transitions_and_persists(client, monkeypa
     assert seen[-1] is True
     session = json.loads((config.library_root() / "session.json").read_text())
     assert session["beat_to_beat"] is True
+
+
+NEW = "nnnnnnnnnnn"
+
+
+def test_requested_song_is_prepped_first_and_plays_next(client):
+    eng = client.engine
+    client.post("/api/playing", json={"id": IDS[0]})
+    r = client.post("/api/request", json={"id": NEW, "title": "Hit", "channel": "c", "duration": 180})
+    assert r.status_code == 200
+    pool, upcoming, _, _ = eng.get_state()
+    assert NEW in {s.id for s in pool} and upcoming[0] == NEW  # the worker preps it before anything
+    _ready(NEW, 121, "Hip-hop")  # analysis done (off-genre doesn't matter: the owner asked for it)
+    s = eng.by_id(NEW)
+    s.status, s.analysis = "ready", library.load_song(NEW).analysis
+    eng._on_worker_change()
+    assert client.get("/api/state").json()["queue"][0]["id"] == NEW  # plays next
+    client.post("/api/playing", json={"id": NEW})
+    assert NEW not in eng.requested
+
+
+def test_request_validates_id(client):
+    assert client.post("/api/request", json={"id": "../etc", "title": "x"}).status_code == 404
+
+
+def test_search_endpoint(client, monkeypatch):
+    from autodeck import fetch
+    monkeypatch.setattr(fetch, "search", lambda q, n=10: [Song(IDS[0], "title", "chan", 1.0, "queued"),
+                                                         Song(NEW, "Hit", "c", 180.0, "queued")])
+    res = client.get("/api/search", params={"q": "hit"}).json()["results"]
+    assert [(r["id"], r["status"]) for r in res] == [(IDS[0], "ready"), (NEW, None)]
+    assert client.get("/api/search", params={"q": " "}).status_code == 400

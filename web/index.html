@@ -44,6 +44,19 @@
 
   <nav id="genres" class="genres" aria-label="Genre"></nav>
 
+  <!-- Search: library matches first (instant, local), then YouTube. "Play next" preps the song
+       ahead of everything and queues it next once it's ready (POST /api/request). -->
+  <section aria-labelledby="search-h" class="search">
+    <h2 id="search-h">Search</h2>
+    <form id="search-form" role="search">
+      <label for="q" class="sr-only">Song or artist</label>
+      <input id="q" type="search" placeholder="Song or artist…" autocomplete="off">
+      <button type="submit">Search</button>
+    </form>
+    <p id="search-msg" class="dim" role="status" aria-live="polite"></p>
+    <ul id="results" class="list"></ul>
+  </section>
+
   <section aria-labelledby="queue-h">
     <h2 id="queue-h">Up next</h2>
     <ol id="queue" class="list"></ol>

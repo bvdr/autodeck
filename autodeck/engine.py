@@ -60,6 +60,10 @@ class Engine:
         # or too late) must never describe the song that is really playing, or the next
         # transition would be computed on the wrong time map.
         self.plans: dict[str, tuple[str, TimeMap, object]] = {}
+        # Songs the owner picked from search ("play next"), oldest first. Not-ready ones go to
+        # the front of the worker's list (prepped before anything, cap or not); ready ones go to
+        # the front of the queue, whatever the active genre. Dropped once they start playing.
+        self.requested: list[str] = []
         # Owner's "beat to beat" mode: blends skip a's outro and b's intro (planner._main_view).
         self.beat_to_beat = False
         # Created here, started by the server lifespan (tests never start it).
@@ -71,7 +75,8 @@ class Engine:
     # --- worker interface ----------------------------------------------------
     def get_state(self):
         with LOCK:  # reentrant: the worker calls this while holding LOCK in _set
-            return list(self.pool), list(self.upcoming), self.genre, set(self.played)
+            first = [i for i in self.requested if i not in self.upcoming]  # requested, not ready yet
+            return list(self.pool), first + list(self.upcoming), self.genre, set(self.played)
 
     def _on_worker_change(self) -> None:
         # A song changed status (e.g. became ready): it may belong in the queue now.
@@ -134,14 +139,15 @@ class Engine:
         self.notice = f"No ready {g} songs yet — playing from any genre" if fell_back else None
         use_genre = anyg if fell_back else g
         cur = self.by_id(self.playing) if self.playing else None
+        ok = {s.id for s in cands}
+        asked = [i for i in self.requested if i in ok]  # owner's picks play next, any genre
         if cur is None:
             # Nothing playing yet: no "previous song" to score against, so pool order.
-            self.upcoming = [s.id for s in (cands if fell_back else in_genre)]
+            self.upcoming = asked + [s.id for s in (cands if fell_back else in_genre) if s.id not in asked]
             return
-        ok = {s.id for s in cands}
         if keep is None:
             keep = self.upcoming[: config.FIXED_NEXT]
-        keep = [i for i in keep if i in ok]
+        keep = asked + [i for i in keep if i in ok and i not in asked]
         # Pins are absolute upcoming indices; order() sees the list after the kept prefix.
         n = len(keep)
         pins = {i - n: sid for i, sid in self.pinned.items() if i >= n and sid not in keep}
@@ -221,6 +227,8 @@ class Engine:
             # a song outside the queue leaves pin indices as they were.
             self.pinned = {i - (1 if pos is not None and pos < i else 0): p
                            for i, p in self.pinned.items() if p != sid}
+            if sid in self.requested:
+                self.requested.remove(sid)
             prev, self.playing = self.playing, sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
             self._save_session()
@@ -231,6 +239,36 @@ class Engine:
             for r in library.song_dir(prev).glob("render-*.wav"):
                 r.unlink(missing_ok=True)
         with LOCK:
+            self._recompute()
+            self._changed()
+
+    def search(self, q: str) -> list[dict]:
+        if not q.strip():
+            raise EngineError(400, "Type something to search for")
+        try:
+            hits = fetch.search(q.strip())  # network, outside the lock
+        except fetch.FetchError as e:
+            raise EngineError(400, str(e)) from e
+        with LOCK:
+            by = {s.id: s for s in self.pool}
+            # status tells the UI whether the song is already in the library (and ready).
+            return [{"id": h.id, "title": h.title, "channel": h.channel, "duration": h.duration,
+                     "status": by[h.id].status if h.id in by else None} for h in hits]
+
+    def request(self, sid: str, title: str, channel: str, duration: float) -> None:
+        """Owner picked a song (search): add it if new, prep it first, play it next."""
+        with LOCK:
+            s = self.by_id(sid)
+            if s is None:
+                # Same reuse rule as add(): a removed song's cache (analysis, owner genre) survives.
+                s = library.load_song(sid) or Song(sid, title, channel, float(duration or 0.0), "queued")
+                self.pool.append(s)
+                library.save_pool([x.id for x in self.pool])
+            if s.status == "failed":  # picking it again is a retry
+                s.status, s.error = "queued", None
+            library.save_song(s)
+            if sid not in self.requested:
+                self.requested.append(sid)
             self._recompute()
             self._changed()
 

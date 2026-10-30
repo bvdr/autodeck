@@ -137,8 +137,41 @@ async function add(url) {
   } catch (e) { msg.textContent = e.message; } // 400 {error} from the server
 }
 
+// --- search -----------------------------------------------------------------
+// Case- and diacritic-insensitive, so "sarba" finds "Sârba".
+const fold = (t) => (t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const mmss = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '');
+
+function resultRow(r, source) {
+  const li = el('li', { className: 'row' },
+    el('span', { className: 'name' }, el('b', { textContent: r.title }),
+      el('small', { textContent: ` ${r.channel || ''} ${mmss(r.duration)}` })),
+    el('span', { className: 'src', textContent: source }),
+    r.status ? badge(r) : null,
+    el('button', { textContent: 'Play next', title: 'Prepare now and play it next', 'aria-label': `Play ${r.title} next`,
+      onclick: () => act('/api/request', 'POST', { id: r.id, title: r.title, channel: r.channel || '', duration: r.duration || 0 }) }));
+  return li;
+}
+
+async function search(q) {
+  const msg = $('#search-msg'), out = $('#results');
+  q = q.trim();
+  if (!q) { out.replaceChildren(); msg.textContent = ''; return; }
+  const words = fold(q).split(/\s+/);
+  const local = (last?.pool ?? []).filter((s) => words.every((w) => fold(`${s.title} ${s.channel}`).includes(w))).slice(0, 10);
+  out.replaceChildren(...local.map((s) => resultRow(s, 'library')));
+  msg.textContent = 'Searching YouTube…';
+  try {
+    const { results } = await api(`/api/search?${new URLSearchParams({ q })}`);
+    const have = new Set(local.map((s) => s.id));
+    out.append(...results.filter((r) => !have.has(r.id)).map((r) => resultRow(r, 'YouTube')));
+    msg.textContent = out.children.length ? '' : 'No results.';
+  } catch (e) { msg.textContent = e.message; }
+}
+
 export function initUi(stateCb) {
   onState = stateCb;
+  $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value); });
   // Queue drag & drop -> POST /api/queue with pin = the dragged song.
   const q = $('#queue');
   q.addEventListener('dragstart', (e) => {

@@ -179,3 +179,21 @@ def test_legacy_flac_still_counts_as_cached(tmp_library, monkeypatch):
     p.write_bytes(b"x")
     monkeypatch.setattr(yt_dlp, "YoutubeDL", _raising_ydl(AssertionError("must not be called")))
     assert fetch.download(_song()) == p
+
+
+def test_search_returns_songs_from_youtube_search(monkeypatch):
+    seen = {}
+
+    class Y:
+        def __init__(self, opts): seen["opts"] = opts
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=False):
+            seen["url"] = url
+            return {"entries": [{"id": "abcdefghijk", "title": "Sârba", "channel": "Taraf", "duration": 200},
+                                {"id": "zzzzzzzzzzz", "title": "[Private video]"}]}
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Y)
+    res = fetch.search("sarba taraf", 8)
+    assert seen["url"] == "ytsearch8:sarba taraf"
+    assert seen["opts"]["extract_flat"]  # one request, titles only
+    assert [(s.id, s.title, s.duration) for s in res] == [("abcdefghijk", "Sârba", 200.0)]

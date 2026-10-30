@@ -62,4 +62,10 @@ summary { cursor: pointer; color: var(--dim); padding: 4px 0; }
 #add-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 #url { flex: 1; min-width: 240px; }
 
+.search { margin: 16px 0; }
+#search-form { display: flex; gap: 8px; }
+#q { flex: 1; min-width: 200px; }
+.row .src { font-size: 12px; color: var(--dim); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
 @media (max-width: 760px) { .mixer { grid-template-columns: 1fr; } }

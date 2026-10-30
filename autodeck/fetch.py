@@ -100,6 +100,17 @@ def expand(url: str) -> list[Song]:
     return [s for s in (_song_from_entry(e) for e in entries or [] if e) if s]
 
 
+def search(query: str, n: int = 10) -> list[Song]:
+    """Top YouTube search results for a song search box, status "queued". Titles/ids only."""
+    opts = {"quiet": True, "skip_download": True, "extract_flat": True, **_cookie_opts()}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{n}:{query}", download=False)
+    except Exception as exc:
+        raise FetchError(COOKIE_ERROR if _is_cookie_error(exc) else f"Search failed: {_short_reason(exc)}") from exc
+    return [s for s in (_song_from_entry(e) for e in (info or {}).get("entries") or [] if e) if s]
+
+
 def download(song: Song) -> Path:
     """Download the song's audio to library.audio_path (Opus, idempotent). Raises FetchError."""
     d = song_dir(song.id)

@@ -51,6 +51,12 @@ Re-adding the URL of a song that failed to download or analyze queues it for ano
   `none`. Songs download and analyze in a rolling window of 10. **Play** works as soon as 1 song is
   ready; it doesn't wait for the whole pool (the mix needs a second ready song to transition into).
 
+## Search
+
+Type a song or artist in **Search**. Matches from your library show first, then YouTube results.
+**Play next** downloads and analyzes that song right away (ahead of everything else, whatever genre
+is active) and plays it next once it's ready.
+
 ## Mixing modes
 
 - **Beat to beat** (button next to *Mix now*): blends skip the outgoing song's outro and the
