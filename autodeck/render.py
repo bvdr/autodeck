@@ -6,6 +6,7 @@ play_start; the render only covers [play_start, play_end].
 import bisect
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,8 @@ import pyrubberband
 import soundfile as sf
 
 from autodeck.config import EASE_BARS
+
+log = logging.getLogger(__name__)
 from autodeck.library import ANALYSIS_VERSION, Song, song_dir
 from autodeck.planner import Transition
 
@@ -54,12 +57,12 @@ def time_map_for(song: Song, incoming: Transition | None, outgoing: Transition |
     segs: list[tuple[float, float, float]] = []
     ratio = incoming.tempo_ratio if incoming else 1.0
     if incoming and outgoing:
-        # The planner guarantees the exit is after the overlap; otherwise this song is still
-        # sped up at out_at and the next blend's beats won't line up.
-        ov = incoming.in_at + incoming.length * ratio
-        # Capped at play_end: an unsatisfiable floor degrades (song ends sped up) instead of crashing.
-        ov = min(ov, an.play_end)
-        assert outgoing.out_at >= ov - 1e-6, f"exit {outgoing.out_at} before overlap end {ov}"
+        # The planner normally guarantees the exit is after the overlap. The only known
+        # exception is a fade (not beat-matched, so harmless); warn, never crash playback.
+        # Capped at play_end: an unsatisfiable floor degrades (song ends sped up).
+        ov = min(incoming.in_at + incoming.length * ratio, an.play_end)
+        if outgoing.out_at < ov - 1e-6:
+            log.warning("exit %.2f before overlap end %.2f for %s", outgoing.out_at, ov, song.id)
     if incoming and abs(ratio - 1.0) > _EPS:
         # The overlap lasts `length` s of rendered time, which covers length*ratio s of
         # this song's original audio. Audio before in_at plays at the ratio too.
