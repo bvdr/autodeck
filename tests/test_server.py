@@ -233,3 +233,38 @@ def test_readding_a_failed_song_retries_it(client, monkeypatch, remove_first):
     p = next(p for p in client.get("/api/state").json()["pool"] if p["id"] == sid)
     assert (p["status"], p["error"]) == ("queued", None)
     assert (library.load_song(sid).status, library.load_song(sid).error) == ("queued", None)
+
+
+def test_session_survives_a_server_restart(client, monkeypatch):
+    # The in-memory time maps used to die with the server: after a 1.05x blend the next exit
+    # was computed on b's identity map, ~2.3 s (over a bar) off the bar line, and played
+    # songs came round again.
+    a, b = IDS[0], IDS[1]
+    client.post("/api/playing", json={"id": a})
+    real = engine_mod.pick_transition
+    monkeypatch.setattr(engine_mod, "pick_transition", lambda x, y, after=None, entered=None:
+                        Transition("blend", a, b, 32.0, 0.0, 8.0, 1.05) if x.id == a else real(x, y, after, entered))
+    p = client.get("/api/transition", params={"from": a}).json()
+    client.post("/api/playing", json={"id": b, "plan_id": p["plan_id"]})
+    before = client.get("/api/transition", params={"from": b}).json()
+
+    fresh = Engine()  # same library on disk, nothing carried over in memory
+    c2 = TestClient(create_app(fresh), base_url="http://127.0.0.1")
+    after = c2.get("/api/transition", params={"from": b}).json()
+    assert fresh.playing == b and fresh.played == {a, b}
+    assert after["transition"]["in_id"] == before["transition"]["in_id"]
+    assert after["out_at_rendered"] == pytest.approx(before["out_at_rendered"])
+    assert fresh.entered[b] == client.engine.entered[b]
+    assert a not in [q["id"] for q in c2.get("/api/state").json()["queue"]]
+
+
+def test_corrupt_or_stale_session_is_ignored(tmp_library):
+    _ready(IDS[0], 120, "Pop")
+    library.save_pool([IDS[0]])
+    (tmp_library / "session.json").write_text('{"playing": "aaaa')
+    assert Engine().playing is None
+    (tmp_library / "session.json").write_text(json.dumps(
+        {"playing": "zzzzzzzzzz9", "played": ["zzzzzzzzzz9", IDS[0]],
+         "maps": {"zzzzzzzzzz9": [[0, 0], [1, 1]]}, "entered": {}}))
+    e = Engine()
+    assert e.playing is None and e.played == {IDS[0]} and e.maps == {}

@@ -11,7 +11,7 @@ from dataclasses import asdict
 
 from . import config, fetch, jobs, library
 from .library import Song
-from .planner import genre_entry, order, pick_transition
+from .planner import Transition, genre_entry, order, pick_transition
 from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
@@ -47,9 +47,11 @@ class Engine:
         self.notice: str | None = None
         self.version = 0
         # Ruling B: the map each song was last rendered with, and the transition that
-        # brought it in. In memory only; after a restart songs fall back to identity.
+        # brought it in. Persisted with playing/played in session.json (see _save_session):
+        # after a restart the playing song is still on its stretched render, and planning its
+        # exit on the identity map put the cut more than a bar off the grid.
         self.maps: dict[str, TimeMap] = {}
-        self.entered = {}
+        self.entered: dict[str, Transition] = {}
         # Candidate plans from /api/transition, keyed by plan_id: (in_id, TimeMap, Transition).
         # They only become maps/entered when the player reports it actually started that
         # render (POST /api/playing with plan_id). A response the player dropped (superseded
@@ -59,6 +61,7 @@ class Engine:
         # Created here, started by the server lifespan (tests never start it).
         self.worker = jobs.Worker(self.get_state, on_change=self._on_worker_change)
         with LOCK:
+            self._load_session()
             self._recompute()
 
     # --- worker interface ----------------------------------------------------
@@ -73,6 +76,30 @@ class Engine:
             self.version += 1
 
     # --- helpers (call with LOCK held) ----------------------------------------
+    def _session_file(self):
+        return config.library_root() / "session.json"
+
+    def _save_session(self) -> None:
+        # Plans stay in memory: a plan the player hasn't committed is worthless after a restart.
+        config.write_json_atomic(self._session_file(), {
+            "playing": self.playing, "played": sorted(self.played),
+            "maps": {k: tm.points for k, tm in self.maps.items()},
+            "entered": {k: asdict(t) for k, t in self.entered.items()}})
+
+    def _load_session(self) -> None:
+        try:
+            d = json.loads(self._session_file().read_text(encoding="utf-8"))
+            ids = {s.id for s in self.pool}  # songs removed meanwhile are dropped
+            playing = d.get("playing") if d.get("playing") in ids else None
+            played = {i for i in d.get("played", []) if i in ids}
+            maps = {k: TimeMap([tuple(p) for p in v]) for k, v in d.get("maps", {}).items() if k in ids}
+            entered = {k: Transition(**v) for k, v in d.get("entered", {}).items() if k in ids}
+        except FileNotFoundError:
+            return
+        except (ValueError, TypeError, AttributeError):
+            return  # corrupt session.json: start a fresh session rather than crash
+        self.playing, self.played, self.maps, self.entered = playing, played, maps, entered
+
     def by_id(self, sid: str) -> Song | None:
         return next((s for s in self.pool if s.id == sid), None)
 
@@ -190,6 +217,7 @@ class Engine:
                            for i, p in self.pinned.items() if p != sid}
             self.playing = sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
+            self._save_session()
             self._recompute()
             self._changed()
 
@@ -238,6 +266,7 @@ class Engine:
             self.maps.pop(sid, None)
             self.entered.pop(sid, None)
             self.plans = {k: v for k, v in self.plans.items() if v[0] != sid}
+            self._save_session()  # drop its map/entry on disk too
             # Files stay on disk: re-adding the song later reuses the download + analysis.
             library.save_pool([s.id for s in self.pool])
             self._recompute()
