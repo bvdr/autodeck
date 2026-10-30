@@ -154,3 +154,24 @@ test('cancelling a plan: reset the outgoing before T0, hold it from T0 on (echo-
   assert.equal(S.outgoingOnCancel(p.T0 + 2, p.T0), null);
   assert.ok(S.KEY_RELEASE_MS >= 300);
 });
+
+// ui.js has no import-time DOM use, so its render gate is testable here with a stub
+// document (kept in this file so `node --test web/schedule.test.mjs` stays the one command).
+test('setState never re-renders under a focused select, even once dirty', async () => {
+  let renders = 0;
+  globalThis.document = {
+    activeElement: { tagName: 'SELECT' },
+    querySelector: () => { renders++; throw new Error('render'); },
+  };
+  const { setState } = await import('./ui.js');
+  const st = (version) => ({ version, notice: null });
+  setState(st(1)); // changed while the owner has the genre dropdown open: deferred
+  assert.equal(renders, 0);
+  setState(st(1)); // a poll with no change: still open, must not rebuild the DOM under it
+  setState(st(2));
+  assert.equal(renders, 0);
+  globalThis.document.activeElement = null; // dropdown closed: the deferred render runs
+  assert.throws(() => setState(st(2)), /render/);
+  assert.ok(renders > 0);
+  delete globalThis.document;
+});

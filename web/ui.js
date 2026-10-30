@@ -107,8 +107,9 @@ export function setState(s) {
   const changed = !last || s.version !== last.version || s.notice !== last.notice;
   last = s;
   const busy = dragging || document.activeElement?.tagName === 'SELECT';
-  if (changed && busy) dirty = true;
-  else if (changed || dirty) { dirty = false; render(s); }
+  // Busy wins over dirty: once a state was deferred, every later poll (changed or not) used
+  // to re-render, rebuilding the genre dropdown and closing it under the owner.
+  if (busy) { if (changed) dirty = true; } else if (changed || dirty) { dirty = false; render(s); }
   onState(s);
 }
 export const getState = () => last;
