@@ -75,7 +75,9 @@ def _steady_run_start(downbeats: np.ndarray, pulse: np.ndarray) -> int | None:
 
 def _tempo_fallback(y: np.ndarray) -> float:
     try:
-        t = float(np.atleast_1d(librosa.feature.rhythm.tempo(y=y, sr=SR))[0])
+        # librosa.feature.tempo: in librosa 1.0 the `feature.rhythm` path only resolves if
+        # that submodule was imported explicitly, so it raised and this always returned 120.
+        t = float(np.atleast_1d(librosa.feature.tempo(y=y, sr=SR))[0])
         return t if np.isfinite(t) and t > 0 else FALLBACK_BPM
     except Exception:
         return FALLBACK_BPM

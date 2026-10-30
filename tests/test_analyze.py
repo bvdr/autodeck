@@ -112,3 +112,11 @@ def test_unsnappable_trim_marks_grid_unreliable(tmp_path, monkeypatch):
     a = analyze(p, "t", "c")
     assert a.grid_reliable is False
     assert a.play_start == pytest.approx(42, abs=1)
+
+
+def test_tempo_fallback_is_not_constant(click_track):
+    import librosa
+    from autodeck import analyze as A
+
+    y, _ = librosa.load(click_track(100, 30), sr=A.SR)
+    assert A._tempo_fallback(y) == pytest.approx(100, rel=0.05)  # was always FALLBACK_BPM (120)
