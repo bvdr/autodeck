@@ -116,3 +116,55 @@ def test_genre_entry():
     assert genre_entry(cur, [cur, pop], "Hip-hop") == (pop, True)
     assert genre_entry(cur, [cur], "Hip-hop") == (None, True)
     assert score_pair(cur, hh) > score_pair(cur, make_song(150, "3B"))
+
+
+# --- fix round 1 ---
+from autodeck.planner import Transition  # noqa: E402
+
+
+def _invariants(a, b, t):
+    assert a.analysis.play_start < t.out_at <= a.analysis.play_end - t.length + 1e-9
+    assert t.in_at >= b.analysis.play_start and t.length >= 0
+
+
+def test_entered_exit_after_ease_back():
+    a, b = make_song(122, duration=70), make_song(122)
+    bar = 60 / 122 * 4
+    ent = Transition("blend", "x", a.id, 0, a.analysis.play_start, 16 * bar, 1.0)
+    ease_end = ent.in_at + ent.length + 16 * bar
+    t = pick_transition(a, b, entered=ent)
+    assert t.out_at >= ease_end - 1e-9 and t.out_at in a.analysis.downbeats
+    _invariants(a, b, t)
+    assert pick_transition(a, b).out_at < ease_end  # without `entered` it would exit mid-ease
+
+
+def test_entered_nothing_fits_still_valid():
+    a, b = make_song(122, duration=70), make_song(124)
+    ent = Transition("blend", "x", a.id, 0, a.analysis.play_start, 500.0, 1.0)
+    _invariants(a, b, pick_transition(a, b, entered=ent))
+
+
+def test_mix_now_near_end_is_on_a_downbeat():
+    a, b = make_song(122), make_song(124)
+    last = phrase_boundaries(a.analysis.downbeats)[-1]
+    for other in (b, make_song(150)):
+        t = pick_transition(a, other, after=last + 0.37)
+        assert t.out_at in a.analysis.downbeats
+        _invariants(a, other, t)
+
+
+def test_long_blend_does_not_leave_the_outro():
+    a, b = make_song(122, duration=55.2), make_song(124)
+    d = a.analysis.downbeats
+    assert len(d) == 28
+    a.analysis.sections = [Section(d[0], d[8], "intro"), Section(d[8], d[17], "body"), Section(d[17], d[27], "outro")]
+    b.analysis.sections[0].end = b.analysis.downbeats[16]
+    t = pick_transition(a, b)
+    assert t.kind == "blend" and t.out_at >= d[17] and t.out_at == d[24]
+
+
+def test_fade_when_only_b_lacks_grid_uses_a_boundary():
+    a, b = make_song(122), make_song(grid=False)
+    t = pick_transition(a, b)
+    assert t.kind == "fade" and t.out_at in phrase_boundaries(a.analysis.downbeats)
+    assert t.out_at + t.length <= a.analysis.play_end
