@@ -53,6 +53,11 @@ def time_map_for(song: Song, incoming: Transition | None, outgoing: Transition |
     # segs: (original_start, original_end, speed)
     segs: list[tuple[float, float, float]] = []
     ratio = incoming.tempo_ratio if incoming else 1.0
+    if incoming and outgoing:
+        # The planner guarantees the exit is after the overlap; otherwise this song is still
+        # sped up at out_at and the next blend's beats won't line up.
+        ov = incoming.in_at + incoming.length * ratio
+        assert outgoing.out_at >= ov - 1e-6, f"exit {outgoing.out_at} before overlap end {ov}"
     if incoming and abs(ratio - 1.0) > _EPS:
         # The overlap lasts `length` s of rendered time, which covers length*ratio s of
         # this song's original audio. Audio before in_at plays at the ratio too.

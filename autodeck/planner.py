@@ -103,12 +103,12 @@ def _pick_out(a: Song, length: float, after: float | None, min_out: float = 0.0,
     return c[-1] if c else None
 
 
-def _search(a: Song, lengths: list[float], after: float | None, ease_end: float | None):
-    """First (length, out_at) that fits. Order matters (see comments): exits that
+def _search(a: Song, lengths: list[float], after: float | None, floors: list[float]):
+    """First (length, out_at) that fits, trying `floors` (min out_at) in order. Order matters (see comments): exits that
     respect the incoming ease-back come first, then plain ones; within each, a
     boundary inside the outro for ANY candidate length beats an earlier one, so a
     long blend can't drag the exit out of the outro when a shorter one fits."""
-    for floor in ([ease_end, 0.0] if ease_end is not None else [0.0]):
+    for floor in floors:
         for wide in (False, True):
             for n in lengths:
                 out_at = _pick_out(a, n, after, floor, wide)
@@ -137,20 +137,26 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     at or after the end of its tempo ease-back (in a's original time:
     entered.in_at + entered.length * entered.tempo_ratio + EASE_BARS bars) if a
     fitting boundary exists. Otherwise the normal choice is used and the renderer
-    has to compress the ease (short songs).
+    has to compress the ease (short songs). out_at >= entered overlap end
+    (in_at + length * tempo_ratio) is a hard floor: if no boundary satisfies it, the
+    result is a cut at the first downbeat >= that point (else play_end).
     """
     an, bn = a.analysis, b.analysis
     mk = lambda kind, out_at, in_at, length, ratio=1.0: Transition(  # noqa: E731
         kind, a.id, b.id, out_at, in_at, length, ratio)
     bar_a = _bar(an.bpm)
-    ease_end = (entered.in_at + entered.length * entered.tempo_ratio + EASE_BARS * bar_a) if entered else None
+    # overlap_end: the renderer plays a at entered.tempo_ratio until here, so exiting earlier
+    # would leave a sped up at out_at and misalign the next blend. HARD floor.
+    # ease_end: where the ease-back finishes; best-effort floor above it.
+    overlap_end = (entered.in_at + entered.length * entered.tempo_ratio) if entered else 0.0
+    floors = [overlap_end + EASE_BARS * bar_a, overlap_end] if entered else [0.0]
 
     if not (an.grid_reliable and bn.grid_reliable):
         length = min(FADE_LEN, max(an.play_end - an.play_start, 0.0))
         if not an.grid_reliable:
-            out_at = _fade_out(a, after)
+            out_at = max(_fade_out(a, after), min(overlap_end, an.play_end - length))
         else:
-            hit = _search(a, [length], after, ease_end)
+            hit = _search(a, [length], after, floors)
             out_at = hit[1] if hit else _fade_out(a, after)
         return mk("fade", out_at, bn.play_start, length)
 
@@ -164,7 +170,7 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
         # Prefer 16, then 8, then 4 bars; below 4 use whatever whole bars fit; none -> cut.
         bars = [n for n in (16, 8, 4) if n <= whole] or ([whole] if whole >= 1 else [])
         bars += [m for m in range(min(whole, 3), 0, -1) if m not in bars]
-        hit = _search(a, [n * bar_a for n in bars], after, ease_end)
+        hit = _search(a, [n * bar_a for n in bars], after, floors)
         if hit:
             return mk("blend" if kind == "match" else "half_double", hit[1], bn.play_start, hit[0], ratio)
         # no whole-bar overlap fits: fall through to a cut below
@@ -172,18 +178,18 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     # Non-matched (or blend that can't fit): cut / echo / dropswap on a phrase boundary.
     length = ECHO_BARS * bar_a
     if kind == "none" and outro >= length:
-        hit = _search(a, [length], after, ease_end)
+        hit = _search(a, [length], after, floors)
         if hit:
             body = next((x for x in bn.sections if x.label == "body"), None)
             if body and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm):
                 return mk("dropswap", hit[1], body.start, length)
             return mk("echo", hit[1], bn.play_start, length)
-    hit = _search(a, [0.0], after, ease_end)
+    hit = _search(a, [0.0], after, floors)
     if hit:
         out_at = hit[1]
     else:
-        # No phrase boundary left after `after`: take the next downbeat (never mid-bar), else play_end.
-        t = after if after is not None else an.play_start
+        # No phrase boundary left after `after` / overlap_end: take the next downbeat (never mid-bar), else play_end.
+        t = max(overlap_end, after if after is not None else an.play_start)
         out_at = next((d for d in an.downbeats if d >= t), an.play_end)
         out_at = min(max(out_at, an.play_start), an.play_end)
     return mk("cut", out_at, bn.play_start, 0.0)

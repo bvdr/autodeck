@@ -168,3 +168,19 @@ def test_fade_when_only_b_lacks_grid_uses_a_boundary():
     t = pick_transition(a, b)
     assert t.kind == "fade" and t.out_at in phrase_boundaries(a.analysis.downbeats)
     assert t.out_at + t.length <= a.analysis.play_end
+
+
+def test_exit_never_before_overlap_end():
+    a, b = make_song(122, duration=70), make_song(124)
+    bar = 60 / 122 * 4
+    ent = Transition("blend", "x", a.id, 0, a.analysis.play_start, 16 * bar, 0.95)
+    ov = ent.in_at + ent.length * ent.tempo_ratio
+    for after in (None, ov - 5, 3.0):
+        for other in (b, make_song(150), make_song(grid=False)):
+            t = pick_transition(a, other, after=after, entered=ent)
+            assert t.out_at >= ov - 1e-6 and t.kind in {"blend", "half_double", "cut", "echo", "dropswap", "fade"}
+            _invariants(a, other, t)
+    # nothing fits: overlap end beyond the last boundary -> cut on a downbeat
+    ent.length = 80.0
+    t = pick_transition(a, b, entered=ent)
+    assert t.kind == "cut" and t.out_at == a.analysis.play_end

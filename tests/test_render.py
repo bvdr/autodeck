@@ -102,3 +102,15 @@ def test_render_stretch_keeps_pitch(tmp_library):
     seg = y[sr * 12: sr * 20]  # steady-ish part; the tone must still be ~100 Hz
     f = np.fft.rfftfreq(len(seg), 1 / sr)
     assert f[np.argmax(np.abs(np.fft.rfft(seg * np.hanning(len(seg)))))] == pytest.approx(100.0, rel=0.01)
+
+
+def test_time_map_for_rejects_exit_inside_overlap():
+    import pytest
+    from autodeck.planner import Transition
+    from autodeck.render import time_map_for
+    from tests.test_planner import make_song
+    s = make_song(122, duration=70)
+    inc = Transition("blend", "x", s.id, 0, s.analysis.play_start, 20.0, 0.95)
+    out = Transition("cut", s.id, "y", s.analysis.play_start + 5, 1.0, 0.0, 1.0)
+    with pytest.raises(AssertionError):
+        time_map_for(s, inc, out)
