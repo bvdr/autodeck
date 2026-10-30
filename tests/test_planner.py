@@ -184,3 +184,12 @@ def test_exit_never_before_overlap_end():
     ent.length = 80.0
     t = pick_transition(a, b, entered=ent)
     assert t.kind == "cut" and t.out_at == a.analysis.play_end
+
+
+@pytest.mark.parametrize("a_grid,b_grid", [(True, False), (False, True)])
+def test_fade_fallback_respects_overlap_floor(a_grid, b_grid):
+    a, b = make_song(122, duration=70, grid=a_grid), make_song(grid=b_grid)
+    ent = Transition("blend", "x", a.id, 0, 0.0, 63.5, 1.0)
+    t = pick_transition(a, b, entered=ent)
+    assert t.kind == "fade" and t.out_at >= 63.5 - 1e-6
+    assert t.out_at + t.length <= a.analysis.play_end + 1e-9

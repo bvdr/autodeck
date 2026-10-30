@@ -153,11 +153,10 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
 
     if not (an.grid_reliable and bn.grid_reliable):
         length = min(FADE_LEN, max(an.play_end - an.play_start, 0.0))
-        if not an.grid_reliable:
-            out_at = max(_fade_out(a, after), min(overlap_end, an.play_end - length))
-        else:
-            hit = _search(a, [length], after, floors)
-            out_at = hit[1] if hit else _fade_out(a, after)
+        hit = _search(a, [length], after, floors) if an.grid_reliable else None
+        out_at = hit[1] if hit else _fade_out(a, after)
+        if not hit:  # unfloored fallback: apply the hard overlap_end floor here too
+            out_at = max(out_at, min(overlap_end, an.play_end - length))
         return mk("fade", out_at, bn.play_start, length)
 
     kind, ratio = tempo_relation(an.bpm, bn.bpm)

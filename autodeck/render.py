@@ -57,6 +57,8 @@ def time_map_for(song: Song, incoming: Transition | None, outgoing: Transition |
         # The planner guarantees the exit is after the overlap; otherwise this song is still
         # sped up at out_at and the next blend's beats won't line up.
         ov = incoming.in_at + incoming.length * ratio
+        # Capped at play_end: an unsatisfiable floor degrades (song ends sped up) instead of crashing.
+        ov = min(ov, an.play_end)
         assert outgoing.out_at >= ov - 1e-6, f"exit {outgoing.out_at} before overlap end {ov}"
     if incoming and abs(ratio - 1.0) > _EPS:
         # The overlap lasts `length` s of rendered time, which covers length*ratio s of
