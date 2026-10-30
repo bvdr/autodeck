@@ -1,0 +1,36 @@
+[project]
+name = "autodeck"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "beat-this",
+    "essentia==2.1b6.dev1389",
+    "fastapi>=0.162.0",
+    "faster-whisper>=1.2.1",
+    "librosa>=1.0.0",
+    "onnxruntime>=1.31.1",
+    "pyrubberband>=0.4.0",
+    "pytest>=9.2.0",
+    "soundfile>=0.14.0",
+    "uvicorn>=0.54.0",
+    "yt-dlp>=2026.10.26",
+]
+
+[tool.uv.sources]
+beat-this = { git = "https://github.com/CPJKU/beat_this" }
+
+[tool.uv]
+# Anaconda's python is first on PATH here; its builds break essentia wheel selection. Use uv-managed CPython only.
+python-preference = "only-managed"
+# essentia dev1438 only ships cp314 wheels; dev1389 is the newest with cp312 macOS arm64.
+
+[tool.setuptools]
+packages = ["autodeck"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: heavy tests (real audio analysis / rendering)",
+    "network: tests that hit the real network (YouTube)",
+]
