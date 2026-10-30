@@ -244,3 +244,18 @@ def test_bpm_from_raw_beats_not_filled_grid(click_track, monkeypatch):
     monkeypatch.setattr(A, "_beats", lambda y: (beats, beats[::4]))
     a = analyze(click_track(120, 90), "t", "c")
     assert a.bpm == pytest.approx(120, rel=0.02)
+
+
+@pytest.mark.parametrize("true_bpm", [124, 128, 122])
+def test_bpm_not_snapped_to_tracker_frames(click_track, monkeypatch, true_bpm):
+    # beat_this reports beat times on 20 ms frames (frame / 50), so every raw gap is a whole
+    # number of frames and their median snaps to 120 / 125 / 130.43 bpm. That 0.8-2 % error
+    # becomes a 16-bar blend drifting 260-760 ms. A reliable grid's tempo is its slope.
+    from autodeck import analyze as A
+
+    true = 0.3 + np.arange(int(85 * true_bpm / 60)) * 60 / true_bpm
+    beats = np.round(true * 50) / 50
+    monkeypatch.setattr(A, "_beats", lambda y: (beats.copy(), beats[::4].copy()))
+    a = analyze(click_track(true_bpm, 90), "t", "c")
+    assert a.grid_reliable
+    assert a.bpm == pytest.approx(true_bpm, rel=0.001)
