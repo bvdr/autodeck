@@ -68,7 +68,7 @@ def _regular_grid(beats: np.ndarray, downbeats: np.ndarray, t0: float = -np.inf)
     if len(beats) < MIN_BEATS:
         return beats, downbeats
     med = float(np.median(np.diff(beats)))
-    out = [beats[0]]
+    out, cuts = [beats[0]], []
     for t in beats[1:]:
         gap = t - out[-1]
         if gap < 0.5 * med:
@@ -80,15 +80,18 @@ def _regular_grid(beats: np.ndarray, downbeats: np.ndarray, t0: float = -np.inf)
         # beat after a missed one is a little late (the old STEADY_TOL test) loses a beat
         # and shifts every later bar.
         n = int(round(gap / med))
+        # A slip = a gap whose beat count is ambiguous (more than SLIP_BEATS off a whole
+        # count, e.g. a 2.6-beat pause). Judged on the RAW gap, before filling: filled
+        # beats are evenly spaced, so the post-fill spacing never looks like a slip.
+        # Below SLIP_BEATS it's tracker jitter (beat_this's 20 ms frames, ~6 % of a fast beat).
+        if abs(gap / med - max(n, 1)) > SLIP_BEATS:
+            cuts.append(len(out) + max(n, 1) - 1)  # index of t once the fill is in
         if n >= 2:
             out.extend(out[-1] + gap * np.arange(1, n) / n)
         out.append(t)
     beats = np.asarray(out, dtype=float)
     if len(downbeats) == 0:
         return beats, downbeats
-    # A slip = a gap whose beat count is ambiguous (more than SLIP_BEATS off a whole beat).
-    # Below that it's tracker jitter (beat_this works in 20 ms frames, ~6 % of a fast beat).
-    cuts = (np.flatnonzero(np.abs(np.diff(beats) / med - 1) > SLIP_BEATS) + 1).tolist()
     voters = downbeats[downbeats >= t0 - 1e-6]
     idx = np.abs(beats[None, :] - voters[:, None]).argmin(axis=1) if len(voters) else np.zeros(0, int)
     idx = idx[np.abs(beats[idx] - voters) <= 0.25 * med]  # a downbeat far from any beat says nothing

@@ -210,3 +210,25 @@ def test_junk_lead_in_downbeats_do_not_vote(tmp_path, monkeypatch):
     assert a.grid_reliable
     assert a.play_start == pytest.approx(48, abs=0.6)
     assert np.allclose(d / 2.0, np.round(d / 2.0), atol=0.05)
+
+
+def test_ambiguous_pause_is_a_slip(tmp_path, monkeypatch):
+    # Reviewer probe: steady 0.5 s beats, a 2.6-beat pause, music restarts on beat 1.
+    # Rounding the pause to 3 beats and never cutting there left 28 % of bars a beat off
+    # while CV and agreement (0.72) still passed. The pause must re-phase the grid.
+    import soundfile as sf
+    from autodeck import analyze as A
+    from conftest import SR, make_click_signal
+
+    p = tmp_path / "t.flac"
+    sf.write(p, np.concatenate([make_click_signal(120, 40.5), np.zeros(int(0.8 * SR), np.float32),
+                                make_click_signal(120, 100)]), SR)
+    pre, post = np.arange(0, 40.01, 0.5), 41.3 + np.arange(0, 100, 0.5)
+    monkeypatch.setattr(A, "_beats", lambda y: (np.concatenate([pre, post]), np.concatenate([pre[::4], post[::4]])))
+    a = analyze(p, "t", "c")
+    true = np.concatenate([pre[::4], post[::4]])
+    d = np.array(a.downbeats[:-1])  # last one may be the extrapolated play_end bar line
+    on_beat_one = all(np.min(np.abs(true - x)) < 0.05 for x in d)
+    assert on_beat_one or not a.grid_reliable
+    assert a.grid_reliable
+
