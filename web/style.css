@@ -62,6 +62,7 @@ summary { cursor: pointer; color: var(--dim); padding: 4px 0; }
 #add-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 #url { flex: 1; min-width: 240px; }
 
+.fx { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
 .search { margin: 16px 0; }
 #search-form { display: flex; gap: 8px; }
 #q { flex: 1; min-width: 200px; }

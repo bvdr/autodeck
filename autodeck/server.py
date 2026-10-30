@@ -160,8 +160,10 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     @app.get("/api/transition")
     # `from` is a Python keyword, hence the alias.
-    def transition(from_: Annotated[str, Query(alias="from")], after: float | None = None):
-        return eng.transition(_id(from_), after)
+    def transition(from_: Annotated[str, Query(alias="from")], after: float | None = None,
+                   kind: str | None = None):
+        # kind: the owner's forced effect from the dropdown (planner.FORCEABLE), else auto.
+        return eng.transition(_id(from_), after, kind)
 
     @app.get("/audio/{sid}/{name}")
     def audio(sid: str, name: str):

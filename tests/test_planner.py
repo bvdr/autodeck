@@ -252,3 +252,18 @@ def test_beat_to_beat_falls_back_without_body_sections():
         an.sections = [an.sections[0], an.sections[-1]]
         an.sections[0].end = an.sections[1].start
     assert pick_transition(a, b, beat_to_beat=True) == pick_transition(a, b)
+
+
+@pytest.mark.parametrize("force", ["echo", "dropswap", "cut", "fade"])
+def test_owner_can_force_a_transition_effect(force):
+    a, b = make_song(122), make_song(124, body_at=None)
+    assert pick_transition(a, b).kind == "blend"  # the app's own pick
+    t = pick_transition(a, b, force=force)
+    assert t.kind == force
+    assert t.out_at in a.analysis.downbeats  # still on the grid, never mid-bar
+    assert t.tempo_ratio == 1.0
+
+
+def test_forcing_an_impossible_blend_falls_back_to_the_normal_choice():
+    a, b = make_song(122), make_song(150)  # unrelated tempos
+    assert pick_transition(a, b, force="blend") == pick_transition(a, b)

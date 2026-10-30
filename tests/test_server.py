@@ -197,7 +197,8 @@ def test_playing_commits_the_plan_the_player_started(client, monkeypatch):
                 Transition("blend", a, b, 40.0, 0.0, 8.0, 0.95)])
     real = engine_mod.pick_transition
     monkeypatch.setattr(engine_mod, "pick_transition",
-                        lambda x, y, after=None, entered=None, **kw: next(trs) if x.id == a else real(x, y, after, entered, **kw))
+                        lambda x, y, after=None, entered=None, **kw: next(trs) if x.id == a and kw.get("force") is None
+                        else real(x, y, after, entered, **kw))
     p1 = client.get("/api/transition", params={"from": a}).json()
     p2 = client.get("/api/transition", params={"from": a, "after": 30.0}).json()
     assert p1["plan_id"] != p2["plan_id"]
@@ -341,3 +342,14 @@ def test_search_endpoint(client, monkeypatch):
     res = client.get("/api/search", params={"q": "hit"}).json()["results"]
     assert [(r["id"], r["status"]) for r in res] == [(IDS[0], "ready"), (NEW, None)]
     assert client.get("/api/search", params={"q": " "}).status_code == 400
+
+
+def test_transition_lists_possible_effects_and_honours_a_forced_one(client):
+    a = IDS[0]
+    client.post("/api/playing", json={"id": a})
+    auto = client.get("/api/transition", params={"from": a}).json()
+    assert auto["forced"] is None and auto["transition"]["kind"] in auto["options"] + ["half_double"]
+    assert {"cut", "fade"} <= set(auto["options"])
+    forced = client.get("/api/transition", params={"from": a, "kind": "cut"}).json()
+    assert forced["transition"]["kind"] == "cut" and forced["forced"] == "cut"
+    assert client.get("/api/transition", params={"from": a, "kind": "explode"}).status_code == 400

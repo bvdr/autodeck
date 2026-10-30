@@ -19,7 +19,11 @@ const M = {
   seq: 0,          // bumped per request; a response with an old seq is dropped (latest wins)
   timers: [],      // setTimeouts belonging to M.plan
   manual: false,
+  force: null,     // owner's forced effect for the current song's exit (null = app's pick)
+  fxPlan: null,    // the plan the effect dropdown was last built for
 };
+const FX_LABEL = { blend: 'Beat blend', half_double: 'Beat blend (½×/2×)', echo: 'Echo out',
+  dropswap: 'Drop swap', cut: 'Cut', fade: 'Fade' };
 
 const now = () => M.ctx.currentTime;
 const status = (t) => { $('#status').textContent = t; };
@@ -38,6 +42,7 @@ async function requestPlan(deck, after = null, retries = 0) {
   try {
     const q = new URLSearchParams({ from: id });
     if (after != null) q.set('after', after.toFixed(3));
+    if (M.force) q.set('kind', M.force);
     res = await api(`/api/transition?${q}`);
     if (res.transition) res.track = await loadTrack(M.ctx, res.in_deck); // decode before scheduling
   } catch (e) {
@@ -112,6 +117,7 @@ function cancelPlan() {
 async function onStarted(deck) {
   const d = M.decks[deck];
   try { setState(await api('/api/playing', 'POST', { id: d.info.id, plan_id: d.planId })); } catch (e) { status(e.message); }
+  M.force = null; // a forced effect was for the previous song's exit
   requestPlan(deck);
 }
 
@@ -285,11 +291,33 @@ function frame() {
   if (!M.manual && M.plan) {
     const p = S.faderAt(M.plan, t);
     fader.value = Math.round((M.plan.inDeck === 1 ? p : 1 - p) * 1000);
-    if (t < M.plan.T0) status(`Next: ${M.plan.res.in_deck.title} — ${M.plan.kind} in ${fmt(M.plan.T0 - t)}`);
-    else status(`Mixing into ${M.plan.res.in_deck.title} (${M.plan.kind})`);
+    if (t < M.plan.T0) status(`Next: ${M.plan.res.in_deck.title} in ${fmt(M.plan.T0 - t)}`);
+    else status(`Mixing into ${M.plan.res.in_deck.title} (${FX_LABEL[M.plan.kind] ?? M.plan.kind})`);
   }
+  updateFx(t);
   requestAnimationFrame(frame);
 }
+
+// --- effect dropdown --------------------------------------------------------
+const fx = $('#fx');
+/** Show the next mix's effect; rebuilt only when the plan changes (not every frame). */
+function updateFx(t) {
+  const p = M.plan;
+  $('#fx-wrap').hidden = !p || M.manual || t >= p.T0 - S.REPLAN_MARGIN; // too late to change it
+  if (!p || p === M.fxPlan || document.activeElement === fx) return;
+  M.fxPlan = p;
+  const opts = p.res.options ?? [];
+  fx.replaceChildren(
+    new Option(`Auto (${FX_LABEL[p.kind] ?? p.kind})`, ''),
+    ...opts.map((k) => new Option(FX_LABEL[k], k)));
+  fx.value = M.force && opts.includes(M.force) ? M.force : '';
+}
+fx.addEventListener('change', () => {
+  if (!M.plan || !S.canReplan(now(), M.plan.T0)) { status('Too late to change this mix.'); return; }
+  M.force = fx.value || null;
+  M.fxPlan = null;
+  requestPlan(M.cur, M.req?.after ?? null); // re-render with the chosen effect; latest wins
+});
 
 $('#play').addEventListener('click', play);
 $('#mixnow').addEventListener('click', mixNow);

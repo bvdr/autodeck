@@ -13,7 +13,7 @@ import soundfile as sf
 
 from . import config, fetch, jobs, library
 from .library import Song
-from .planner import Transition, genre_entry, order, pick_transition
+from .planner import FORCEABLE, Transition, genre_entry, order, pick_transition
 from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
@@ -386,7 +386,9 @@ class Engine:
             self.maps.setdefault(sid, tm)
             return self._deck(s, tm, path)
 
-    def transition(self, from_id: str, after: float | None) -> dict:
+    def transition(self, from_id: str, after: float | None, kind: str | None = None) -> dict:
+        if kind is not None and kind not in FORCEABLE:
+            raise EngineError(400, f"Unknown transition effect: {kind}")
         with LOCK:
             a = self._ready(from_id)
             nxt = next((i for i in self.upcoming if i != from_id), None)
@@ -397,8 +399,14 @@ class Engine:
             tm_a = self.maps.setdefault(a.id, time_map_for(a, None))
             # The player reports rendered seconds; the planner works in original time.
             after_orig = tm_a.to_original(after) if after is not None else None
-            tr = pick_transition(a, b, after=after_orig, entered=self.entered.get(a.id),
-                                 beat_to_beat=self.beat_to_beat)
+            plan = lambda force: pick_transition(  # noqa: E731
+                a, b, after=after_orig, entered=self.entered.get(a.id),
+                beat_to_beat=self.beat_to_beat, force=force)
+            tr = plan(kind)
+            # The dropdown lists only effects that actually work for this pair (pure, cheap:
+            # the planner is a handful of list scans). "blend" covers half_double too.
+            options = [k for k in FORCEABLE
+                       if plan(k).kind in (("blend", "half_double") if k == "blend" else (k,))]
             # ponytail: outgoing=None, b's own exit isn't planned yet; the planner keeps
             # exits after the ease when it can, so the ease is rarely cut short.
             tm_b = time_map_for(b, tr)
@@ -412,6 +420,7 @@ class Engine:
             for k in mine[:-PLANS_PER_SONG]:
                 del self.plans[k]
             return {"transition": asdict(tr), "plan_id": plan_id, "in_deck": self._deck(b, tm_b, path),
+                    "options": options, "forced": kind,
                     "out_at_rendered": tm_a.to_rendered(tr.out_at),
                     "in_at_rendered": tm_b.to_rendered(tr.in_at)}
 

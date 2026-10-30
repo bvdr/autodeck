@@ -175,8 +175,11 @@ def _fade_out(a: Song, after: float | None) -> float:
     return float(min(cand, key=lambda s: (e[s], -s))) if cand else end
 
 
+FORCEABLE = ("blend", "echo", "dropswap", "cut", "fade")  # "blend" also covers half_double
+
+
 def pick_transition(a: Song, b: Song, after: float | None = None, entered: Transition | None = None,
-                    beat_to_beat: bool = False) -> Transition:
+                    beat_to_beat: bool = False, force: str | None = None) -> Transition:
     """Plan a -> b. `after` = mix now: leave at the first phrase boundary >= after.
 
     `entered` is the transition that brought `a` in. When given, a's exit is chosen
@@ -186,6 +189,10 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     has to compress the ease (short songs). out_at >= entered overlap end
     (in_at + length * tempo_ratio) is a hard floor: if no boundary satisfies it, the
     result is a cut at the first downbeat >= that point (else play_end).
+
+    `force` (one of FORCEABLE) is the owner's pick from the transition dropdown. It only
+    narrows the choice: a forced kind that can't work for this pair (e.g. a beat blend
+    between unrelated tempos) yields the normal choice, so the result's kind may differ.
     """
     late = False
     if beat_to_beat:
@@ -204,7 +211,7 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     overlap_end = (entered.in_at + entered.length * entered.tempo_ratio) if entered else 0.0
     floors = [overlap_end + EASE_BARS * bar_a, overlap_end] if entered else [0.0]
 
-    if not (an.grid_reliable and bn.grid_reliable):
+    if force == "fade" or not (an.grid_reliable and bn.grid_reliable):
         length = min(FADE_LEN, max(an.play_end - an.play_start, 0.0))
         hit = _search(a, [length], after, floors) if an.grid_reliable else None
         out_at = hit[1] if hit else _fade_out(a, after)
@@ -214,6 +221,8 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
 
     kind, ratio = tempo_relation(an.bpm, bn.bpm)
     outro = _section_len(a, "outro", first=False)
+    if force in ("echo", "dropswap", "cut"):
+        kind = "none"  # owner chose a non-beatmatched effect: skip the blend
 
     if kind != "none":
         # b's intro lasts longer in outgoing time when b is slowed (ratio < 1).
@@ -235,11 +244,12 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
 
     # Non-matched (or blend that can't fit): cut / echo / dropswap on a phrase boundary.
     length = ECHO_BARS * bar_a
-    if kind == "none" and outro >= length:
+    if kind == "none" and outro >= length and force != "cut":
         hit = _search(a, [length], after, floors, late)
         if hit:
             body = next((x for x in bn.sections if x.label == "body"), None)
-            if body and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm):
+            if (force != "echo" and body
+                    and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm)):
                 return mk("dropswap", hit[1], body.start, length)
             return mk("echo", hit[1], bn.play_start, length)
     hit = _search(a, [0.0], after, floors)

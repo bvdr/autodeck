@@ -16,6 +16,11 @@
     <button id="b2b" type="button" class="genre" aria-pressed="false"
             title="Skip outros and intros: blend from the main beat of one song straight into the next">Beat to beat</button>
     <p id="status" role="status" aria-live="polite">Press Play to start.</p>
+    <!-- The upcoming transition's effect: shows the app's pick, lets the owner force another.
+         Only effects that work for this pair are listed (server "options"). -->
+    <label id="fx-wrap" class="fx" hidden>Effect
+      <select id="fx" title="Transition effect for the next mix"></select>
+    </label>
     <p id="msg" role="alert"></p>
   </header>
 
