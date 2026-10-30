@@ -228,3 +228,27 @@ def test_irregular_bars_in_blend_window_never_beatmatch():
     db[k] += 0.6
     t = pick_transition(a, b)
     assert t.kind in ("echo", "dropswap", "cut") or t.out_at + t.length < db[k - 1]
+
+
+def test_beat_to_beat_skips_outro_and_intro():
+    # Owner's mode: no outro-into-intro blend; go from a's main part straight into b's beat.
+    a, b = make_song(122), make_song(124)
+    a_body = [x for x in a.analysis.sections if x.label == "body"][-1]
+    b_body = [x for x in b.analysis.sections if x.label == "body"][0]
+    t = pick_transition(a, b, beat_to_beat=True)
+    assert t.kind == "blend"
+    assert t.in_at == b_body.start                       # b enters on its first full-beat bar
+    assert t.out_at + t.length <= a_body.end + 1e-6     # a leaves before its outro
+    assert t.out_at >= a_body.start
+    assert t.out_at in a.analysis.downbeats
+    # it ends as late as possible: right where the outro would start
+    assert a_body.end - (t.out_at + t.length) < 16 * 240 / 122
+
+
+def test_beat_to_beat_falls_back_without_body_sections():
+    a, b = make_song(122), make_song(124)
+    for s in (a, b):  # only intro + outro, like a short track
+        an = s.analysis
+        an.sections = [an.sections[0], an.sections[-1]]
+        an.sections[0].end = an.sections[1].start
+    assert pick_transition(a, b, beat_to_beat=True) == pick_transition(a, b)

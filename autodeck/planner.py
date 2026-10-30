@@ -4,10 +4,10 @@ All Transition times are in ORIGINAL (unstretched) song time. The outgoing song
 is assumed to be at its native tempo at out_at (render ease-back finishes before
 the exit), so tempo_ratio only describes the incoming song.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from autodeck.config import ANY_GENRE, EASE_BARS
-from autodeck.library import Song
+from autodeck.library import Section, Song
 from autodeck.music import camelot_score, next_boundary, phrase_boundaries, tempo_relation
 
 FADE_LEN = 4.0        # s; brief wants 3..6
@@ -92,6 +92,26 @@ def _local_bpm(s: Song, t0: float, t1: float) -> float | None:
     return 240.0 * (len(db) - 1) / (db[-1] - db[0])
 
 
+def _main_view(s: Song, side: str) -> Song | None:
+    """Planning view of s without its intro (side="in") or outro (side="out"), for
+    beat-to-beat mode. The neighbouring body section plays the intro/outro role, so the
+    normal planner places the blend inside the main parts. None if s has no body section
+    (nothing to skip to). Times stay the song's real original times."""
+    an = s.analysis
+    body = [x for x in an.sections if x.label == "body"]
+    if not body or not an.grid_reliable:
+        return None
+    if side == "in":
+        i = an.sections.index(body[0])
+        secs = [Section(body[0].start, body[0].end, "intro"), *an.sections[i + 1:]]
+        view = replace(an, play_start=body[0].start, sections=secs)
+    else:
+        i = an.sections.index(body[-1])
+        secs = [*an.sections[:i], Section(body[-1].start, body[-1].end, "outro")]
+        view = replace(an, play_end=body[-1].end, sections=secs)
+    return replace(s, analysis=view)
+
+
 def _section_len(s: Song, label: str, first: bool) -> float:
     secs = [x for x in s.analysis.sections if x.label == label]
     if not secs:
@@ -100,7 +120,8 @@ def _section_len(s: Song, label: str, first: bool) -> float:
     return x.end - x.start
 
 
-def _pick_out(a: Song, length: float, after: float | None, min_out: float = 0.0, wide: bool = True) -> float | None:
+def _pick_out(a: Song, length: float, after: float | None, min_out: float = 0.0, wide: bool = True,
+              late: bool = False) -> float | None:
     """Phrase boundary of a to leave at, with out_at + length <= play_end and out_at >= min_out.
 
     wide=False only accepts boundaries inside the outro (or right after `after`);
@@ -118,14 +139,16 @@ def _pick_out(a: Song, length: float, after: float | None, min_out: float = 0.0,
     for bars in (16, 8):
         c = [t for t in phrase_boundaries(db, bars) if lo <= t <= end and t > an.play_start]
         if c:
-            return c[0]
+            # Normally the first: the blend covers the outro. late=True (beat-to-beat): the
+            # last, so the blend ends right where the skipped outro would have started.
+            return c[-1] if late else c[0]
     if not wide:
         return None
     c = [t for t in phrase_boundaries(db) if an.play_start < t <= end and t >= min_out - 1e-9]
     return c[-1] if c else None
 
 
-def _search(a: Song, lengths: list[float], after: float | None, floors: list[float]):
+def _search(a: Song, lengths: list[float], after: float | None, floors: list[float], late: bool = False):
     """First (length, out_at) that fits, trying `floors` (min out_at) in order. Order matters (see comments): exits that
     respect the incoming ease-back come first, then plain ones; within each, a
     boundary inside the outro for ANY candidate length beats an earlier one, so a
@@ -133,7 +156,7 @@ def _search(a: Song, lengths: list[float], after: float | None, floors: list[flo
     for floor in floors:
         for wide in (False, True):
             for n in lengths:
-                out_at = _pick_out(a, n, after, floor, wide)
+                out_at = _pick_out(a, n, after, floor, wide, late)
                 if out_at is not None:
                     return n, out_at
     return None
@@ -152,7 +175,8 @@ def _fade_out(a: Song, after: float | None) -> float:
     return float(min(cand, key=lambda s: (e[s], -s))) if cand else end
 
 
-def pick_transition(a: Song, b: Song, after: float | None = None, entered: Transition | None = None) -> Transition:
+def pick_transition(a: Song, b: Song, after: float | None = None, entered: Transition | None = None,
+                    beat_to_beat: bool = False) -> Transition:
     """Plan a -> b. `after` = mix now: leave at the first phrase boundary >= after.
 
     `entered` is the transition that brought `a` in. When given, a's exit is chosen
@@ -163,6 +187,13 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     (in_at + length * tempo_ratio) is a hard floor: if no boundary satisfies it, the
     result is a cut at the first downbeat >= that point (else play_end).
     """
+    late = False
+    if beat_to_beat:
+        # Owner's "beat to beat" mode: skip a's outro and b's intro, blending main part into
+        # main part. Falls back to the normal plan for a song without a body section.
+        va, vb = _main_view(a, "out"), _main_view(b, "in")
+        if va and vb:
+            a, b, late = va, vb, True
     an, bn = a.analysis, b.analysis
     mk = lambda kind, out_at, in_at, length, ratio=1.0: Transition(  # noqa: E731
         kind, a.id, b.id, out_at, in_at, length, ratio)
@@ -191,7 +222,7 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
         # Prefer 16, then 8, then 4 bars; below 4 use whatever whole bars fit; none -> cut.
         bars = [n for n in (16, 8, 4) if n <= whole] or ([whole] if whole >= 1 else [])
         bars += [m for m in range(min(whole, 3), 0, -1) if m not in bars]
-        hit = _search(a, [n * bar_a for n in bars], after, floors)
+        hit = _search(a, [n * bar_a for n in bars], after, floors, late)
         if hit:
             n_len, out_at = hit
             la = _local_bpm(a, out_at, out_at + max(n_len, LOCAL_MIN_BARS * bar_a))
@@ -205,7 +236,7 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     # Non-matched (or blend that can't fit): cut / echo / dropswap on a phrase boundary.
     length = ECHO_BARS * bar_a
     if kind == "none" and outro >= length:
-        hit = _search(a, [length], after, floors)
+        hit = _search(a, [length], after, floors, late)
         if hit:
             body = next((x for x in bn.sections if x.label == "body"), None)
             if body and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm):

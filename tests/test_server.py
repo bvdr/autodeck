@@ -6,7 +6,7 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 
 from autodeck import engine as engine_mod
-from autodeck import library
+from autodeck import config, library
 from autodeck.engine import Engine
 from autodeck.library import Analysis, Section, Song
 from autodeck.planner import Transition
@@ -162,9 +162,9 @@ def test_transition_after_converts_rendered_to_original(client, monkeypatch):
     seen = {}
     real = engine_mod.pick_transition
 
-    def spy(x, y, after=None, entered=None):
+    def spy(x, y, after=None, entered=None, **kw):
         seen["after"] = after
-        return real(x, y, after=after, entered=entered)
+        return real(x, y, after=after, entered=entered, **kw)
 
     monkeypatch.setattr(engine_mod, "pick_transition", spy)
     client.get("/api/transition", params={"from": IDS[0], "after": 10.0})
@@ -197,7 +197,7 @@ def test_playing_commits_the_plan_the_player_started(client, monkeypatch):
                 Transition("blend", a, b, 40.0, 0.0, 8.0, 0.95)])
     real = engine_mod.pick_transition
     monkeypatch.setattr(engine_mod, "pick_transition",
-                        lambda x, y, after=None, entered=None: next(trs) if x.id == a else real(x, y, after, entered))
+                        lambda x, y, after=None, entered=None, **kw: next(trs) if x.id == a else real(x, y, after, entered, **kw))
     p1 = client.get("/api/transition", params={"from": a}).json()
     p2 = client.get("/api/transition", params={"from": a, "after": 30.0}).json()
     assert p1["plan_id"] != p2["plan_id"]
@@ -242,8 +242,8 @@ def test_session_survives_a_server_restart(client, monkeypatch):
     a, b = IDS[0], IDS[1]
     client.post("/api/playing", json={"id": a})
     real = engine_mod.pick_transition
-    monkeypatch.setattr(engine_mod, "pick_transition", lambda x, y, after=None, entered=None:
-                        Transition("blend", a, b, 32.0, 0.0, 8.0, 1.05) if x.id == a else real(x, y, after, entered))
+    monkeypatch.setattr(engine_mod, "pick_transition", lambda x, y, after=None, entered=None, **kw:
+                        Transition("blend", a, b, 32.0, 0.0, 8.0, 1.05) if x.id == a else real(x, y, after, entered, **kw))
     p = client.get("/api/transition", params={"from": a}).json()
     client.post("/api/playing", json={"id": b, "plan_id": p["plan_id"]})
     before = client.get("/api/transition", params={"from": b}).json()
@@ -292,3 +292,20 @@ def test_previous_song_renders_are_deleted_when_the_next_starts(client):
     client.post("/api/playing", json={"id": b, "plan_id": tr["plan_id"]})
     assert not list(library.song_dir(a).glob("render-*.wav"))
     assert list(library.song_dir(b).glob("render-*.wav"))  # the playing song keeps its render
+
+
+def test_beat_to_beat_mode_is_used_for_transitions_and_persists(client, monkeypatch):
+    from autodeck import engine as engine_mod
+    seen = []
+    real = engine_mod.pick_transition
+    monkeypatch.setattr(engine_mod, "pick_transition",
+                        lambda *a, **k: seen.append(k.get("beat_to_beat")) or real(*a, **k))
+    a = IDS[0]
+    client.post("/api/playing", json={"id": a})
+    assert client.get("/api/state").json()["beat_to_beat"] is False
+    st = client.post("/api/mode", json={"beat_to_beat": True}).json()
+    assert st["beat_to_beat"] is True
+    client.get(f"/api/transition?from={a}")
+    assert seen[-1] is True
+    session = json.loads((config.library_root() / "session.json").read_text())
+    assert session["beat_to_beat"] is True

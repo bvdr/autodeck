@@ -32,6 +32,10 @@ class PlayingReq(BaseModel):
     plan_id: str | None = None  # the /api/transition plan the player actually started
 
 
+class ModeReq(BaseModel):
+    beat_to_beat: bool
+
+
 class GenreReq(BaseModel):
     genre: str
 
@@ -102,6 +106,11 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.post("/api/playing")
     def playing(req: PlayingReq):
         eng.set_playing(_id(req.id), req.plan_id)
+        return eng.state()
+
+    @app.post("/api/mode")
+    def mode(req: ModeReq):
+        eng.set_beat_to_beat(req.beat_to_beat)
         return eng.state()
 
     @app.post("/api/genre")

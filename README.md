@@ -51,6 +51,15 @@ Re-adding the URL of a song that failed to download or analyze queues it for ano
   `none`. Songs download and analyze in a rolling window of 10. **Play** works as soon as 1 song is
   ready; it doesn't wait for the whole pool (the mix needs a second ready song to transition into).
 
+## Mixing modes
+
+- **Beat to beat** (button next to *Mix now*): blends skip the outgoing song's outro and the
+  incoming song's intro, so the mix goes from the main beat of one song straight into the main beat
+  of the next. Songs without a separate main section blend as usual. The setting survives restarts.
+- Blends are matched on each song's tempo **where the blend happens** (not one tempo per song), so
+  songs that speed up live stay locked; where the beat grid at the blend is irregular (breakdowns,
+  spoken parts) the app uses a phrase-aligned echo, drop-swap or cut instead of beat-matching.
+
 ## Tests
 
     uv run pytest                                    # everything except network (default addopts)

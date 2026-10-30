@@ -31,7 +31,8 @@ const curId = () => M.decks[M.cur].info?.id;
 /** Ask the server for the transition out of `deck`'s song. `after` = rendered seconds. */
 async function requestPlan(deck, after = null, retries = 0) {
   const d = M.decks[deck], id = d.info.id, seq = ++M.seq;
-  M.req = { seq, deck, id, after, version: getState()?.version, inId: undefined, retries, loading: true };
+  M.req = { seq, deck, id, after, version: getState()?.version, mode: !!getState()?.beat_to_beat,
+            inId: undefined, retries, loading: true };
   status('Preparing next mix…');
   let res;
   try {
@@ -141,7 +142,9 @@ function onState(s) {
   const nextId = s.queue.find((q) => q.id !== r.id)?.id;
   const T0 = M.plan && M.plan.res.id === r.id ? M.plan.T0 : undefined;
   // After the outgoing blend started (T0 reached) the contract forbids refetching.
-  if (S.shouldReplan({ stateVersion: s.version, planVersion: r.version, planInId: r.inId, nextId, now: now(), T0 })) {
+  // A beat-to-beat toggle changes the plan for the same next song, so it replans too.
+  const modeChanged = !!s.beat_to_beat !== r.mode && S.canReplan(now(), T0);
+  if (modeChanged || S.shouldReplan({ stateVersion: s.version, planVersion: r.version, planInId: r.inId, nextId, now: now(), T0 })) {
     requestPlan(r.deck, r.after);
   } else {
     r.version = s.version; // seen; don't re-evaluate until the next change
@@ -290,5 +293,9 @@ function frame() {
 
 $('#play').addEventListener('click', play);
 $('#mixnow').addEventListener('click', mixNow);
+$('#b2b').addEventListener('click', async () => {
+  const on = $('#b2b').getAttribute('aria-pressed') !== 'true';
+  try { setState(await api('/api/mode', 'POST', { beat_to_beat: on })); } catch (e) { $('#msg').textContent = e.message; }
+});
 initUi(onState);
 poll();

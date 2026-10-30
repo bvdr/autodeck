@@ -60,6 +60,8 @@ class Engine:
         # or too late) must never describe the song that is really playing, or the next
         # transition would be computed on the wrong time map.
         self.plans: dict[str, tuple[str, TimeMap, object]] = {}
+        # Owner's "beat to beat" mode: blends skip a's outro and b's intro (planner._main_view).
+        self.beat_to_beat = False
         # Created here, started by the server lifespan (tests never start it).
         self.worker = jobs.Worker(self.get_state, on_change=self._on_worker_change)
         with LOCK:
@@ -86,7 +88,8 @@ class Engine:
         config.write_json_atomic(self._session_file(), {
             "playing": self.playing, "played": sorted(self.played),
             "maps": {k: tm.points for k, tm in self.maps.items()},
-            "entered": {k: asdict(t) for k, t in self.entered.items()}})
+            "entered": {k: asdict(t) for k, t in self.entered.items()},
+            "beat_to_beat": self.beat_to_beat})
 
     def _load_session(self) -> None:
         try:
@@ -101,6 +104,7 @@ class Engine:
         except (ValueError, TypeError, AttributeError):
             return  # corrupt session.json: start a fresh session rather than crash
         self.playing, self.played, self.maps, self.entered = playing, played, maps, entered
+        self.beat_to_beat = bool(d.get("beat_to_beat", False))
 
     def by_id(self, sid: str) -> Song | None:
         return next((s for s in self.pool if s.id == sid), None)
@@ -158,7 +162,7 @@ class Engine:
             for s in self.pool:
                 counts[s.status] = counts.get(s.status, 0) + 1
             return {"version": self.version, "genre": self.genre, "genres": config.genres(),
-                    "notice": self.notice, "playing": self.playing,
+                    "notice": self.notice, "playing": self.playing, "beat_to_beat": self.beat_to_beat,
                     "queue": [self.view(by[i]) for i in self.upcoming if i in by],
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
@@ -229,6 +233,12 @@ class Engine:
         with LOCK:
             self._recompute()
             self._changed()
+
+    def set_beat_to_beat(self, on: bool) -> None:
+        with LOCK:
+            self.beat_to_beat = bool(on)
+            self._save_session()
+            self._changed()  # version bump: the player replans a not-yet-started transition
 
     def set_genre(self, g: str) -> None:
         _known_genre(g, allow_any=True)
@@ -349,7 +359,8 @@ class Engine:
             tm_a = self.maps.setdefault(a.id, time_map_for(a, None))
             # The player reports rendered seconds; the planner works in original time.
             after_orig = tm_a.to_original(after) if after is not None else None
-            tr = pick_transition(a, b, after=after_orig, entered=self.entered.get(a.id))
+            tr = pick_transition(a, b, after=after_orig, entered=self.entered.get(a.id),
+                                 beat_to_beat=self.beat_to_beat)
             # ponytail: outgoing=None, b's own exit isn't planned yet; the planner keeps
             # exits after the ease when it can, so the ease is rarely cut short.
             tm_b = time_map_for(b, tr)

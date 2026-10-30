@@ -85,6 +85,7 @@ function render(s) {
   gb.replaceChildren(...['Any', ...s.genres].map((g) => el('button', {
     textContent: g, className: 'genre', 'aria-pressed': String(g === s.genre), onclick: () => act('/api/genre', 'POST', { genre: g }),
   })));
+  $('#b2b').setAttribute('aria-pressed', String(!!s.beat_to_beat));
   const notice = $('#notice');
   notice.hidden = !s.notice;
   notice.textContent = s.notice ?? '';
