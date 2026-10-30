@@ -252,17 +252,20 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
         downbeats = downbeats[run:]
         beats = beats[beats >= downbeats[0] - 1e-6]
 
-    # Reliable grid: tempo = slope of the filled steady grid (least squares, beat time vs index).
-    # beat_this puts beats on 20 ms frames, so each raw gap is a whole number of frames and their
-    # median snaps to 120 / 125 / 130.43 bpm (true 122 / 124 / 128): 0.8-2 % off, which makes a
-    # 16-bar blend drift 260-760 ms. The slope averages the quantization out over the whole run.
+    # Reliable grid: tempo = slope of the filled steady grid, as the median over every 16-bar
+    # (64-beat) window of (time span / 64). beat_this puts beats on 20 ms frames, so each raw gap
+    # is a whole number of frames and their median snaps to 120 / 125 / 130.43 bpm (true 122 / 124
+    # / 128): 0.8-2 % off, which makes a 16-bar blend drift 260-760 ms. Over 64 beats the frame
+    # error is <= 0.07 %. Median of windows, not one least-squares line: a short passage where
+    # the tracker runs fast (Telephone's bridge) pulled the line to 123.37 in a 122 bpm song.
     # Unreliable grid: median of the tracker's RAW beat gaps, not the filled grid: filling
     # irregular beats to whole counts packs extra beats in and skewed bpm up (Sarba De La
     # Bucuresti 181.8 -> 214.3). Within the steady region when there is one (no junk lead-in).
     raw = raw_beats[raw_beats >= run_t - 1e-6] if run_t is not None else raw_beats
     raw = raw if len(raw) >= MIN_BEATS else raw_beats
     if reliable and len(beats) >= MIN_BEATS:
-        bpm = 60.0 / float(np.polyfit(np.arange(len(beats)), beats, 1)[0])
+        w = min(STEADY_BARS * BEATS_PER_BAR, len(beats) - 1)  # reliable implies >= 16 bars anyway
+        bpm = 60.0 * w / float(np.median(beats[w:] - beats[:-w]))
     elif len(beats) >= MIN_BEATS and len(raw) >= 2:
         bpm = 60.0 / float(np.median(np.diff(raw)))
     else:

@@ -259,3 +259,20 @@ def test_bpm_not_snapped_to_tracker_frames(click_track, monkeypatch, true_bpm):
     a = analyze(click_track(true_bpm, 90), "t", "c")
     assert a.grid_reliable
     assert a.bpm == pytest.approx(true_bpm, rel=0.001)
+
+
+def test_bpm_ignores_a_passage_of_extra_beats(click_track, monkeypatch):
+    # Real songs have short passages where the tracker runs fast (Telephone's bridge: 32-beat
+    # windows read 127-135 bpm in a 122 bpm song). A single least-squares line through the
+    # whole grid leaned on them (123.37); the median 16-bar slope doesn't (122.06).
+    from autodeck import analyze as A
+
+    beat = 60 / 124
+    pre = 0.3 + np.arange(140) * beat
+    fast = pre[-1] + np.arange(1, 13) * beat * 0.8  # 12 beats (3 bars) in 9.6 beats' time
+    post = fast[-1] + np.arange(1, 140) * beat
+    beats = np.round(np.concatenate([pre, fast, post]) * 50) / 50
+    monkeypatch.setattr(A, "_beats", lambda y: (beats.copy(), beats[::4].copy()))
+    a = analyze(click_track(124, 150), "t", "c")
+    assert a.grid_reliable
+    assert a.bpm == pytest.approx(124, rel=0.001)

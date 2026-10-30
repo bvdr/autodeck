@@ -7,7 +7,7 @@ from pathlib import Path
 from . import config
 
 # Bump when analysis output changes; stale analyses are dropped on load (song is kept).
-ANALYSIS_VERSION = 5  # 2: real-song grid/trim/outro/language fixes (Task 11); 3: per-segment bar phase + agreement; 4: raw-gap slips, bpm from raw beats; 5: reliable-grid bpm from the grid slope (no 20 ms frame snapping)
+ANALYSIS_VERSION = 6  # 2: real-song grid/trim/outro/language fixes (Task 11); 3: per-segment bar phase + agreement; 4: raw-gap slips, bpm from raw beats; 5: reliable-grid bpm from the grid slope (no 20 ms frame snapping); 6: median 16-bar slope, robust to fast passages
 
 # Held by the worker thread and the server thread while they mutate a Song's fields
 # and save it, so an owner genre edit can't interleave with a status update.
