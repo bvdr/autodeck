@@ -45,7 +45,10 @@ header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-
 
 .list { list-style: none; padding: 0; margin: 0 0 8px; }
 .row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-#queue .row { cursor: grab; }
+.grip { cursor: grab; touch-action: none; user-select: none; color: var(--dim); padding: 4px 6px; font-weight: 700; letter-spacing: -2px; }
+.grip:active { cursor: grabbing; }
+.row.lifted { background: #1e2330; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); border-radius: 6px; opacity: 0.95; }
+.row.placeholder { border: 2px dashed var(--accent); border-radius: 6px; background: transparent; }
 .row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row button { padding: 2px 8px; }
 .remove:hover { color: var(--bad); }

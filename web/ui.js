@@ -1,4 +1,5 @@
 // Everything that isn't audio: API calls, genre buttons, queue, library, drop zone.
+import { sortable } from './sortable.js';
 const $ = (sel) => document.querySelector(sel);
 // Queue-row drags carry this type so the URL drop zone can ignore them.
 const ROW_TYPE = 'application/x-autodeck-id';
@@ -64,11 +65,12 @@ function songRow(song, genres, queueIds) {
   const meta = [song.bpm ? `${song.bpm.toFixed(0)} BPM` : null, song.camelot,
     song.danceability != null ? `dance ${Math.round(song.danceability * 100)}%` : null].filter(Boolean).join(' · ');
   const li = el('li', { className: 'row' },
+    // Queue rows get a grip to drag by (sortable.js); library rows aren't orderable.
+    queueIds ? el('span', { className: 'grip', textContent: '⋮⋮', title: 'Drag to reorder', 'aria-hidden': 'true' }) : null,
     el('span', { className: 'name' }, el('b', { textContent: song.title }), el('small', { textContent: ` ${song.channel} ${meta}` })),
     badge(song), genreSelect(song, genres, `Genre for ${song.title}`));
   if (queueIds) {
     const i = queueIds.indexOf(song.id);
-    li.draggable = true;
     li.dataset.id = song.id;
     // Buttons too: drag-and-drop alone is not keyboard accessible.
     li.append(el('button', { textContent: '↑', title: 'Move up', 'aria-label': `Move ${song.title} up`, disabled: i === 0,
@@ -263,30 +265,20 @@ export function initUi(stateCb) {
   });
   $('#history-box').addEventListener('toggle', (e) => { if (e.target.open) loadHistory(); });
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value); });
-  // Queue drag & drop -> POST /api/queue with pin = the dragged song.
-  const q = $('#queue');
-  q.addEventListener('dragstart', (e) => {
-    const li = e.target.closest('li[data-id]');
-    if (!li) return;
-    dragging = true;
-    e.dataTransfer.setData(ROW_TYPE, li.dataset.id);
-    e.dataTransfer.effectAllowed = 'move';
+  // Queue reorder: pointer-based drag (sortable.js) -> POST /api/queue with pin = the dragged song.
+  // Re-renders wait while dragging, so the list isn't rebuilt under the finger.
+  sortable($('#queue'), {
+    onStart: () => { dragging = true; },
+    onEnd: () => { dragging = false; },
+    onDrop: (id, index) => {
+      if (!last) return;
+      const ids = last.queue.map((x) => x.id);
+      if (ids.indexOf(id) === index) { flush(); return; } // dropped where it was
+      reorder(ids, id, index);
+    },
   });
-  q.addEventListener('dragend', () => { dragging = false; flush(); });
   // A select closing (or losing focus) releases a deferred render.
   document.addEventListener('focusout', (e) => { if (e.target.tagName === 'SELECT') setTimeout(flush); });
-  q.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes(ROW_TYPE)) e.preventDefault(); });
-  q.addEventListener('drop', (e) => {
-    const id = e.dataTransfer.getData(ROW_TYPE);
-    if (!id || !last) return;
-    e.preventDefault();
-    dragging = false;
-    const ids = last.queue.map((x) => x.id);
-    const target = e.target.closest('li[data-id]');
-    // Dropped on a row: take that row's slot (moveTo removes the dragged id first, so
-    // dragging down lands after the target and dragging up lands before it).
-    reorder(ids, id, target ? ids.indexOf(target.dataset.id) : ids.length);
-  });
 
   const zone = $('#drop');
   const isUrlDrag = (e) => !e.dataTransfer.types.includes(ROW_TYPE)

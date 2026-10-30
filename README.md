@@ -125,7 +125,7 @@ the server, so the page, the API and the assistant stay in sync.
     uv run pytest -m "not slow and not network"      # also skip the heavy real-model tests
                                                      # (a -m on the command line replaces the default, so keep "not network")
     AUTODECK_BROWSER=none uv run pytest -m network   # hits real YouTube, public content only
-    node --test web/schedule.test.mjs                # transition timing / gain-curve math
+    node --test web/schedule.test.mjs web/sortable.test.mjs   # transition timing, drag drop index
 
 ## Known limits
 
