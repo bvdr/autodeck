@@ -32,20 +32,24 @@ Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
   the Keychain prompt blocks them.
 - **`AUTODECK_LIBRARY`** moves the library cache (default `~/autodeck-library/`). It holds one folder per
   song (`audio.flac`, `analysis.json`, `peaks.json`, renders), `pool.json`, `genres.json` and the
-  models. Deleting a song's folder removes the song from the pool (re-add its URL to get it back).
+  models, plus `session.json` (what is playing, what has played, and the tempo maps of the current
+  renders, so a server restart doesn't break the mix). Deleting a song's folder removes the song from
+  the pool (re-add its URL to get it back). Delete `session.json` with the server stopped to start a
+  fresh session in which every song can play again.
 
 ## Importing music
 
-Paste a URL in the import bar and press **Add**. Optionally pick an "import as" genre first, which becomes the
-genre hint for every song in that import.
+Paste a URL in the import bar and press **Add**. Optionally pick an "import as" genre first: every song in
+that import gets that genre, ahead of the app's own guess (a genre you set on a single song still wins).
+Re-adding the URL of a song that failed to download or analyze queues it for another try.
 
 - `https://www.youtube.com/watch?v=…` adds one song. A `&list=…` on a watch link is ignored, so you get
   that song and not the radio mix.
 - `https://www.youtube.com/playlist?list=…` adds the whole playlist.
 - **Liked Music:** first log in to YouTube Music in Chrome, then add
   `https://music.youtube.com/playlist?list=LM`. This needs cookies, so `AUTODECK_BROWSER` must not be
-  `none`. Songs download and analyze in a rolling window of 10. Music starts once 2 are ready; it
-  doesn't wait for the whole pool.
+  `none`. Songs download and analyze in a rolling window of 10. **Play** works as soon as 1 song is
+  ready; it doesn't wait for the whole pool (the mix needs a second ready song to transition into).
 
 ## Tests
 
@@ -66,8 +70,12 @@ From the acceptance smoke (6 real songs) and the `ponytail:` notes in the code:
   on real bar lines. Bar counts are halved, so a "16-bar" blend is 32 bars of 2/4.
 - **Some sârbe get no reliable grid.** Live folk recordings with tempo drift or a 12/16 feel give
   irregular beats ("Sarba De La Bucuresti": unreliable). Their transitions fall back to a 4 s fade.
-  "Sârba de la Nord" did get a grid, at 187.5 bpm. Whether that is the felt tempo or double it hasn't
-  been checked by ear.
+  "Sârba de la Nord" did get a grid. Whether its tempo is the felt tempo or double it hasn't been
+  checked by ear.
+- **BPM.** With a reliable grid the tempo is the slope of the whole beat grid, which averages out the
+  tracker's 20 ms beat-time steps (the median beat gap snapped to values like 125 or 130.43 bpm, up to
+  2 % off). Songs without a reliable grid still use the median beat gap, so they carry that error, but
+  they only ever fade.
 - **One grid-reliability check for the whole song**, applied to everything after the first steady
   16 bars: CV of the 4-beat bars under `STEADY_TOL`, at most 5 % odd-length bars, and at least 60 % of
   bar lines on one of the tracker's own downbeats. One badly drifting passage disables beatmatching
@@ -99,12 +107,15 @@ From the acceptance smoke (6 real songs) and the `ponytail:` notes in the code:
 - Planner pairing weights are hand-tuned (tempo, then key, then energy) and need retuning by ear.
 - Tempo ease-back is stepped per bar (each bar at its midpoint speed), which may sound steppy on big ratios.
 - When a song is rendered its own exit isn't planned yet, so a short song's ease can be cut short.
-- The waveform for tempo-eased renders is drawn linearly, with a sub-second visual error only.
+- The waveform shows the played span (`play_start` to `play_end`) of the source. For tempo-eased renders
+  it is stretched linearly, with a sub-second visual error only.
 - Queue pins only follow the common case (playing a queued song). Jumping to a song outside the queue
   leaves pin positions as they were.
 - One prep thread, one song at a time. If prep falls behind playback, use two threads.
-- Render time maps are kept in memory. After a restart the first transition is planned with an identity
-  map, which gives a small timing error on that one transition only.
+- **Restart:** what is playing, what has played, and each played song's tempo map and entry transition
+  survive a server restart (`session.json`), so the next transition stays on the beat and played songs
+  don't repeat. Not kept: the queue order and pins (rebuilt from the playing song), the genre selection
+  (back to Any) and plans the player hadn't started yet (refetched).
 
 **Not yet verified:** a 30+ minute listening session across genre switches, and the Liked Music import
 with a real login. Both are left to the owner.
