@@ -38,10 +38,16 @@ def _beats(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 MAX_OUTRO_BARS = 32     # longest "outro" section; see _sections
+SLIP_BEATS = 0.25       # gap this far (in beats) from a whole beat count = a slip; see _regular_grid
+# Share of rebuilt bar lines that must sit on a tracker downbeat. Real songs with a correct
+# grid: 0.70 (Africa) .. 0.98 (B.U.G. Mafia); the beat-shifted Telephone grid of the previous
+# version scored 0.35. 0.6 sits between.
+MIN_BAR_AGREEMENT = 0.6
+MAX_ODD_BARS = 0.05     # share of non-4-beat bars allowed in a reliable grid (real songs: 0-2.6 %)
 BEATS_PER_BAR = 4       # same 4/4 assumption the planner's bar length (4 * 60 / bpm) makes
 
 
-def _regular_grid(beats: np.ndarray, downbeats: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _regular_grid(beats: np.ndarray, downbeats: np.ndarray, t0: float = -np.inf) -> tuple[np.ndarray, np.ndarray]:
     """Rebuild a consistent bar grid from beat_this's beats.
 
     On real songs (Task 11 smoke) the beats are steady but the downbeats are not:
@@ -49,15 +55,19 @@ def _regular_grid(beats: np.ndarray, downbeats: np.ndarray) -> tuple[np.ndarray,
     and hip-hop half-time passages (Kendrick "HUMBLE.") report every other beat.
     Either one pushed the downbeat-gap CV to ~0.26-0.30 on all six test songs,
     so no real song ever got a reliable grid and every transition was a fade.
-    Fix: (1) fill gaps that are a clean integer multiple of the median beat,
-    (2) take every BEATS_PER_BAR-th beat, with the phase the tracker's own
-    downbeats vote for. Genuinely irregular beats stay irregular, so the
-    reliability check downstream still rejects them.
+    Fix: (1) drop beats closer than half a beat to the previous one and round
+    every other gap to whole beats, filling the missing ones, (2) cut the beats
+    into segments at every gap still more than SLIP_BEATS off a whole beat (a
+    slip: the beat count after it can't be trusted), (3) per segment, take every
+    BEATS_PER_BAR-th beat with the phase the tracker's own downbeats vote for.
+    A single global vote let one slip put every later bar on beat 2 while the
+    bar spacing still looked perfect. Only tracker downbeats at/after t0 vote
+    (the caller passes the steady-run start, so a junk lead-in can't vote).
+    A segment with no votes continues the previous segment's count.
     ponytail: assumes 4/4 (3/4 and 12/16 sarbe phrase wrong); vote the meter too if that matters."""
     if len(beats) < MIN_BEATS:
         return beats, downbeats
-    gaps = np.diff(beats)
-    med = float(np.median(gaps))
+    med = float(np.median(np.diff(beats)))
     out = [beats[0]]
     for t in beats[1:]:
         gap = t - out[-1]
@@ -65,16 +75,42 @@ def _regular_grid(beats: np.ndarray, downbeats: np.ndarray) -> tuple[np.ndarray,
             # Spurious extra beat (B.U.G. Mafia breakdown: 0.1 s gaps at 94 bpm). Keeping it
             # would shift the every-4th-beat bar phase by one beat for the rest of the song.
             continue
+        # Every gap counts as round(gap / med) beats; fill the missing ones. The count, not
+        # the exact spacing, is what keeps bar lines on beat 1: refusing a fill because the
+        # beat after a missed one is a little late (the old STEADY_TOL test) loses a beat
+        # and shifts every later bar.
         n = int(round(gap / med))
-        if n >= 2 and abs(gap / n - med) <= STEADY_TOL * med:
+        if n >= 2:
             out.extend(out[-1] + gap * np.arange(1, n) / n)
         out.append(t)
     beats = np.asarray(out, dtype=float)
     if len(downbeats) == 0:
         return beats, downbeats
-    idx = np.abs(beats[None, :] - downbeats[:, None]).argmin(axis=1)
-    phase = int(np.bincount(idx % BEATS_PER_BAR, minlength=BEATS_PER_BAR).argmax())
-    return beats, beats[phase::BEATS_PER_BAR]
+    # A slip = a gap whose beat count is ambiguous (more than SLIP_BEATS off a whole beat).
+    # Below that it's tracker jitter (beat_this works in 20 ms frames, ~6 % of a fast beat).
+    cuts = (np.flatnonzero(np.abs(np.diff(beats) / med - 1) > SLIP_BEATS) + 1).tolist()
+    voters = downbeats[downbeats >= t0 - 1e-6]
+    idx = np.abs(beats[None, :] - voters[:, None]).argmin(axis=1) if len(voters) else np.zeros(0, int)
+    idx = idx[np.abs(beats[idx] - voters) <= 0.25 * med]  # a downbeat far from any beat says nothing
+    bars, pos = [], 0  # pos: position in the bar of the segment's first beat
+    for s, e in zip([0, *cuts], [*cuts, len(beats)]):
+        v = idx[(idx >= s) & (idx < e)]
+        if len(v):
+            phase = int(np.bincount((v - s) % BEATS_PER_BAR, minlength=BEATS_PER_BAR).argmax())
+        else:
+            phase = (-pos) % BEATS_PER_BAR
+        bars.extend(beats[s + phase : e : BEATS_PER_BAR])
+        pos = (e - s - phase) % BEATS_PER_BAR if e - s > phase else pos + (e - s)
+    return beats, np.asarray(bars, dtype=float)
+
+
+def _bar_agreement(bars: np.ndarray, tracker: np.ndarray, beat: float) -> float:
+    """Share of rebuilt bar lines with a tracker downbeat within a quarter beat."""
+    if not len(bars) or not len(tracker):
+        return 0.0
+    i = np.clip(np.searchsorted(tracker, bars), 1, len(tracker) - 1) if len(tracker) > 1 else np.zeros(len(bars), int)
+    d = np.minimum(np.abs(tracker[i] - bars), np.abs(tracker[np.maximum(i - 1, 0)] - bars))
+    return float(np.mean(d <= 0.25 * beat))
 
 
 def _bar_has_pulse(y: np.ndarray, downbeats: np.ndarray, beats: np.ndarray) -> np.ndarray:
@@ -183,13 +219,29 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
     y, _ = librosa.load(audio_path, sr=SR, mono=True)
     dur = len(y) / SR
 
-    beats, downbeats = _regular_grid(*_beats(y))
+    raw_beats, raw_down = _beats(y)
+    beats, downbeats = _regular_grid(raw_beats, raw_down)
     run = _steady_run_start(downbeats, _bar_has_pulse(y, downbeats, beats))
+    if run:
+        # Second pass: only downbeats inside the music vote on the bar phase.
+        beats, downbeats = _regular_grid(raw_beats, raw_down, t0=float(downbeats[run]))
+        run = _steady_run_start(downbeats, _bar_has_pulse(y, downbeats, beats))
     reliable = False
     if run is not None:
         gaps = np.diff(downbeats[run:])
+        beat = float(np.median(np.diff(beats)))
+        n = np.round(gaps / beat)
+        full = gaps[n == BEATS_PER_BAR]
+        # Tempo steadiness is judged on the regular 4-beat bars. The few odd-length bars
+        # where a segment re-phases (3-6 per real song, all in breakdowns/interludes) are
+        # still bar lines on beat 1, so they're allowed up to MAX_ODD_BARS.
         # ponytail: one global CV threshold; per-section reliability once live-drum tracks need it.
-        reliable = bool(np.std(gaps) / np.mean(gaps) < STEADY_TOL)
+        steady = (len(full) >= 2 and np.std(full) / np.mean(full) < STEADY_TOL
+                  and float(np.mean(n != BEATS_PER_BAR)) <= MAX_ODD_BARS)
+        # Even spacing doesn't prove the bars are on beat 1: a grid shifted by a beat is just as
+        # even. Require most rebuilt bar lines to sit on one of the tracker's own downbeats.
+        agree = _bar_agreement(downbeats[run:], raw_down, beat)
+        reliable = bool(steady and agree >= MIN_BAR_AGREEMENT)
     if reliable:
         # Drop the beatless/irregular lead-in: the phrase grid counts from the
         # first downbeat, so junk downbeats would shift every phrase boundary.

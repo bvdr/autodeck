@@ -164,3 +164,49 @@ def test_outro_capped_when_clustering_cuts_early(click_track, monkeypatch):
     assert a.grid_reliable and out.label == "outro"
     assert out.end - out.start <= A.MAX_OUTRO_BARS * 2.0 + 1e-6  # 2 s bars at 120 bpm
     assert out.start in a.downbeats
+
+
+@pytest.mark.parametrize("slip", ["missed_then_late", "extra_then_missed"])
+def test_beat_slip_never_leaves_a_shifted_reliable_grid(tmp_path, monkeypatch, slip):
+    # Reviewer repro: steady 0.5 s beats, true downbeats every 2 s, then one beat slip.
+    # A single global phase vote put every bar after the slip on beat 2 while the bar
+    # spacing still looked even (CV 0.031 -> reliable). Must be on beat 1 or unreliable.
+    import soundfile as sf
+    from autodeck import analyze as A
+    from conftest import SR, make_click_signal
+
+    p = tmp_path / "t.flac"
+    sf.write(p, make_click_signal(120, 64), SR)
+    true = np.arange(0, 64, 0.5)
+    if slip == "missed_then_late":  # beat at 20.5 missed, next one 0.12 s late
+        beats = np.concatenate([true[:41], [21.12], true[43:]])
+    else:  # spurious beat at 20.3 replaces the real 20.5: one beat lost
+        beats = np.concatenate([true[:41], [20.3], true[42:]])
+    monkeypatch.setattr(A, "_beats", lambda y: (beats.copy(), true[::4].copy()))
+    a = analyze(p, "t", "c")
+    # All bar lines, both sides of the slip (a global vote fixes one side, shifts the other).
+    d = np.array(a.downbeats)
+    on_beat_one = np.allclose(d / 2.0, np.round(d / 2.0), atol=0.05)
+    assert on_beat_one or not a.grid_reliable
+    assert a.grid_reliable  # with the per-segment vote the grid is recovered, not just rejected
+
+
+def test_junk_lead_in_downbeats_do_not_vote(tmp_path, monkeypatch):
+    # beat_this extrapolates beats through a noise/dialogue intro and drops downbeats
+    # there at an arbitrary phase. They must not outvote the song's own downbeats.
+    import soundfile as sf
+    from autodeck import analyze as A
+    from conftest import SR, make_click_signal
+
+    noise = (0.3 * np.random.default_rng(4).standard_normal(48 * SR)).astype(np.float32)
+    p = tmp_path / "t.flac"
+    sf.write(p, np.concatenate([noise, make_click_signal(120, 40)]), SR)
+    beats = np.arange(0, 88, 0.5)
+    junk = np.arange(0.5, 48, 2.0)           # 24 lead-in votes, all on beat 2
+    song = np.arange(48, 88, 2.0)            # 20 true downbeats
+    monkeypatch.setattr(A, "_beats", lambda y: (beats.copy(), np.concatenate([junk, song])))
+    a = analyze(p, "t", "c")
+    d = np.array(a.downbeats)
+    assert a.grid_reliable
+    assert a.play_start == pytest.approx(48, abs=0.6)
+    assert np.allclose(d / 2.0, np.round(d / 2.0), atol=0.05)
