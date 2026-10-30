@@ -1,6 +1,7 @@
 """Paths and spec constants. Everything tunable lives here."""
 import json
 import os
+import tempfile
 from pathlib import Path
 
 # Spec values (see docs/superpowers/specs/2026-10-30-autodeck-design.md)
@@ -33,9 +34,17 @@ def write_json_atomic(path: Path, data) -> None:
     replace stays on one filesystem (atomic).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    # Unique temp name per call: the worker thread and the server thread can write
+    # the same song.json at once, and a shared "<name>.tmp" would let them clobber
+    # each other's half-written file. os.replace makes the last writer win, whole.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def _genres_file() -> Path:

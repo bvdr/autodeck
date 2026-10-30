@@ -1,5 +1,6 @@
 """Song record + on-disk cache (<library>/<youtube-id>/song.json, analysis.json)."""
 import json
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -7,6 +8,11 @@ from . import config
 
 # Bump when analysis output changes; stale analyses are dropped on load (song is kept).
 ANALYSIS_VERSION = 1
+
+# Held by the worker thread and the server thread while they mutate a Song's fields
+# and save it, so an owner genre edit can't interleave with a status update.
+# Keep sections short; never hold it during download/analyze.
+LOCK = threading.RLock()
 
 
 @dataclass
