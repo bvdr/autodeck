@@ -5,6 +5,7 @@ Never raises into analyze(): a missing model or no network just means "no guess"
 import logging
 import os
 import re
+import shutil
 import unicodedata
 import urllib.request
 from pathlib import Path
@@ -30,7 +31,8 @@ def _norm(s: str) -> str:
 
 # Keyword -> genre. Word boundaries matter: bare "sarb" would match "sarbatori" (holidays).
 HINTS = [
-    (re.compile(r"\b(sarb(a|e|ele|ei)?|hora|manele|manea)\b"), "Romanian sârbe"),
+    # s[ai]rb: "sîrba" (old spelling) folds to "sirba", not "sarba". lautar*: lăutari = Romanian folk band.
+    (re.compile(r"\b(s[ai]rb(a|e|ele|ei)?|hora|manele|manea|lautar\w*)\b"), "Romanian sârbe"),
 ]
 
 
@@ -74,6 +76,10 @@ def combine(style_top: list[str], language: str | None, hint: str | None, genres
 _session = None
 _classes: list[str] = []
 _whisper = None
+# Set when a model can't be fetched/loaded. Offline first run would otherwise retry the
+# download (up to the timeout) for every single song; one failure per process is enough.
+_unavailable: set[str] = set()
+MIN_LANG_PROB = 0.5  # tiny whisper picks an arbitrary language on instrumentals; below this, say "unknown"
 
 
 def _fetch(url: str, dest: Path) -> None:
@@ -81,7 +87,9 @@ def _fetch(url: str, dest: Path) -> None:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")  # atomic: a killed download never leaves a truncated model
-    urllib.request.urlretrieve(url, tmp)
+    # urlopen with a timeout (urlretrieve has none): a stalled connection must not hang analyze() forever.
+    with urllib.request.urlopen(url, timeout=30) as r, open(tmp, "wb") as f:
+        shutil.copyfileobj(r, f)
     os.replace(tmp, dest)
 
 
@@ -112,7 +120,13 @@ def _middle(y: np.ndarray, seconds: int) -> np.ndarray:
 def _styles(y: np.ndarray) -> list[str]:
     import essentia.standard as es
 
-    sess = _load_model()
+    if "styles" in _unavailable:
+        raise RuntimeError("style model unavailable (earlier failure)")
+    try:
+        sess = _load_model()
+    except Exception:
+        _unavailable.add("styles")
+        raise
     y = _middle(y, SNIPPET_S).astype(np.float32)
     # Plain essentia (no TF) ships the exact mel front-end these models were trained with.
     frame = es.FrameGenerator
@@ -130,11 +144,17 @@ def _styles(y: np.ndarray) -> list[str]:
 def _language(y: np.ndarray) -> str | None:
     global _whisper
     if _whisper is None:  # load once per process; first call downloads ~75 MB from the HF hub
-        from faster_whisper import WhisperModel
+        if "whisper" in _unavailable:
+            raise RuntimeError("whisper unavailable (earlier failure)")
+        try:
+            from faster_whisper import WhisperModel
 
-        _whisper = WhisperModel("tiny", device="cpu", compute_type="int8")
-    lang, _prob, _ = _whisper.detect_language(audio=_middle(y, SNIPPET_S).astype(np.float32))
-    return lang
+            _whisper = WhisperModel("tiny", device="cpu", compute_type="int8")
+        except Exception:
+            _unavailable.add("whisper")
+            raise
+    lang, prob, _ = _whisper.detect_language(audio=_middle(y, SNIPPET_S).astype(np.float32))
+    return lang if prob >= MIN_LANG_PROB else None
 
 
 def guess_genre(audio_path: Path, title: str, channel: str, genres: list[str]) -> tuple[str | None, str | None]:
