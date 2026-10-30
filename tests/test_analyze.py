@@ -135,3 +135,18 @@ def test_regular_grid_rebuilds_bars_from_steady_beats():
     b, d = A._regular_grid(beats, downbeats)
     assert np.allclose(b, true)
     assert np.allclose(np.diff(d), 2.0) and d[0] == 0.0
+
+
+def test_spoken_intro_trimmed_even_when_grid_unreliable(tmp_path):
+    # Music video shape: 10 s of noise ("dialogue"), steady song, then a tempo change
+    # that fails the global grid check. The intro must still be skipped.
+    import soundfile as sf
+    from conftest import SR, make_click_signal
+
+    noise = (0.3 * np.random.default_rng(3).standard_normal(10 * SR)).astype(np.float32)
+    y = np.concatenate([noise, make_click_signal(120, 50), make_click_signal(96, 40)])
+    p = tmp_path / "mv.flac"
+    sf.write(p, y, SR)
+    a = analyze(p, "t", "c")
+    assert a.grid_reliable is False
+    assert a.play_start == pytest.approx(10, abs=1)

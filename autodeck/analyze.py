@@ -215,6 +215,12 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
             play_start, play_end, reliable = t_start, t_end, False
     else:
         play_start, play_end = t_start, t_end
+        if run is not None:
+            # A steady 16-bar run with real pulse proves the music has started, even when
+            # a later skit/interlude spoils the global grid check (Lady Gaga "Telephone"
+            # video: ~3 min of dialogue before the song). Without this the spoken intro
+            # plays in the mix whenever the grid is unreliable.
+            play_start = max(play_start, float(downbeats[run]))
 
     key, camelot = _key(y)
     sections = _sections(y, play_start, play_end, downbeats, reliable)
