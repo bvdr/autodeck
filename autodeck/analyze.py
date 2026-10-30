@@ -230,6 +230,7 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
         beats, downbeats = _regular_grid(raw_beats, raw_down, t0=float(downbeats[run]))
         run = _steady_run_start(downbeats, _bar_has_pulse(y, downbeats, beats))
     reliable = False
+    run_t = float(downbeats[run]) if run is not None else None  # before downbeats is trimmed below
     if run is not None:
         gaps = np.diff(downbeats[run:])
         beat = float(np.median(np.diff(beats)))
@@ -251,8 +252,13 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
         downbeats = downbeats[run:]
         beats = beats[beats >= downbeats[0] - 1e-6]
 
-    if len(beats) >= MIN_BEATS:
-        bpm = 60.0 / float(np.median(np.diff(beats)))
+    # Tempo from the tracker's RAW beat gaps, not the filled grid: filling irregular beats to
+    # whole counts packs extra beats in and skewed bpm up (Sarba De La Bucuresti 181.8 -> 214.3).
+    # Within the steady region when there is one, so a junk lead-in doesn't count.
+    raw = raw_beats[raw_beats >= run_t - 1e-6] if run_t is not None else raw_beats
+    raw = raw if len(raw) >= MIN_BEATS else raw_beats
+    if len(beats) >= MIN_BEATS and len(raw) >= 2:
+        bpm = 60.0 / float(np.median(np.diff(raw)))
     else:
         bpm = _tempo_fallback(y)
         reliable = False

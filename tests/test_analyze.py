@@ -232,3 +232,15 @@ def test_ambiguous_pause_is_a_slip(tmp_path, monkeypatch):
     assert on_beat_one or not a.grid_reliable
     assert a.grid_reliable
 
+
+def test_bpm_from_raw_beats_not_filled_grid(click_track, monkeypatch):
+    # Every 3rd gap of a 120 bpm song is 1.6 beats (irregular tracker output). Filling that
+    # to 2 beats packs 0.4 s beats in; the filled median read ~133 bpm (Sarba De La Bucuresti
+    # went 181.8 -> 214.3 that way). bpm must follow the tracker's own beat spacing.
+    from autodeck import analyze as A
+
+    gaps = np.tile([0.5, 0.5, 0.8], 48)  # 86 s, inside the 90 s audio
+    beats = np.concatenate([[0.0], np.cumsum(gaps)])
+    monkeypatch.setattr(A, "_beats", lambda y: (beats, beats[::4]))
+    a = analyze(click_track(120, 90), "t", "c")
+    assert a.bpm == pytest.approx(120, rel=0.02)
