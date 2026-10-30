@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pyloudnorm
 import pyrubberband
 import soundfile as sf
 
@@ -111,13 +112,37 @@ def _is_identity(tm: TimeMap) -> bool:
 
 
 RB_ARGS = {"--centre-focus": ""}  # see render()
+# Loudness matching (owner: every transition at a similar level). Each render is gained to
+# this integrated loudness (EBU R128 / ITU BS.1770, what YouTube and Spotify normalize to).
+LOUDNESS_TARGET = -14.0  # LUFS
+MAX_GAIN_DB = 20.0       # a near-silent or broken file is never boosted absurdly
+PEAK_CEILING = 0.98      # boosting never pushes a sample past this (no clipping)
 
 
 def _hash(tm: TimeMap) -> str:
     # Rounded so float noise doesn't bust the cache; version so re-analysis re-renders;
     # stretch options so a quality change never serves an old render.
-    key = json.dumps([[round(o, 3), round(r, 3)] for o, r in tm.points] + [ANALYSIS_VERSION, RB_ARGS])
+    key = json.dumps([[round(o, 3), round(r, 3)] for o, r in tm.points]
+                     + [ANALYSIS_VERSION, RB_ARGS, LOUDNESS_TARGET])
     return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+def _loudness_gain(y: np.ndarray, sr: int) -> float:
+    """Linear gain bringing y to LOUDNESS_TARGET LUFS, capped so peaks stay under PEAK_CEILING.
+
+    ponytail: plain gain, no limiter. A quiet master with loud peaks (wide dynamics) is
+    boosted only as far as its peaks allow, so it can still sit a few dB under the rest.
+    A true-peak limiter would close that gap if it's audible.
+    """
+    try:
+        lufs = pyloudnorm.Meter(sr).integrated_loudness(y)
+    except ValueError:  # shorter than one 400 ms gating block
+        return 1.0
+    if not np.isfinite(lufs):  # silence
+        return 1.0
+    gain = 10 ** (float(np.clip(LOUDNESS_TARGET - lufs, -MAX_GAIN_DB, MAX_GAIN_DB)) / 20)
+    peak = float(np.max(np.abs(y))) if y.size else 0.0
+    return min(gain, PEAK_CEILING / peak) if peak > 0 else gain
 
 
 def render(song: Song, tm: TimeMap) -> Path:
@@ -127,6 +152,9 @@ def render(song: Song, tm: TimeMap) -> Path:
     y, sr = sf.read(audio_path(song.id), dtype="float32", always_2d=False)
     o_start, o_end = tm.points[0][0], tm.points[-1][0]
     y = y[int(round(o_start * sr)): int(round(o_end * sr))]
+    # Measured on the song's own (trimmed) audio, before stretching: stretching doesn't change
+    # loudness, and every render of a song then gets the same gain.
+    gain = _loudness_gain(y, sr)
     if not _is_identity(tm):
         # Sample-index pairs relative to the trimmed start; the final (n_src, n_dst)
         # pair is required or rubberband stops mapping early.
@@ -144,7 +172,7 @@ def render(song: Song, tm: TimeMap) -> Path:
     fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=out.name + ".", suffix=".tmp")
     os.close(fd)
     try:
-        sf.write(tmp, y, sr, format="WAV", subtype="PCM_16")
+        sf.write(tmp, y * gain, sr, format="WAV", subtype="PCM_16")
         os.replace(tmp, out)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

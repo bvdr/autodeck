@@ -123,3 +123,26 @@ def test_time_map_for_degrades_when_overlap_passes_play_end():
     inc = Transition("blend", "x", s.id, 0, s.analysis.play_start, 80.0, 0.95)
     out = Transition("cut", s.id, "y", s.analysis.play_end, 1.0, 0.0, 1.0)
     time_map_for(s, inc, out)  # must not raise
+
+
+def test_renders_are_loudness_matched(tmp_library):
+    # Owner: every transition at a similar level. A quiet and a loud master must come out
+    # at the same integrated loudness (EBU R128), within a dB, and never clip.
+    import pyloudnorm
+    from autodeck.render import LOUDNESS_TARGET
+    quiet, loud = make_song(), make_song()
+    quiet.id, loud.id = "quiet000001", "loud0000001"
+    sr = 22050
+    t = np.arange(60 * sr + sr * 2) / sr
+    base = np.sin(2 * np.pi * 220 * t) * (0.6 + 0.4 * np.sin(2 * np.pi * 0.5 * t))
+    for s, amp in ((quiet, 0.03), (loud, 0.5)):
+        d = song_dir(s.id)
+        d.mkdir(parents=True, exist_ok=True)
+        sf.write(d / "audio.flac", np.stack([amp * base] * 2, 1).astype(np.float32), sr)
+    out = []
+    for s in (quiet, loud):
+        y, r = sf.read(render(s, time_map_for(s, None)))
+        out.append(pyloudnorm.Meter(r).integrated_loudness(y))
+        assert np.max(np.abs(y)) < 1.0
+    assert abs(out[0] - out[1]) < 1.0
+    assert abs(out[1] - LOUDNESS_TARGET) < 1.0

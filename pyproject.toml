@@ -9,6 +9,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "librosa>=1.0.0",
     "onnxruntime>=1.31.1",
+    "pyloudnorm>=0.2.0",
     "pyrubberband>=0.4.0",
     "pytest>=9.2.0",
     "soundfile>=0.14.0",

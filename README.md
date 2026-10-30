@@ -51,6 +51,13 @@ Re-adding the URL of a song that failed to download or analyze queues it for ano
   `none`. Songs download and analyze in a rolling window of 10. **Play** works as soon as 1 song is
   ready; it doesn't wait for the whole pool (the mix needs a second ready song to transition into).
 
+## Loudness
+
+Every song is played at the same perceived loudness (-14 LUFS, EBU R128, the level YouTube and
+Spotify normalize to), so transitions don't jump in volume. Real libraries span ~11 dB (-8 to -19
+LUFS). Songs are never boosted into clipping: a quiet master with loud peaks is raised only as far
+as its peaks allow.
+
 ## Search
 
 Type a song or artist in **Search**. Matches from your library show first, then YouTube results.
