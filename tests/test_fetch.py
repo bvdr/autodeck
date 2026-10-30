@@ -145,3 +145,13 @@ def test_successful_download_renames_and_cleans(tmp_library, monkeypatch):
     p = fetch.download(_song())
     assert p.name == "audio.flac" and p.read_bytes() == b"partial"
     assert [x.name for x in song_dir("abc123").iterdir()] == ["audio.flac"]
+
+
+def test_browser_none_disables_cookies(monkeypatch):
+    from autodeck import fetch
+    monkeypatch.setenv("AUTODECK_BROWSER", "none")
+    assert fetch._cookie_opts() == {}
+    monkeypatch.setenv("AUTODECK_BROWSER", "firefox")
+    assert fetch._cookie_opts() == {"cookiesfrombrowser": ("firefox",)}
+    monkeypatch.delenv("AUTODECK_BROWSER")
+    assert fetch._cookie_opts() == {"cookiesfrombrowser": ("chrome",)}

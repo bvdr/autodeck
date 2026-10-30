@@ -53,8 +53,12 @@ def _browser() -> str:
 
 
 def _cookie_opts() -> dict:
-    # Always passed (Liked Music needs login; public content ignores it). Read live
+    # Passed by default (Liked Music needs login; public content ignores it). Read live
     # from the browser by yt-dlp; we never write or log cookie values.
+    # AUTODECK_BROWSER=none skips cookies entirely (public content only): reading Chrome
+    # cookies blocks on a macOS Keychain prompt, which hangs unattended runs (tests, CI).
+    if _browser().lower() == "none":
+        return {}
     return {"cookiesfrombrowser": (_browser(),)}
 
 
