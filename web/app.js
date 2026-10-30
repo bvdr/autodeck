@@ -66,7 +66,13 @@ async function requestPlan(deck, after = null, retries = 0) {
     res = await api(`/api/transition?${q}`);
     if (res.transition) res.track = await loadTrack(M.ctx, res.in_deck); // decode before scheduling
   } catch (e) {
-    if (seq === M.seq) { M.req.loading = false; M.req.inId = null; status(`Next mix failed: ${e.message}`); }
+    if (seq === M.seq) {
+      M.req.loading = false; M.req.inId = null;
+      // Server restarting / network blip: keep trying while this song still plays, so a
+      // short outage never ends the mix. songEnded() is the last safety net.
+      status(`Next mix failed (${e.message}) — retrying…`);
+      setTimeout(() => { if (seq === M.seq && M.decks[deck]?.info?.id === id && !M.plan) requestPlan(deck, after, retries); }, 3000);
+    }
     return;
   }
   if (seq !== M.seq) return; // a newer request superseded this one
@@ -155,6 +161,13 @@ function swap() {
 
 function songEnded(deck) {
   if (M.decks.indexOf(deck) === M.cur && !M.plan) {
+    // No mix was scheduled (server was down, or the plan never arrived): don't go silent,
+    // start the next queued song straight away. Only a truly empty queue stops the music.
+    const next = getState()?.queue.find((q) => q.id !== deck.info?.id);
+    if (next) {
+      startSong(next).catch((e) => { status(e.message); $('#play').disabled = false; });
+      return;
+    }
     status('Stopped — end of queue. Add songs and press Play to start again.');
     $('#play').disabled = false;
   }
@@ -205,25 +218,31 @@ async function play() {
     const known = res && s.pool.some((p) => p.id === res.id && p.status === 'ready');
     const first = known ? { id: res.id, title: res.title } : s.queue[0];
     if (!first) throw new Error('Nothing ready to play yet — add songs below.');
-    status(`Loading ${first.title}…`);
-    const info = await api(`/api/deck/${first.id}`);
-    const track = await loadTrack(M.ctx, info);
-    M.decks.forEach((d) => d.stop());
-    if (M.plan) cancelPlan();
-    M.cur = 0;
-    const d = M.decks[0];
-    // Every effect control back to idle, not just the gain: a deck that last ran a filter
-    // sweep / bass swap / reverb kept its filter closed, and the next Play sounded muffled.
-    for (const x of M.decks) x.apply(S.idle(now()), now());
-    d.apply([{ param: 'gain', type: 'set', value: 1, time: now() }], now());
-    // Resume a little before the saved spot (the save is up to 1 s old); never past the end.
-    const offset = known ? Math.min(Math.max(res.pos - 1, 0), info.duration_rendered - 5) : S.firstOffset(info);
-    d.start(track, now() + 0.1, Math.max(offset, 0), songEnded);
-    onStarted(0);
+    await startSong(first, known ? res.pos - 1 : null);
   } catch (e) {
     status(e.message);
     $('#play').disabled = false;
   }
+}
+
+/** Start `song` from scratch on deck 0 (Play, Resume, or recovering from a missed mix).
+ * `at` = rendered seconds to start from (resume), null = the song's own start. */
+async function startSong(song, at = null) {
+  status(`Loading ${song.title}…`);
+  const info = await api(`/api/deck/${song.id}`);
+  const track = await loadTrack(M.ctx, info);
+  M.decks.forEach((d) => d.stop());
+  if (M.plan) cancelPlan();
+  M.cur = 0;
+  const d = M.decks[0];
+  // Every effect control back to idle, not just the gain: a deck that last ran a filter
+  // sweep / bass swap / reverb kept its filter closed, and the next Play sounded muffled.
+  for (const x of M.decks) x.apply(S.idle(now()), now());
+  d.apply([{ param: 'gain', type: 'set', value: 1, time: now() }], now());
+  // Resume a little before the saved spot (the save is up to 1 s old); never past the end.
+  const offset = at != null ? Math.min(Math.max(at, 0), info.duration_rendered - 5) : S.firstOffset(info);
+  d.start(track, now() + 0.1, Math.max(offset, 0), songEnded);
+  onStarted(0);
 }
 
 function mixNow() {
