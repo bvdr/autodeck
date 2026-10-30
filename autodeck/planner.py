@@ -14,6 +14,8 @@ FADE_LEN = 4.0        # s; brief wants 3..6
 FADE_WINDOW = 20.0    # s before play_end searched for the quietest second
 DROPSWAP_MAX_BARS = 32  # b's first body must start within this many of b's bars
 ECHO_BARS = 2         # echo / dropswap overlap, in a's bars (also min outro for non-cut)
+LOCAL_BAR_TOL = 0.06  # a bar in a blend window may differ this much from the window's median bar
+LOCAL_MIN_BARS = 4    # tempo is measured over at least this many bars around a blend
 
 
 @dataclass
@@ -68,6 +70,26 @@ def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: 
 
 def _bar(bpm: float) -> float:
     return 60.0 / bpm * 4
+
+
+def _local_bpm(s: Song, t0: float, t1: float) -> float | None:
+    """Tempo of s over [t0, t1] from its own bar lines; None if the bars there are irregular.
+
+    A song's single bpm is a whole-song median. Real songs drift (a live sârba speeds up
+    180 -> 196 bpm) and the tracker produces junk bars in breakdowns (Telephone, B.U.G.
+    Mafia): a blend matched on the global bpm drifted ~0.7-0.8 s over 16 bars. So blends
+    are matched on the tempo where they actually happen, and refused where the bars are junk.
+    Bar lines are on 20 ms frames: over >= 4 bars that's <= 0.5 % tempo error, and blends
+    that short are short in time too, so the drift stays a few ms.
+    """
+    db = [d for d in s.analysis.downbeats if t0 - 1e-6 <= d <= t1 + 1e-6]
+    if len(db) < 3:
+        return None
+    bars = [y - x for x, y in zip(db, db[1:])]
+    med = sorted(bars)[len(bars) // 2]
+    if any(abs(x / med - 1) > LOCAL_BAR_TOL for x in bars):
+        return None
+    return 240.0 * (len(db) - 1) / (db[-1] - db[0])
 
 
 def _section_len(s: Song, label: str, first: bool) -> float:
@@ -171,8 +193,14 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
         bars += [m for m in range(min(whole, 3), 0, -1) if m not in bars]
         hit = _search(a, [n * bar_a for n in bars], after, floors)
         if hit:
-            return mk("blend" if kind == "match" else "half_double", hit[1], bn.play_start, hit[0], ratio)
-        # no whole-bar overlap fits: fall through to a cut below
+            n_len, out_at = hit
+            la = _local_bpm(a, out_at, out_at + max(n_len, LOCAL_MIN_BARS * bar_a))
+            lb = _local_bpm(b, bn.play_start, bn.play_start + max(n_len * ratio, LOCAL_MIN_BARS * _bar(bn.bpm)))
+            local = tempo_relation(la, lb) if la and lb else ("none", 1.0)
+            if local[0] != "none":
+                return mk("blend" if local[0] == "match" else "half_double", out_at, bn.play_start, n_len, local[1])
+            # ponytail: one exit tried; junk/drifting bars there -> phrase cut/echo, not another exit.
+        kind = "none"  # no fitting overlap, or the bars at it can't be trusted: cut/echo below
 
     # Non-matched (or blend that can't fit): cut / echo / dropswap on a phrase boundary.
     length = ECHO_BARS * bar_a

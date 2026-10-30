@@ -193,3 +193,38 @@ def test_fade_fallback_respects_overlap_floor(a_grid, b_grid):
     t = pick_transition(a, b, entered=ent)
     assert t.kind == "fade" and t.out_at >= 63.5 - 1e-6
     assert t.out_at + t.length <= a.analysis.play_end + 1e-9
+
+
+def _retime_from(s, t0, bpm):
+    """Make s's bars after t0 run at `bpm` (a song that speeds up, like a live sârba)."""
+    an = s.analysis
+    db = an.downbeats
+    i = next(k for k, d in enumerate(db) if d >= t0)
+    bar = 240 / bpm
+    new = db[: i + 1] + [db[i] + bar * (k - i) for k in range(i + 1, len(db))]
+    shift = new[-1] - db[-1]
+    an.downbeats = an.beats = new
+    an.sections[-1].end = an.play_end = new[-1]
+    return shift
+
+
+def test_blend_matches_local_tempo_of_a_song_that_speeds_up():
+    # Regression: the ratio came from each song's single global bpm. A live sârba that
+    # speeds up 3-6 % drifted ~0.7-0.8 s over a 16-bar blend. Match the tempo where the
+    # blend actually happens.
+    a, b = make_song(122), make_song(126)
+    _retime_from(a, a.analysis.sections[-1].start - 60, 126)  # a ends at 126 bpm
+    t = pick_transition(a, b)
+    assert t.kind == "blend"
+    assert t.tempo_ratio == pytest.approx(1.0, abs=0.002)  # not 122/126 = 0.968
+
+
+def test_irregular_bars_in_blend_window_never_beatmatch():
+    # Junk beats in a breakdown (Telephone, B.U.G. Mafia in real use): the bars there say
+    # nothing about the tempo, so beat-matching on them is a train-wreck. Phrase cut instead.
+    a, b = make_song(122), make_song(124)
+    db = a.analysis.downbeats
+    k = len(db) - 6  # one bar in the closing stretch 30 % too long, the next shortened to fit
+    db[k] += 0.6
+    t = pick_transition(a, b)
+    assert t.kind in ("echo", "dropswap", "cut") or t.out_at + t.length < db[k - 1]
