@@ -249,8 +249,17 @@ function letGo() {
 
 let pointerHeld = false, keyTimer = 0;
 // Pointer capture: pointerup still reaches the fader if the drag ends outside it.
-fader.addEventListener('pointerdown', (e) => { pointerHeld = true; try { fader.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ } takeOver(); });
-fader.addEventListener('pointerup', () => { pointerHeld = false; letGo(); });
+fader.addEventListener('pointerdown', (e) => {
+  clearTimeout(keyTimer); // a pending keyboard release must not fire mid-drag
+  pointerHeld = true;
+  try { fader.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+  takeOver();
+});
+// pointercancel (touch turned into a scroll, OS gesture) and lostpointercapture end a drag
+// without a pointerup; missing them left pointerHeld stuck, so manual mode never released
+// and auto-mixing stalled. letGo is a no-op once released, so firing twice is harmless.
+const pointerRelease = () => { clearTimeout(keyTimer); pointerHeld = false; letGo(); };
+for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) fader.addEventListener(ev, pointerRelease);
 fader.addEventListener('input', () => {
   drive();
   // Keyboard (no pointer held): release after a pause, not on every keyup, so a run of
