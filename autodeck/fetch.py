@@ -1,18 +1,23 @@
 """YouTube URL classification, playlist expansion and audio download (yt-dlp)."""
+import glob
 import os
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
+from yt_dlp.cookies import CookieLoadError
 from yt_dlp.utils import DownloadError
 
 from .library import Song, song_dir
 
 COOKIE_ERROR = "Couldn't read YouTube login from Chrome. Is Chrome logged in to YouTube?"
-# Markers of cookie/browser-profile failures. yt-dlp raises these as assorted
-# exception types with free-text messages, so matching text is the only option.
-_COOKIE_MARKERS = ("cookie", "keyring", "keychain", "could not find", "browser")
+# Cookie-READ failures. Markers are deliberately narrow: yt-dlp's sign-in / age-gate /
+# bot-check errors end with "Use --cookies-from-browser or --cookies ...", so bare
+# "cookie"/"browser" would mislabel them and hide the real reason. The primary signal is
+# yt-dlp's own CookieLoadError type; text markers cover the FileNotFoundError /
+# keyring / decrypt failures it lets through untyped.
+_COOKIE_MARKERS = ("cookies database", "keyring", "decrypt", "failed to load cookies")
 # Placeholder titles YouTube gives playlist entries we can't fetch.
 _UNAVAILABLE_TITLES = {"[private video]", "[deleted video]"}
 _YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
@@ -60,7 +65,7 @@ def _short_reason(exc: Exception) -> str:
 
 
 def _is_cookie_error(exc: Exception) -> bool:
-    return any(m in str(exc).lower() for m in _COOKIE_MARKERS)
+    return isinstance(exc, CookieLoadError) or any(m in str(exc).lower() for m in _COOKIE_MARKERS)
 
 
 def _song_from_entry(e: dict) -> Song | None:
@@ -93,28 +98,39 @@ def expand(url: str) -> list[Song]:
 
 def download(song: Song) -> Path:
     """Download <song_dir>/audio.flac (idempotent). Raises FetchError."""
-    out = song_dir(song.id) / "audio.flac"
+    d = song_dir(song.id)
+    out = d / "audio.flac"
     if out.exists():
         return out  # never re-download a cached song
     opts = {
         "format": "bestaudio",
-        "noprogress": True,  # quiet=True still prints progress bars
         "quiet": True,
+        "noprogress": True,  # quiet=True still prints progress bars
         "noplaylist": True,
-        # %(ext)s is replaced by the post-processor's flac, so the final file is exactly audio.flac
-        "outtmpl": str(song_dir(song.id) / "audio.%(ext)s"),
+        # Work under a scratch name and rename only on success: a crash mid-download or
+        # mid-conversion must never leave a truncated audio.flac that looks cached.
+        # %(ext)s becomes flac after the post-processor.
+        "outtmpl": str(d / "dl.%(ext)s"),
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}],
         **_cookie_opts(),
     }
+    scratch = d / "dl.flac"
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={song.id}"])
+        if not scratch.exists():
+            raise FetchError(f"Couldn't download '{song.title}': no audio file was produced")
+        os.replace(scratch, out)  # atomic: audio.flac is either absent or complete
+    except FetchError:
+        raise
     except Exception as exc:
         if _is_cookie_error(exc):
             raise FetchError(COOKIE_ERROR) from exc
         if isinstance(exc, DownloadError):
             raise FetchError(f"Couldn't download '{song.title}': {_short_reason(exc)}") from exc
         raise
-    if not out.exists():
-        raise FetchError(f"Couldn't download '{song.title}': no audio file was produced")
+    finally:
+        # Leftovers (dl.*, *.part, *.ytdl) from failures; no-op after a successful rename.
+        for f in glob.glob(glob.escape(str(d)) + "/dl.*"):
+            Path(f).unlink(missing_ok=True)
     return out

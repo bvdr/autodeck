@@ -99,3 +99,49 @@ def test_expand_public_playlist():
     songs = fetch.expand("https://www.youtube.com/playlist?list=PLbb_NncyMIqvil47jxdJBvefq8TpJW9ow")
     assert len(songs) > 0
     assert all(len(s.id) == 11 for s in songs)
+
+
+def test_age_gate_with_cookies_hint_is_not_cookie_error(tmp_library, monkeypatch):
+    msg = ("ERROR: [youtube] abc123: Sign in to confirm your age. Use --cookies-from-browser "
+           "or --cookies for the authentication. See https://github.com/yt-dlp/yt-dlp/wiki/FAQ")
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _raising_ydl(DownloadError(msg)))
+    with pytest.raises(fetch.FetchError) as e:
+        fetch.download(_song())
+    assert "Cool Song" in str(e.value) and "confirm your age" in str(e.value)
+    assert str(e.value) != fetch.COOKIE_ERROR
+
+
+def test_cookie_load_error_type_maps(tmp_library, monkeypatch):
+    from yt_dlp.cookies import CookieLoadError
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _raising_ydl(CookieLoadError("failed to load cookies")))
+    with pytest.raises(fetch.FetchError, match="Couldn't read YouTube login"):
+        fetch.download(_song())
+
+
+def _writing_ydl(fail):
+    class Y:
+        def __init__(self, opts): self.dir = opts["outtmpl"].rsplit("/", 1)[0]
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def download(self, urls):
+            import pathlib
+            pathlib.Path(self.dir).mkdir(parents=True, exist_ok=True)  # yt-dlp creates it
+            pathlib.Path(self.dir, "dl.flac").write_bytes(b"partial")
+            pathlib.Path(self.dir, "dl.webm.part").write_bytes(b"x")
+            if fail:
+                raise DownloadError("ERROR: boom")
+    return Y
+
+
+def test_failed_download_leaves_no_audio_or_scratch(tmp_library, monkeypatch):
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _writing_ydl(True))
+    with pytest.raises(fetch.FetchError):
+        fetch.download(_song())
+    assert sorted(p.name for p in song_dir("abc123").iterdir()) == []
+
+
+def test_successful_download_renames_and_cleans(tmp_library, monkeypatch):
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _writing_ydl(False))
+    p = fetch.download(_song())
+    assert p.name == "audio.flac" and p.read_bytes() == b"partial"
+    assert [x.name for x in song_dir("abc123").iterdir()] == ["audio.flac"]
