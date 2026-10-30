@@ -150,3 +150,17 @@ def test_spoken_intro_trimmed_even_when_grid_unreliable(tmp_path):
     a = analyze(p, "t", "c")
     assert a.grid_reliable is False
     assert a.play_start == pytest.approx(10, abs=1)
+
+
+def test_outro_capped_when_clustering_cuts_early(click_track, monkeypatch):
+    # HUMBLE.: clustering put the last cut at 58 s of 182 s, and the planner exits at the
+    # outro's first boundary, so two thirds of the song were skipped.
+    import librosa
+    from autodeck import analyze as A
+
+    monkeypatch.setattr(librosa.segment, "agglomerative", lambda data, k: np.array([0, 50, 100]))
+    a = analyze(click_track(120, 180), "t", "c")
+    out = a.sections[-1]
+    assert a.grid_reliable and out.label == "outro"
+    assert out.end - out.start <= A.MAX_OUTRO_BARS * 2.0 + 1e-6  # 2 s bars at 120 bpm
+    assert out.start in a.downbeats

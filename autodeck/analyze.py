@@ -37,6 +37,7 @@ def _beats(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(b, dtype=float), np.asarray(d, dtype=float)
 
 
+MAX_OUTRO_BARS = 32     # longest "outro" section; see _sections
 BEATS_PER_BAR = 4       # same 4/4 assumption the planner's bar length (4 * 60 / bpm) makes
 
 
@@ -133,7 +134,7 @@ def _key(y: np.ndarray) -> tuple[str | None, str | None]:
         return None, None
 
 
-def _sections(y, start, end, downbeats, reliable) -> list[Section]:
+def _sections(y, start, end, downbeats, reliable, bar) -> list[Section]:
     # Boundaries only land on phrase boundaries (8 bars) when we have a grid, so a
     # transition never starts mid-phrase. Without a grid we keep raw timestamps.
     hop = 2048
@@ -158,6 +159,18 @@ def _sections(y, start, end, downbeats, reliable) -> list[Section]:
         mid = (start + end) / 2
         inner = [d for d in downbeats if start < d < end] if reliable else []
         cuts = [min(inner, key=lambda d: abs(d - mid)) if inner else mid]
+    # The planner leaves at the outro's first 16-bar boundary, and on real songs the
+    # clustering often puts its last cut early (Kendrick "HUMBLE.": outro 58-182 s of
+    # 182 s, two thirds of the song skipped). Cap the outro at MAX_OUTRO_BARS.
+    cap = end - MAX_OUTRO_BARS * bar
+    if cap > cuts[-1]:
+        if reliable:  # stay on the grid: phrase boundary, else any downbeat, else no cap
+            c = next((b for b in phrase_boundaries(list(downbeats)) if cap <= b < end), None)
+            c = c if c is not None else next((d for d in downbeats if cap <= d < end), None)
+        else:
+            c = cap
+        if c is not None:
+            cuts.append(float(c))
     edges = [start, *cuts, end]
     # ponytail: label by position only (first=intro, last=outro); real structure
     # labelling (verse/chorus) isn't needed by the planner. Upgrade if it ever is.
@@ -223,7 +236,7 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
             play_start = max(play_start, float(downbeats[run]))
 
     key, camelot = _key(y)
-    sections = _sections(y, play_start, play_end, downbeats, reliable)
+    sections = _sections(y, play_start, play_end, downbeats, reliable, BEATS_PER_BAR * 60.0 / bpm)
     genre, language = guess_genre(audio_path, title, channel, config.genres())  # never raises
     return Analysis(
         version=ANALYSIS_VERSION, bpm=float(bpm), beats=beats.tolist(), downbeats=downbeats.tolist(),
