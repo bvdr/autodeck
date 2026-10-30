@@ -308,3 +308,13 @@ def test_exit_effects_stay_available_when_a_song_has_no_grid(force, a_grid):
     if a_grid:
         assert t.out_at in phrase_boundaries(a.analysis.downbeats)
     assert pick_transition(a, b).kind == "fade"  # the app's own pick is still the safe fade
+
+
+def test_blends_are_at_most_8_bars_and_a_quarter_of_a_short_song():
+    a, b = make_song(122), make_song(124)
+    t = pick_transition(a, b)
+    assert t.length <= 8 * 240 / 122 + 1e-6
+    short = make_song(100, duration=57.0)  # a 57 s kids' song, as seen in real use
+    t2 = pick_transition(make_song(100), short)
+    play = short.analysis.play_end - short.analysis.play_start
+    assert t2.length <= 0.25 * play + 1e-6

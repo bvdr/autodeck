@@ -313,9 +313,12 @@ const fmt = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.
 
 function frame() {
   const t = now();
+  // ON AIR moves to the incoming halfway through a transition, when it's the louder one
+  // (deck roles only swap at the very end, which looked like the old song hung on).
+  const onAir = M.plan && t >= M.plan.T0 + M.plan.length / 2 ? M.plan.inDeck : M.cur;
   M.decks.forEach((d, i) => {
     d.draw(t);
-    d.root.classList.toggle('on-air', i === M.cur && d.started(t));
+    d.root.classList.toggle('on-air', i === onAir && d.started(t));
     d.root.querySelector('.time').textContent = d.info ? `${fmt(d.pos(t))} / ${fmt(d.info.duration_rendered)}` : '';
   });
   // The fader animates from the same progress the gain curves use.

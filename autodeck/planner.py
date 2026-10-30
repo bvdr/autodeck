@@ -14,6 +14,8 @@ FADE_LEN = 4.0        # s; brief wants 3..6
 FADE_WINDOW = 20.0    # s before play_end searched for the quietest second
 DROPSWAP_MAX_BARS = 32  # b's first body must start within this many of b's bars
 ECHO_BARS = 2         # echo / dropswap overlap, in a's bars (also min outro for non-cut)
+BLEND_BARS = (8, 4)     # beat-matched overlap lengths, preferred first
+MAX_BLEND_SHARE = 0.25  # a blend never takes more than this share of either song
 LOCAL_BAR_TOL = 0.06  # a bar in a blend window may differ this much from the window's median bar
 LOCAL_MIN_BARS = 4    # tempo is measured over at least this many bars around a blend
 
@@ -254,10 +256,14 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
 
     if kind != "none":
         # b's intro lasts longer in outgoing time when b is slowed (ratio < 1).
-        cap = min(outro, _section_len(b, "intro", first=True) / ratio)
+        # Owner: 16-bar blends (~38 s at 100 BPM) felt like the next song "starts, then blends
+        # later", and on a 57 s song the blend was most of the song. So at most 8 bars, and never
+        # more than MAX_BLEND_SHARE of either song's played length.
+        share = MAX_BLEND_SHARE * min(an.play_end - an.play_start, bn.play_end - bn.play_start)
+        cap = min(outro, _section_len(b, "intro", first=True) / ratio, share)
         whole = int(cap // bar_a)
-        # Prefer 16, then 8, then 4 bars; below 4 use whatever whole bars fit; none -> cut.
-        bars = [n for n in (16, 8, 4) if n <= whole] or ([whole] if whole >= 1 else [])
+        # Prefer 8, then 4 bars; below 4 use whatever whole bars fit; none -> cut.
+        bars = [n for n in BLEND_BARS if n <= whole] or ([whole] if whole >= 1 else [])
         bars += [m for m in range(min(whole, 3), 0, -1) if m not in bars]
         hit = _search(a, [n * bar_a for n in bars], after, floors, late)
         if hit:
