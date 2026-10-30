@@ -6,6 +6,7 @@ import numpy as np
 import soundfile as sf
 
 from . import config
+from .genre import guess_genre
 from .library import ANALYSIS_VERSION, Analysis, Section
 from .music import phrase_boundaries, to_camelot
 
@@ -125,8 +126,6 @@ def _sections(y, start, end, downbeats, reliable) -> list[Section]:
 
 
 def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
-    # title/channel are accepted for the Task 5 genre wiring; genre_guess and
-    # language stay None here.
     y, _ = librosa.load(audio_path, sr=SR, mono=True)
     dur = len(y) / SR
 
@@ -178,10 +177,11 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
 
     key, camelot = _key(y)
     sections = _sections(y, play_start, play_end, downbeats, reliable)
+    genre, language = guess_genre(audio_path, title, channel, config.genres())  # never raises
     return Analysis(
         version=ANALYSIS_VERSION, bpm=float(bpm), beats=beats.tolist(), downbeats=downbeats.tolist(),
         grid_reliable=reliable, key=key, camelot=camelot, energy=energy, sections=sections,
-        play_start=float(play_start), play_end=float(play_end), genre_guess=None, language=None,
+        play_start=float(play_start), play_end=float(play_end), genre_guess=genre, language=language,
     )
 
 

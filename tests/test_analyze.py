@@ -19,7 +19,8 @@ def test_tempo_and_downbeats(clicked):
     gaps = np.diff(a.downbeats)
     assert np.allclose(gaps, 2.0, atol=0.05)
     assert a.grid_reliable is True
-    assert a.genre_guess is None and a.language is None
+    # genre wiring (Task 5): a click track has no genre; language is whisper's noise guess, must just not crash
+    assert a.genre_guess is None
 
 
 def test_trim_silence(silence_then_track):
