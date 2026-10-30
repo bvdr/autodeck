@@ -215,3 +215,21 @@ def test_playing_commits_the_plan_the_player_started(client, monkeypatch):
 def test_playing_unknown_plan_id_keeps_identity(client):
     s = client.post("/api/playing", json={"id": IDS[0], "plan_id": "nope"})
     assert s.status_code == 200 and IDS[0] not in client.engine.maps
+
+
+@pytest.mark.parametrize("remove_first", [True, False])
+def test_readding_a_failed_song_retries_it(client, monkeypatch, remove_first):
+    # Without this a failed song could never be retried: the worker skips "failed", and
+    # re-adding reloaded the saved record with its "failed" status.
+    sid = "eeeeeeeeee5"
+    monkeypatch.setattr(engine_mod.fetch, "expand", lambda url: [Song(sid, "t", "c", 60.0, "queued")])
+    client.post("/api/add", json={"url": f"https://youtu.be/{sid}"})
+    s = client.engine.by_id(sid)
+    s.status, s.error = "failed", "download timed out"
+    library.save_song(s)
+    if remove_first:
+        assert client.delete(f"/api/song/{sid}").status_code == 200
+    client.post("/api/add", json={"url": f"https://youtu.be/{sid}"})
+    p = next(p for p in client.get("/api/state").json()["pool"] if p["id"] == sid)
+    assert (p["status"], p["error"]) == ("queued", None)
+    assert (library.load_song(sid).status, library.load_song(sid).error) == ("queued", None)

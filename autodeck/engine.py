@@ -143,27 +143,36 @@ class Engine:
             songs = fetch.expand(url)
         except (ValueError, fetch.FetchError) as e:
             raise EngineError(400, str(e)) from e
-        added = 0
+        added = retried = 0
         with LOCK:
-            have = {s.id for s in self.pool}
+            have = {s.id: s for s in self.pool}
             for new in songs:
                 if new.id in have:
+                    # Re-adding is the owner's only retry: the worker never touches a failed
+                    # song, so put it back in the queue (in place: the worker holds it).
+                    old = have[new.id]
+                    if old.status == "failed":
+                        old.status, old.error = "queued", None
+                        library.save_song(old)
+                        retried += 1
                     continue
                 # A song removed earlier keeps its cache on disk; reuse it, because saving
                 # the fresh (analysis-less) record would delete analysis.json and the
-                # owner's genre fix.
+                # owner's genre fix. A reused failed song gets a fresh try, same as above.
                 s = library.load_song(new.id) or new
+                if s.status == "failed":
+                    s.status, s.error = "queued", None
                 if genre:
                     s.genre_hint = genre
                 library.save_song(s)
                 self.pool.append(s)
-                have.add(s.id)
+                have[s.id] = s
                 added += 1
-            if added:
+            if added or retried:  # a retried song changed status: wake the worker
                 library.save_pool([s.id for s in self.pool])
                 self._recompute()
                 self._changed()
-        return added
+        return added + retried  # the UI's "Added N songs": a retry is (re)queued too
 
     def set_playing(self, sid: str, plan_id: str | None = None) -> None:
         with LOCK:
