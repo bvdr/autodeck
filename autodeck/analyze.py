@@ -325,3 +325,16 @@ def write_peaks(audio_path: Path, out: Path, points: int = 2000) -> None:
     edges = np.minimum(edges[:-1], max(len(a) - 1, 0))
     peaks = np.maximum.reduceat(a, edges) if len(a) else np.zeros(points)
     config.write_json_atomic(out, [float(p) for p in peaks])
+
+
+def danceability(audio_path: Path) -> float:
+    """0..1 danceability from essentia's DFA-based Danceability, for party ranking. Kept out
+    of Analysis so adding it didn't force re-analysing every song.
+
+    Raw values on real music span ~0.9 (a church chant) to ~1.6 (a sârba, house, B.U.G. Mafia)
+    (measured on the owner's library, 2026-10-30), so that range maps to 0..1.
+    """
+    import essentia.standard as es
+    y = es.MonoLoader(filename=str(audio_path), sampleRate=44100)()
+    d, _ = es.Danceability(sampleRate=44100)(y)
+    return float(min(1.0, max(0.0, (d - 0.9) / 0.7)))

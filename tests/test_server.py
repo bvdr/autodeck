@@ -60,7 +60,7 @@ def test_state_shape(client):
     assert s["playing"] is None and s["genre"] == "Any" and s["notice"] is None
     assert [q["id"] for q in s["queue"]] == IDS  # nothing playing: pool order
     assert s["pool_counts"] == {"ready": 4}
-    assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot"}
+    assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot", "danceability"}
     assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) == set(s["queue"][0])
 
 
@@ -403,3 +403,15 @@ def test_enrichment_fills_meta_from_lastfm(client, monkeypatch):
         pass
     s = library.load_song(IDS[0])
     assert s.meta["listeners"] == 2_000_000 and s.meta["tags"] == ["80s", "rock"]
+
+
+def test_played_songs_are_logged_newest_first_with_their_effect(client):
+    a, b = IDS[0], IDS[1]
+    client.post("/api/playing", json={"id": a})
+    tr = client.get(f"/api/transition?from={a}").json()
+    client.post("/api/playing", json={"id": b, "plan_id": tr["plan_id"]})
+    client.post("/api/playing", json={"id": b})  # pulled-back fader re-report: not a new entry
+    h = client.get("/api/history").json()["history"]
+    assert [x["id"] for x in h] == [b, a]
+    assert h[0]["effect"] == tr["transition"]["kind"] and h[1]["effect"] is None
+    assert h[0]["bpm"] == 122.0 and h[0]["at"]

@@ -177,7 +177,8 @@ class Engine:
     def view(self, s: Song) -> dict:
         an = s.analysis
         return {"id": s.id, "title": s.title, "channel": s.channel, "status": s.status, "error": s.error,
-                "genre": s.effective_genre(), "bpm": an.bpm if an else None, "camelot": an.camelot if an else None}
+                "genre": s.effective_genre(), "bpm": an.bpm if an else None, "camelot": an.camelot if an else None,
+                "danceability": (s.meta or {}).get("danceability")}
 
     # --- API operations ---------------------------------------------------------
     def state(self) -> dict:
@@ -249,6 +250,8 @@ class Engine:
                            for i, p in self.pinned.items() if p != sid}
             if sid in self.requested:
                 self.requested.remove(sid)
+            if sid != self.playing:  # a pulled-back fader re-reports the same song: one entry
+                self._log_played(sid, plan[2] if plan and plan[0] == sid else None)
             prev, self.playing = self.playing, sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
             self._save_session()
@@ -291,6 +294,34 @@ class Engine:
                 self.requested.append(sid)
             self._recompute()
             self._changed()
+
+    # --- played log ------------------------------------------------------------------
+    def _history_file(self):
+        return config.library_root() / "history.jsonl"
+
+    def _log_played(self, sid: str, came_in: Transition | None) -> None:
+        """Append one line per song that started playing (owner asked for a log). JSON Lines:
+        append-only, survives restarts, a crash loses at most the line being written."""
+        s = self.by_id(sid)
+        line = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "id": sid, "title": s.title, "channel": s.channel,
+                "bpm": round(s.analysis.bpm, 1) if s.analysis else None, "genre": s.effective_genre(),
+                "effect": came_in.kind if came_in else None, "party": self.party}
+        with open(self._history_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+    def history(self, limit: int = 200) -> list[dict]:
+        """Most recent first."""
+        try:
+            lines = self._history_file().read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        out = []
+        for ln in reversed(lines[-limit:]):
+            try:
+                out.append(json.loads(ln))
+            except ValueError:
+                continue  # a half-written last line after a crash
+        return out
 
     # --- party mode ------------------------------------------------------------------
     def _rejected_file(self):
@@ -354,21 +385,35 @@ class Engine:
                 self._sugg = (k, t, [x for x in lst if party.key(x["artist"], x["title"]) != party.key(artist, title)])
 
     def enrich_once(self) -> bool:
-        """Look up one song's Last.fm facts (ready songs first). False when nothing is left."""
-        if not lastfm.api_key():
-            return False
+        """Fill one song's party facts: Last.fm first (ready songs first), then danceability
+        measured from the audio of ready songs. False when nothing is left to do."""
         with LOCK:
-            todo = sorted((s for s in self.pool if s.meta is None and s.status != "failed"),
-                          key=lambda s: s.status != "ready")
+            todo = sorted((s for s in self.pool if "listeners" not in (s.meta or {}) and s.status != "failed"),
+                          key=lambda s: s.status != "ready") if lastfm.api_key() else []
             s = todo[0] if todo else None
+            if s is None:
+                dance = next((x for x in self.pool if x.status == "ready"
+                              and "danceability" not in (x.meta or {})), None)
         if s is None:
-            return False
+            if dance is None:
+                return False
+            from .analyze import danceability
+            try:
+                d = danceability(library.audio_path(dance.id))  # ~1-2 s of CPU, outside the lock
+            except Exception:
+                logging.getLogger(__name__).exception("danceability failed for %s", dance.id)
+                d = None
+            with LOCK:
+                if any(x is dance for x in self.pool):
+                    dance.meta = {**(dance.meta or {}), "danceability": d}
+                    library.save_song(dance)
+            return True
         a, t = lastfm.split_title(s.title, s.channel)
         info = lastfm.track_info(a, t)  # network: outside the lock
         tags = list(dict.fromkeys(info.get("tags", []) + lastfm.artist_tags(a)))
         with LOCK:
             if any(x is s for x in self.pool):
-                s.meta = {"artist": a, "title": t, "listeners": info.get("listeners", 0), "tags": tags}
+                s.meta = {**(s.meta or {}), "artist": a, "title": t, "listeners": info.get("listeners", 0), "tags": tags}
                 library.save_song(s)
                 if self.party and s.status == "ready":
                     self._recompute()

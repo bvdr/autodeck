@@ -140,6 +140,10 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         eng.set_party(req.flavor)
         return eng.state()
 
+    @app.get("/api/history")
+    def history(limit: int = 200):
+        return {"history": eng.history(max(1, min(limit, 2000)))}
+
     @app.get("/api/suggestions")
     def suggestions():
         return {"suggestions": eng.suggestions()}

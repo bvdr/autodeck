@@ -67,8 +67,16 @@ Pick **Hits**, **Oldies** or **Latino** under *Party* (*Off* returns to the genr
 - **Suggestions** lists songs you don't have that people play with the current song, plus the
   flavor's top chart. **✓ Accept** finds it on YouTube, preps it and plays it next; **✕** hides it
   for good (`<library>/rejected.json`).
+- Each suggestion shows its **BPM** (from Deezer's free API; `?` when Deezer doesn't know it) and
+  a ✓ when it beat-matches the current song; those are listed first. Library songs also get a
+  **danceability** score measured from the audio (shown in the queue), which party mode favors.
 - Needs a free Last.fm API key in `~/.config/autodeck/lastfm.env` as `LASTFM_API_KEY=...` (or the
   env var). Without it party mode can't tell flavors apart and shows no suggestions.
+
+## Played log
+
+**Played** (above *Library*) lists every song that started, newest first, with time, BPM, genre and
+the effect it came in with. Stored as JSON Lines in `<library>/history.jsonl`.
 
 ## Search
 

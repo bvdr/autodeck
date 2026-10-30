@@ -61,7 +61,8 @@ function nudge(id, delta) {
 }
 
 function songRow(song, genres, queueIds) {
-  const meta = [song.bpm ? `${song.bpm.toFixed(0)} BPM` : null, song.camelot].filter(Boolean).join(' · ');
+  const meta = [song.bpm ? `${song.bpm.toFixed(0)} BPM` : null, song.camelot,
+    song.danceability != null ? `dance ${Math.round(song.danceability * 100)}%` : null].filter(Boolean).join(' · ');
   const li = el('li', { className: 'row' },
     el('span', { className: 'name' }, el('b', { textContent: song.title }), el('small', { textContent: ` ${song.channel} ${meta}` })),
     badge(song), genreSelect(song, genres, `Genre for ${song.title}`));
@@ -87,6 +88,7 @@ function render(s) {
   })));
   $('#b2b').setAttribute('aria-pressed', String(!!s.beat_to_beat));
   renderParty(s);
+  if (s.playing !== histFor) { histFor = s.playing; if ($('#history-box').open) loadHistory(); }
   const notice = $('#notice');
   notice.hidden = !s.notice;
   notice.textContent = s.notice ?? '';
@@ -138,6 +140,20 @@ async function add(url) {
   } catch (e) { msg.textContent = e.message; } // 400 {error} from the server
 }
 
+// --- played log ---------------------------------------------------------------
+let histFor;
+async function loadHistory() {
+  try {
+    const { history } = await api('/api/history?limit=300');
+    $('#history').replaceChildren(...history.map((h) => el('li', { className: 'row' },
+      el('span', { className: 'src', textContent: (h.at || '').slice(11, 16) }),
+      el('span', { className: 'name' }, el('b', { textContent: h.title }),
+        el('small', { textContent: ` ${h.channel}${h.bpm ? ` · ${Math.round(h.bpm)} BPM` : ''}${h.genre ? ` · ${h.genre}` : ''}` })),
+      el('span', { className: 'src', textContent: h.effect ? `in via ${h.effect.replace('_', ' ')}` : 'started' }))));
+    $('#history-empty').hidden = history.length > 0;
+  } catch (e) { report(e); }
+}
+
 // --- party mode ---------------------------------------------------------------
 const FLAVOR_LABEL = { hits: 'Hits', oldies: 'Oldies', latino: 'Latino' };
 let suggFor = null; // "playing|party" the suggestions list was loaded for
@@ -156,7 +172,12 @@ function renderParty(s) {
 function suggRow(x) {
   const body = { artist: x.artist, title: x.title };
   return el('li', { className: 'row' },
-    el('span', { className: 'name' }, el('b', { textContent: x.title }), el('small', { textContent: ` ${x.artist}` })),
+    el('span', { className: 'name' }, el('b', { textContent: x.title }),
+      el('small', { textContent: ` ${x.artist}${x.year ? ` · ${x.year}` : ''}` })),
+    // BPM comes from Deezer (no audio yet); ✓ = beat-matchable with what's playing.
+    el('span', { className: x.mixes ? 'bpm-fit' : 'src',
+      textContent: x.bpm ? `${Math.round(x.bpm)} BPM${x.mixes ? ' ✓' : ''}` : '? BPM',
+      title: x.mixes ? 'Beat-matches the current song' : x.bpm ? 'Tempo too far to beat-match' : 'Tempo unknown' }),
     el('span', { className: 'src', textContent: x.reason }),
     el('button', { textContent: '✓ Accept', title: 'Add it and play it soon', 'aria-label': `Accept ${x.title}`,
       onclick: async (e) => {
@@ -212,6 +233,7 @@ async function search(q) {
 export function initUi(stateCb) {
   onState = stateCb;
   $('#sugg-refresh').addEventListener('click', loadSuggestions);
+  $('#history-box').addEventListener('toggle', (e) => { if (e.target.open) loadHistory(); });
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value); });
   // Queue drag & drop -> POST /api/queue with pin = the dragged song.
   const q = $('#queue');

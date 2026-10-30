@@ -71,6 +71,7 @@ summary { cursor: pointer; color: var(--dim); padding: 4px 0; }
 .search { margin: 16px 0; }
 #search-form { display: flex; gap: 8px; }
 #q { flex: 1; min-width: 200px; }
+.row .bpm-fit { font-size: 12px; color: var(--ok); white-space: nowrap; }
 .row .src { font-size: 12px; color: var(--dim); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 

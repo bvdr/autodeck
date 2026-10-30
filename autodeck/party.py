@@ -7,7 +7,8 @@ lower-case). Pure functions here; the only network use is suggestions(), via las
 import math
 import unicodedata
 
-from . import lastfm
+from . import deezer, lastfm
+from .music import tempo_relation
 from .library import Song
 
 FLAVORS = ("hits", "oldies", "latino")
@@ -83,7 +84,16 @@ def suggestions(current: Song | None, flavor: str | None, pool: list[Song], reje
             break
         take(lastfm.chart_top_tracks() if kind == "chart" else lastfm.tag_top_tracks(tag),
              "top hit" if kind == "chart" else f"top {tag}")
-    return out[:n]
+    out = out[:n]
+    # Tempo for songs we have no audio for comes from Deezer (often, not always, known).
+    # "mixes": beat-matchable with what's playing (within 8 %, or half/double time), which is
+    # what the owner wants to see; those go first, otherwise the source order is kept.
+    cur_bpm = current.analysis.bpm if current is not None and current.analysis else None
+    for x in out:
+        x.update(deezer.lookup(x["artist"], x["title"]))
+        x["mixes"] = bool(cur_bpm and x["bpm"]) and tempo_relation(cur_bpm, x["bpm"])[0] != "none"
+    out.sort(key=lambda x: not x["mixes"])
+    return out
 
 
 def bonus(prev: Song, s: Song) -> float:
@@ -93,4 +103,5 @@ def bonus(prev: Song, s: Song) -> float:
     def energy(x: Song) -> float:
         e = x.analysis.energy if x.analysis else []
         return sum(e) / len(e) if e else 0.5
-    return 0.15 * popularity(s) + 0.1 * max(0.0, energy(s) - energy(prev))
+    dance = float((s.meta or {}).get("danceability") or 0.5)  # 0..1, measured from the audio
+    return 0.15 * popularity(s) + 0.1 * dance + 0.1 * max(0.0, energy(s) - energy(prev))
