@@ -218,3 +218,8 @@ test('incoming always starts with every effect send/filter idle', () => {
     assert.equal(ev(p.in, param)[0].value, v);
   }
 });
+
+test('idle(): every effect control open/closed to "no effect"', () => {
+  const v = Object.fromEntries(S.idle(3).map((e) => [e.param, e.value]));
+  assert.deepEqual(v, { gain: 0, hp: S.HP_IDLE, lp: S.LP_IDLE, gate: 1, echo: 0, rev: 0 });
+});

@@ -212,6 +212,9 @@ async function play() {
     if (M.plan) cancelPlan();
     M.cur = 0;
     const d = M.decks[0];
+    // Every effect control back to idle, not just the gain: a deck that last ran a filter
+    // sweep / bass swap / reverb kept its filter closed, and the next Play sounded muffled.
+    for (const x of M.decks) x.apply(S.idle(now()), now());
     d.apply([{ param: 'gain', type: 'set', value: 1, time: now() }], now());
     // Resume a little before the saved spot (the save is up to 1 s old); never past the end.
     const offset = known ? Math.min(Math.max(res.pos - 1, 0), info.duration_rendered - 5) : S.firstOffset(info);

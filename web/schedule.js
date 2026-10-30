@@ -151,6 +151,12 @@ export function plan(res, outZero, now, beat = 0.5) {
   return { ...t, out, in: inn };
 }
 
+/** Every deck effect control at its idle value ("no effect"), gain at 0. */
+export function idle(now) {
+  return [set('gain', 0, now), set('hp', HP_IDLE, now), set('lp', LP_IDLE, now), set('gate', 1, now),
+    set('echo', 0, now), set('rev', 0, now)];
+}
+
 /** Crossfader progress 0 (all outgoing) .. 1 (all incoming) at ctx time `now`. The
  * UI maps this to the fader; for blends the gains are cos/sin of the same value. */
 export function faderAt(p, now) {
