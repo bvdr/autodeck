@@ -8,7 +8,7 @@ Runs on macOS (Apple Silicon), local only: the server binds `127.0.0.1`.
     brew install uv rubberband ffmpeg deno
     uv sync
 
-`deno` is the JavaScript runtime yt-dlp uses to solve YouTube's player challenges; without it
+`deno` (plus the `yt-dlp-ejs` package, installed by `uv sync`) is what yt-dlp uses to solve YouTube's player challenges; without them
 yt-dlp warns and some formats are missing.
 
 ## Run
