@@ -72,8 +72,9 @@ From the acceptance smoke (6 real songs) and the `ponytail:` notes in the code:
   irregular beats ("Sarba De La Bucuresti": unreliable). Their transitions fall back to a 4 s fade.
   "Sârba de la Nord" did get a grid. Whether its tempo is the felt tempo or double it hasn't been
   checked by ear.
-- **BPM.** With a reliable grid the tempo is the slope of the whole beat grid, which averages out the
-  tracker's 20 ms beat-time steps (the median beat gap snapped to values like 125 or 130.43 bpm, up to
+- **BPM.** With a reliable grid the tempo is the median slope of the beat grid over 16-bar windows,
+  which averages out the tracker's 20 ms beat-time steps and ignores short passages where the tracker
+  runs fast (the median beat gap snapped to values like 125 or 130.43 bpm, up to
   2 % off). Songs without a reliable grid still use the median beat gap, so they carry that error, but
   they only ever fade.
 - **One grid-reliability check for the whole song**, applied to everything after the first steady
