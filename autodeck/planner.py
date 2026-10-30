@@ -189,6 +189,9 @@ EXIT_FX_BARS = {"echo": 2, "loop_roll": 2, "brake": 1, "backspin": 1, "reverb": 
 # stop/stutter/riser into a quiet intro would fall flat.
 INTO_DROP = {"loop_roll", "brake", "backspin", "gate", "riser"}
 MATCHED_FX = ("blend", "bass_swap", "filter_sweep")
+# Effects that still work when one song has no trustworthy beat grid (owner: the dropdown
+# showed only "fade" for ~1/4 of pairs). Roll/gate need the outgoing's bar grid to sound right.
+GRIDLESS_OK = ("echo", "brake", "backspin", "reverb", "riser", "cut")
 FORCEABLE = (*MATCHED_FX, *EXIT_FX_BARS, "dropswap", "cut", "fade")
 
 
@@ -225,7 +228,18 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     overlap_end = (entered.in_at + entered.length * entered.tempo_ratio) if entered else 0.0
     floors = [overlap_end + EASE_BARS * bar_a, overlap_end] if entered else [0.0]
 
-    if force == "fade" or not (an.grid_reliable and bn.grid_reliable):
+    both = an.grid_reliable and bn.grid_reliable
+    if not both and force in GRIDLESS_OK:
+        # Exit effects don't beat-match: they play the outgoing out, then the incoming starts.
+        # Only the START needs care: a's phrase boundary when a has a grid, else its quietest
+        # second near the end (like a fade). b's grid doesn't matter, so these stay available.
+        bars = EXIT_FX_BARS.get(force, 0)
+        length = bars * bar_a
+        hit = _search(a, [length], after, floors) if an.grid_reliable else None
+        out_at = hit[1] if hit else min(_fade_out(a, after), max(an.play_end - length, an.play_start))
+        out_at = max(out_at, min(overlap_end, an.play_end - length))  # hard overlap_end floor
+        return mk(force, out_at, bn.play_start, length)
+    if force == "fade" or not both:
         length = min(FADE_LEN, max(an.play_end - an.play_start, 0.0))
         hit = _search(a, [length], after, floors) if an.grid_reliable else None
         out_at = hit[1] if hit else _fade_out(a, after)

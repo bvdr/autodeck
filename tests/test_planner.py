@@ -296,3 +296,15 @@ def test_exit_effects_land_on_a_phrase_and_last_their_bars(force, bars):
     assert t.out_at + t.length <= a.analysis.play_end + 1e-6
     body = [x for x in b.analysis.sections if x.label == "body"][0]
     assert t.in_at == (body.start if force != "reverb" else b.analysis.play_start)
+
+
+@pytest.mark.parametrize("a_grid", [True, False])
+@pytest.mark.parametrize("force", ["echo", "brake", "backspin", "reverb", "riser", "cut"])
+def test_exit_effects_stay_available_when_a_song_has_no_grid(force, a_grid):
+    a, b = make_song(122, grid=a_grid), make_song(124, grid=False)
+    t = pick_transition(a, b, force=force)
+    assert t.kind == force and t.tempo_ratio == 1.0
+    assert a.analysis.play_start < t.out_at and t.out_at + t.length <= a.analysis.play_end + 1e-6
+    if a_grid:
+        assert t.out_at in phrase_boundaries(a.analysis.downbeats)
+    assert pick_transition(a, b).kind == "fade"  # the app's own pick is still the safe fade
