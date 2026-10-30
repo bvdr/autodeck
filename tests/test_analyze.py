@@ -120,3 +120,18 @@ def test_tempo_fallback_is_not_constant(click_track):
 
     y, _ = librosa.load(click_track(100, 30), sr=A.SR)
     assert A._tempo_fallback(y) == pytest.approx(100, rel=0.05)  # was always FALLBACK_BPM (120)
+
+
+def test_regular_grid_rebuilds_bars_from_steady_beats():
+    # Real-song failure modes (Task 11 smoke): beat_this beats steady at 0.5 s but
+    # (a) an extra downbeat every half bar, (b) a half-time passage reporting every
+    # other beat, (c) a spurious beat 0.1 s after a real one.
+    from autodeck import analyze as A
+
+    true = np.arange(0, 64, 0.5)
+    beats = np.concatenate([true[:40], true[40:60:2], true[60:], [true[70] + 0.1]])
+    beats.sort()
+    downbeats = np.sort(np.concatenate([true[::4], true[2:40:8]]))  # half-bar extras early on
+    b, d = A._regular_grid(beats, downbeats)
+    assert np.allclose(b, true)
+    assert np.allclose(np.diff(d), 2.0) and d[0] == 0.0

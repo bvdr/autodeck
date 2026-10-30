@@ -37,6 +37,45 @@ def _beats(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(b, dtype=float), np.asarray(d, dtype=float)
 
 
+BEATS_PER_BAR = 4       # same 4/4 assumption the planner's bar length (4 * 60 / bpm) makes
+
+
+def _regular_grid(beats: np.ndarray, downbeats: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Rebuild a consistent bar grid from beat_this's beats.
+
+    On real songs (Task 11 smoke) the beats are steady but the downbeats are not:
+    Toto "Africa" (beat CV 0.015) came back with 36 of 132 bars only 2 beats long,
+    and hip-hop half-time passages (Kendrick "HUMBLE.") report every other beat.
+    Either one pushed the downbeat-gap CV to ~0.26-0.30 on all six test songs,
+    so no real song ever got a reliable grid and every transition was a fade.
+    Fix: (1) fill gaps that are a clean integer multiple of the median beat,
+    (2) take every BEATS_PER_BAR-th beat, with the phase the tracker's own
+    downbeats vote for. Genuinely irregular beats stay irregular, so the
+    reliability check downstream still rejects them.
+    ponytail: assumes 4/4 (3/4 and 12/16 sarbe phrase wrong); vote the meter too if that matters."""
+    if len(beats) < MIN_BEATS:
+        return beats, downbeats
+    gaps = np.diff(beats)
+    med = float(np.median(gaps))
+    out = [beats[0]]
+    for t in beats[1:]:
+        gap = t - out[-1]
+        if gap < 0.5 * med:
+            # Spurious extra beat (B.U.G. Mafia breakdown: 0.1 s gaps at 94 bpm). Keeping it
+            # would shift the every-4th-beat bar phase by one beat for the rest of the song.
+            continue
+        n = int(round(gap / med))
+        if n >= 2 and abs(gap / n - med) <= STEADY_TOL * med:
+            out.extend(out[-1] + gap * np.arange(1, n) / n)
+        out.append(t)
+    beats = np.asarray(out, dtype=float)
+    if len(downbeats) == 0:
+        return beats, downbeats
+    idx = np.abs(beats[None, :] - downbeats[:, None]).argmin(axis=1)
+    phase = int(np.bincount(idx % BEATS_PER_BAR, minlength=BEATS_PER_BAR).argmax())
+    return beats, beats[phase::BEATS_PER_BAR]
+
+
 def _bar_has_pulse(y: np.ndarray, downbeats: np.ndarray, beats: np.ndarray) -> np.ndarray:
     """Per bar: do onsets actually peak on the beats? beat_this happily extrapolates a
     perfect grid through noise or speech (seen in testing), so evenly spaced
@@ -131,7 +170,7 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
     y, _ = librosa.load(audio_path, sr=SR, mono=True)
     dur = len(y) / SR
 
-    beats, downbeats = _beats(y)
+    beats, downbeats = _regular_grid(*_beats(y))
     run = _steady_run_start(downbeats, _bar_has_pulse(y, downbeats, beats))
     reliable = False
     if run is not None:
