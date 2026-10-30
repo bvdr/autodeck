@@ -1,8 +1,10 @@
 """MCP server so an assistant can DJ: read what's playing, pick songs, steer genre/party/effects.
 
-Run: `uv run python -m autodeck.dj_mcp` (stdio). It's a thin client of the running autodeck
-server (AUTODECK_URL, default http://127.0.0.1:8765): the browser stays the player, this only
-calls the same JSON API the page uses, so the screen, the API and the MCP always agree.
+Served by autodeck itself at http://127.0.0.1:8765/mcp (streamable HTTP, mounted in server.py),
+or standalone over stdio: `uv run python -m autodeck.dj_mcp`. Either way it's a thin client of
+the autodeck JSON API (AUTODECK_URL, default http://127.0.0.1:8765): the browser stays the player,
+the tools call the same endpoints the page uses, so the screen, the API and the MCP always agree.
+(Mounted in-process, sync tools run on worker threads, so calling our own API can't deadlock.)
 
 Tool rules (owner's MCP conventions):
 - every tool declares readOnlyHint, destructiveHint and openWorldHint explicitly, plus a title;
@@ -18,6 +20,7 @@ import urllib.parse
 import urllib.request
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 BASE = os.environ.get("AUTODECK_URL", "http://127.0.0.1:8765").rstrip("/")
@@ -54,9 +57,11 @@ def _api(path: str, method: str = "GET", body: dict | None = None) -> dict:
             msg = json.loads(e.read()).get("error") or str(e)
         except ValueError:
             msg = str(e)
-        raise RuntimeError(msg) from None
+        # ToolError: an anticipated failure whose text reaches the assistant (any other
+        # exception is reported as an opaque crash by the MCP SDK).
+        raise ToolError(msg) from None
     except urllib.error.URLError as e:
-        raise RuntimeError(f"autodeck isn't running at {BASE} ({e.reason}). Start it with "
+        raise ToolError(f"autodeck isn't running at {BASE} ({e.reason}). Start it with "
                            "`uv run python -m autodeck` in ~/gits/bvdr/autodeck.") from None
 
 

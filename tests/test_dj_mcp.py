@@ -39,5 +39,20 @@ def test_no_action_switch_parameters():
 
 def test_unreachable_server_gives_a_clear_error(monkeypatch):
     monkeypatch.setattr(dj_mcp, "BASE", "http://127.0.0.1:9")
-    with pytest.raises(RuntimeError, match="isn't running"):
+    with pytest.raises(dj_mcp.ToolError, match="isn't running"):
         dj_mcp.now_playing()
+
+
+def test_mcp_is_served_by_the_app_at_slash_mcp(tmp_library):
+    # Owner wants the MCP at <app url>/mcp. Full MCP handshake over streamable HTTP.
+    from fastapi.testclient import TestClient
+    from autodeck.engine import Engine
+    from autodeck.server import create_app
+    app = create_app(Engine())
+    # base_url with the port: real clients send Host: 127.0.0.1:8765, which the SDK checks.
+    with TestClient(app, base_url="http://127.0.0.1:8765") as c:  # `with` runs the lifespan
+        hdr = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+        r = c.post("/mcp", headers=hdr, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
+        assert r.status_code == 200, r.text
+        assert "autodeck" in r.text

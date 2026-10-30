@@ -95,10 +95,14 @@ is active) and plays it next once it's ready.
 
 ## DJ assistant (MCP)
 
-`autodeck/dj_mcp.py` is an MCP server (stdio) that lets an assistant DJ: it reads what's playing and
-steers the running app through the same API the page uses. Register it with Claude Code:
+autodeck serves an MCP endpoint at **http://127.0.0.1:8765/mcp** (streamable HTTP) that lets an
+assistant DJ: it reads what's playing and steers the app through the same API the page uses.
+Register it with Claude Code:
 
-    claude mcp add --scope user autodeck -- uv --directory ~/gits/bvdr/autodeck run python -m autodeck.dj_mcp
+    claude mcp add --transport http --scope user autodeck http://127.0.0.1:8765/mcp
+
+(A stdio variant exists for clients without HTTP support:
+`uv --directory ~/gits/bvdr/autodeck run python -m autodeck.dj_mcp`.)
 
 Tools: now_playing, list_library, get_history, search_songs, get_suggestions (read-only);
 play_next, mix_now, set_next_effect, set_genre, start_party, stop_party, set_beat_to_beat,

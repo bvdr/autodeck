@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 
-from . import library
+from . import dj_mcp, library
 from .engine import Engine, EngineError
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -90,12 +90,19 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         eng.worker.start()
         eng.start_enrichment()
         try:
-            yield
+            # The mounted MCP endpoint needs its session manager running for the app's lifetime.
+            async with dj_mcp.server.session_manager.run():
+                yield
         finally:
             eng.stop_enrichment()
             eng.worker.stop()
 
     app = FastAPI(lifespan=lifespan)
+    # DJ assistant MCP at /mcp (streamable HTTP). Its route is added straight to our router
+    # (not app.mount) so the URL is exactly /mcp, no /mcp/ redirect that MCP clients may not
+    # follow for POST. host=127.0.0.1 turns on the SDK's DNS-rebinding protection too.
+    mcp_app = dj_mcp.server.streamable_http_app(streamable_http_path="/mcp", host="127.0.0.1")
+    app.router.routes.extend(mcp_app.routes)  # before the static "/" mount below, which catches all
     app.state.engine = eng
     # DNS rebinding guard: binding 127.0.0.1 isn't enough, a malicious page can point its
     # own hostname at 127.0.0.1 and drive /api/add or DELETE. Its Host header gives it away.
