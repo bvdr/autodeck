@@ -17,6 +17,7 @@ export async function api(path, method = 'GET', body) {
 let onState = () => {};
 let last = null;
 let dragging = false;
+let dirty = false; // a state arrived while we couldn't render; render when the owner is done
 const report = (e) => { $('#msg').textContent = e.message; };
 
 /** POST/DELETE that returns the new state, rendered immediately. */
@@ -53,6 +54,11 @@ function moveTo(ids, id, to) {
   return out;
 }
 const reorder = (ids, id, to) => act('/api/queue', 'POST', { ids: moveTo(ids, id, to), pin: id });
+/** ↑/↓: read the queue at click time, never the (possibly stale) order the row was built from. */
+function nudge(id, delta) {
+  const ids = last.queue.map((q) => q.id), i = ids.indexOf(id);
+  if (i >= 0) reorder(ids, id, i + delta);
+}
 
 function songRow(song, genres, queueIds) {
   const meta = [song.bpm ? `${song.bpm.toFixed(0)} BPM` : null, song.camelot].filter(Boolean).join(' · ');
@@ -65,9 +71,9 @@ function songRow(song, genres, queueIds) {
     li.dataset.id = song.id;
     // Buttons too: drag-and-drop alone is not keyboard accessible.
     li.append(el('button', { textContent: '↑', title: 'Move up', 'aria-label': `Move ${song.title} up`, disabled: i === 0,
-      onclick: () => reorder(queueIds, song.id, i - 1) }),
+      onclick: () => nudge(song.id, -1) }),
     el('button', { textContent: '↓', title: 'Move down', 'aria-label': `Move ${song.title} down`,
-      disabled: i === queueIds.length - 1, onclick: () => reorder(queueIds, song.id, i + 1) }));
+      disabled: i === queueIds.length - 1, onclick: () => nudge(song.id, 1) }));
   }
   li.append(el('button', { className: 'remove', textContent: '✕', title: 'Remove', 'aria-label': `Remove ${song.title}`,
     onclick: () => act(`/api/song/${song.id}`, 'DELETE') }));
@@ -101,10 +107,14 @@ export function setState(s) {
   const changed = !last || s.version !== last.version || s.notice !== last.notice;
   last = s;
   const busy = dragging || document.activeElement?.tagName === 'SELECT';
-  if (changed && !busy) render(s);
+  if (changed && busy) dirty = true;
+  else if (changed || dirty) { dirty = false; render(s); }
   onState(s);
 }
 export const getState = () => last;
+function flush() {
+  if (dirty && last && !dragging && document.activeElement?.tagName !== 'SELECT') { dirty = false; render(last); }
+}
 
 /** Pull a URL out of a drop/paste DataTransfer: uri-list first (skipping # comments). */
 function urlFrom(dt) {
@@ -136,7 +146,9 @@ export function initUi(stateCb) {
     e.dataTransfer.setData(ROW_TYPE, li.dataset.id);
     e.dataTransfer.effectAllowed = 'move';
   });
-  q.addEventListener('dragend', () => { dragging = false; if (last) render(last); });
+  q.addEventListener('dragend', () => { dragging = false; flush(); });
+  // A select closing (or losing focus) releases a deferred render.
+  document.addEventListener('focusout', (e) => { if (e.target.tagName === 'SELECT') setTimeout(flush); });
   q.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes(ROW_TYPE)) e.preventDefault(); });
   q.addEventListener('drop', (e) => {
     const id = e.dataTransfer.getData(ROW_TYPE);

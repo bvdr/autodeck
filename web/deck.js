@@ -60,8 +60,16 @@ export class Deck {
     this.zero = when - offset;
     this.startAt = when;
     this.wave = null;
+    this.planId = null; // /api/transition plan that brought this song in (null for the first song)
     this.renderInfo();
   }
+
+  /** Stop in ctx time (sample-accurate), not via a wall-clock timer. */
+  stopAt(when) { this.src?.stop(when); }
+
+  /** Undo a stopAt. The spec applies only the last stop() call made before the source has
+   * stopped, so a far-future stop effectively cancels the earlier one. */
+  unstop() { this.src?.stop(this.ctx.currentTime + 1e7); }
 
   stop() {
     const s = this.src;

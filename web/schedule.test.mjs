@@ -145,3 +145,12 @@ test('first offset is the trimmed play_start', () => {
   assert.equal(S.firstOffset({ sections_rendered: [], downbeats_rendered: [4] }), 4);
   assert.equal(S.firstOffset({}), 0);
 });
+
+test('cancelling a plan: reset the outgoing before T0, hold it from T0 on (echo-out grab)', () => {
+  const p = S.plan(res('echo', 4), 10, 5);
+  assert.deepEqual(S.outgoingOnCancel(60, p.T0), [
+    { param: 'gain', type: 'set', value: 1, time: 60 }, { param: 'echo', type: 'set', value: 0, time: 60 }]);
+  assert.equal(S.outgoingOnCancel(p.T0, p.T0), null);
+  assert.equal(S.outgoingOnCancel(p.T0 + 2, p.T0), null);
+  assert.ok(S.KEY_RELEASE_MS >= 300);
+});

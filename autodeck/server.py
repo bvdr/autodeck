@@ -27,8 +27,9 @@ class AddReq(BaseModel):
     genre: str | None = None
 
 
-class IdReq(BaseModel):
+class PlayingReq(BaseModel):
     id: str
+    plan_id: str | None = None  # the /api/transition plan the player actually started
 
 
 class GenreReq(BaseModel):
@@ -99,8 +100,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return {"added": eng.add(req.url, req.genre)}
 
     @app.post("/api/playing")
-    def playing(req: IdReq):
-        eng.set_playing(_id(req.id))
+    def playing(req: PlayingReq):
+        eng.set_playing(_id(req.id), req.plan_id)
         return eng.state()
 
     @app.post("/api/genre")

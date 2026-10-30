@@ -185,3 +185,33 @@ def test_audio_serves_source(client):
 
 def test_bad_id_404(client):
     assert client.get("/api/deck/short").status_code == 404
+
+
+def test_playing_commits_the_plan_the_player_started(client, monkeypatch):
+    """Two transitions for the same `from` (e.g. Mix now overlapping a replan): only the
+    plan the player reports via /api/playing becomes b's map, whatever order they ran in."""
+    client.post("/api/playing", json={"id": IDS[0]})
+    a, b = IDS[0], IDS[1]
+    # Two candidates for a->b with different tempo ratios, so b's time maps differ.
+    trs = iter([Transition("blend", a, b, 32.0, 0.0, 8.0, 1.05),
+                Transition("blend", a, b, 40.0, 0.0, 8.0, 0.95)])
+    real = engine_mod.pick_transition
+    monkeypatch.setattr(engine_mod, "pick_transition",
+                        lambda x, y, after=None, entered=None: next(trs) if x.id == a else real(x, y, after, entered))
+    p1 = client.get("/api/transition", params={"from": a}).json()
+    p2 = client.get("/api/transition", params={"from": a, "after": 30.0}).json()
+    assert p1["plan_id"] != p2["plan_id"]
+    assert b not in client.engine.maps  # nothing committed by /api/transition itself
+    tm1 = client.engine.plans[p1["plan_id"]][1]
+    tm2 = client.engine.plans[p2["plan_id"]][1]
+    client.post("/api/playing", json={"id": b, "plan_id": p1["plan_id"]})
+    assert client.engine.maps[b] is tm1 and client.engine.entered[b].out_at == 32.0
+    nxt = client.get("/api/transition", params={"from": b}).json()
+    out_at = nxt["transition"]["out_at"]
+    assert nxt["out_at_rendered"] == pytest.approx(tm1.to_rendered(out_at))
+    assert abs(tm1.to_rendered(out_at) - tm2.to_rendered(out_at)) > 0.1  # the maps really differ
+
+
+def test_playing_unknown_plan_id_keeps_identity(client):
+    s = client.post("/api/playing", json={"id": IDS[0], "plan_id": "nope"})
+    assert s.status_code == 200 and IDS[0] not in client.engine.maps

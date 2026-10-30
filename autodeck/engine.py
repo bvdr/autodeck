@@ -6,6 +6,7 @@ calls get_state() while already holding it, so any second lock here could
 deadlock; reusing the same RLock can't.
 """
 import json
+import uuid
 from dataclasses import asdict
 
 from . import config, fetch, jobs, library
@@ -14,6 +15,7 @@ from .planner import genre_entry, order, pick_transition
 from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
+PLANS_PER_SONG = 4
 
 
 class EngineError(Exception):
@@ -48,6 +50,12 @@ class Engine:
         # brought it in. In memory only; after a restart songs fall back to identity.
         self.maps: dict[str, TimeMap] = {}
         self.entered = {}
+        # Candidate plans from /api/transition, keyed by plan_id: (in_id, TimeMap, Transition).
+        # They only become maps/entered when the player reports it actually started that
+        # render (POST /api/playing with plan_id). A response the player dropped (superseded
+        # or too late) must never describe the song that is really playing, or the next
+        # transition would be computed on the wrong time map.
+        self.plans: dict[str, tuple[str, TimeMap, object]] = {}
         # Created here, started by the server lifespan (tests never start it).
         self.worker = jobs.Worker(self.get_state, on_change=self._on_worker_change)
         with LOCK:
@@ -157,9 +165,14 @@ class Engine:
                 self._changed()
         return added
 
-    def set_playing(self, sid: str) -> None:
+    def set_playing(self, sid: str, plan_id: str | None = None) -> None:
         with LOCK:
             self._song(sid)
+            plan = self.plans.get(plan_id) if plan_id else None
+            if plan and plan[0] == sid:
+                self.maps[sid], self.entered[sid] = plan[1], plan[2]
+            # No / unknown plan_id (first song, or a plan pruned long ago): maps stay as they
+            # are, i.e. identity via deck() for a fresh song.
             pos = self.upcoming.index(sid) if sid in self.upcoming else None
             # Everything after the song that just started moves up one slot; pins follow.
             # ponytail: pins only track the common case (playing a queued song); jumping to
@@ -215,6 +228,7 @@ class Engine:
             self.pinned = {i: p for i, p in self.pinned.items() if p != sid}
             self.maps.pop(sid, None)
             self.entered.pop(sid, None)
+            self.plans = {k: v for k, v in self.plans.items() if v[0] != sid}
             # Files stay on disk: re-adding the song later reuses the download + analysis.
             library.save_pool([s.id for s in self.pool])
             self._recompute()
@@ -283,8 +297,14 @@ class Engine:
             tm_b = time_map_for(b, tr)
         path = render(b, tm_b)  # blocks a few seconds; endpoint is a threadpool `def`
         with LOCK:
-            self.maps[b.id], self.entered[b.id] = tm_b, tr
-            return {"transition": asdict(tr), "in_deck": self._deck(b, tm_b, path),
+            plan_id = uuid.uuid4().hex
+            self.plans[plan_id] = (b.id, tm_b, tr)
+            # Keep the last PLANS_PER_SONG candidates per incoming song: enough for a few
+            # overlapping replans, bounded for a long session.
+            mine = [k for k, v in self.plans.items() if v[0] == b.id]
+            for k in mine[:-PLANS_PER_SONG]:
+                del self.plans[k]
+            return {"transition": asdict(tr), "plan_id": plan_id, "in_deck": self._deck(b, tm_b, path),
                     "out_at_rendered": tm_a.to_rendered(tr.out_at),
                     "in_at_rendered": tm_b.to_rendered(tr.in_at)}
 

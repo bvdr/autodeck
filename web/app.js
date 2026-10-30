@@ -81,8 +81,12 @@ function tryApply() {
   M.plan = { ...p, res: n, inDeck: 1 - M.cur };
   const inIdx = 1 - M.cur;
   inc.start(n.track, p.inStart, p.inOffset, songEnded);
+  inc.planId = n.plan_id; // reported with /api/playing so the server commits this render's map
   out.apply(p.out, t);
   inc.apply(p.in, t);
+  // Outgoing stops in ctx time at the end of the transition (exact for cut/dropswap; gain
+  // is already 0 for the others). The swap timer below only moves the UI roles.
+  out.stopAt(p.end);
   if (p.kind === 'blend' || p.kind === 'half_double') {
     const drift = S.driftMs(out.info.downbeats_rendered, n.in_deck.downbeats_rendered, out.zero, p.inZero, p.T0, p.end);
     console.log(`[autodeck] ${p.kind} drift ${drift?.toFixed(2) ?? 'n/a'} ms (want < 10)`);
@@ -94,16 +98,19 @@ function tryApply() {
 function cancelPlan() {
   clearTimers();
   M.decks[M.plan.inDeck].stop();
-  // The outgoing still has the old fade-out scheduled at T0: put it back to full.
-  const t = now();
-  M.decks[1 - M.plan.inDeck].apply([{ param: 'gain', type: 'set', value: 1, time: t },
-    { param: 'echo', type: 'set', value: 0, time: t }], t);
+  const t = now(), out = M.decks[1 - M.plan.inDeck];
+  out.unstop();
+  // Before T0: undo the scheduled fade-out. After T0 (grab mid echo-out): keep the
+  // current gain; takeOver's hold() freezes it there.
+  const reset = S.outgoingOnCancel(t, M.plan.T0);
+  if (reset) out.apply(reset, t);
   M.plan = null;
 }
 
 /** A deck began sounding: tell the server, then prepare its exit right away (renders take seconds). */
 async function onStarted(deck) {
-  try { setState(await api('/api/playing', 'POST', { id: M.decks[deck].info.id })); } catch (e) { status(e.message); }
+  const d = M.decks[deck];
+  try { setState(await api('/api/playing', 'POST', { id: d.info.id, plan_id: d.planId })); } catch (e) { status(e.message); }
   requestPlan(deck);
 }
 
@@ -112,7 +119,7 @@ function swap() {
   const old = M.cur;
   M.timers = [];
   M.plan = null;
-  M.decks[old].stop();
+  // The old source stops itself (stopAt in tryApply); its onended frees the slot.
   M.decks[old].param('echo').setValueAtTime(0, now());
   M.cur = 1 - old;
   if (M.req?.loading) status('Preparing next mix…'); // frame() stops updating status once M.plan is gone
@@ -124,6 +131,7 @@ function songEnded(deck) {
     status('Stopped — end of queue. Add songs and press Play to start again.');
     $('#play').disabled = false;
   }
+  tryApply(); // a slot just freed: a waiting plan may now be scheduled
 }
 
 // --- poll + replan ------------------------------------------------------------
@@ -196,7 +204,7 @@ function takeOver() {
   clearTimers(); // no automatic swap while the owner drives
   M.seq++; // and no in-flight response gets scheduled under the owner's hands
   M.next = null;
-  M.decks.forEach((d) => d.hold(t));
+  M.decks.forEach((d) => { d.unstop(); d.hold(t); }); // the owner decides who stops now
   status('Manual crossfader — let go and the nearer deck takes over.');
 }
 
@@ -218,9 +226,9 @@ function letGo() {
   w.apply(ramps[winner], t);
   if (l.busy) {
     l.apply(ramps[loser], t);
-    // Only stop the source we faded: a re-grab within the bar may have made it the winner.
-    const src = l.src;
-    setTimeout(() => { if (l.src === src && !M.manual && M.cur !== loser) l.stop(); tryApply(); }, bar * 1000 + 50);
+    // ctx-time stop; a re-grab within the bar unstops it (takeOver), and its onended
+    // calls tryApply once the slot is free.
+    l.stopAt(t + bar);
   }
   const changed = winner !== M.cur;
   M.plan = null;
@@ -231,7 +239,7 @@ function letGo() {
     // Tell the server who is on air. Pushed into the incoming: its start timer may not
     // have fired yet (background tabs throttle setTimeout). Pulled back: the incoming was
     // already posted as playing, so hand the current song back.
-    api('/api/playing', 'POST', { id: w.info.id }).then(setState, (e) => status(e.message));
+    api('/api/playing', 'POST', { id: w.info.id, plan_id: w.planId }).then(setState, (e) => status(e.message));
   }
   // Next transition "as usual". Pulled back is an owner override, so the "never refetch
   // after T0" rule doesn't apply (the old plan is gone); its planned exit may be behind
@@ -239,9 +247,17 @@ function letGo() {
   requestPlan(winner);
 }
 
-fader.addEventListener('pointerdown', takeOver);
-fader.addEventListener('input', drive); // also covers keyboard arrows
-for (const ev of ['pointerup', 'keyup', 'change']) fader.addEventListener(ev, letGo);
+let pointerHeld = false, keyTimer = 0;
+// Pointer capture: pointerup still reaches the fader if the drag ends outside it.
+fader.addEventListener('pointerdown', (e) => { pointerHeld = true; try { fader.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ } takeOver(); });
+fader.addEventListener('pointerup', () => { pointerHeld = false; letGo(); });
+fader.addEventListener('input', () => {
+  drive();
+  // Keyboard (no pointer held): release after a pause, not on every keyup, so a run of
+  // arrow presses is one gesture instead of a snap + refetch per step.
+  if (!pointerHeld) { clearTimeout(keyTimer); keyTimer = setTimeout(letGo, S.KEY_RELEASE_MS); }
+});
+fader.addEventListener('blur', () => { clearTimeout(keyTimer); letGo(); });
 
 // --- render loop ------------------------------------------------------------
 const fmt = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.max(0, s) % 60)).padStart(2, '0')}`;

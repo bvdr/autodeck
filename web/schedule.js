@@ -129,6 +129,17 @@ export function releaseRamps(now, bar, gains, winner) {
   };
 }
 
+/** Outgoing deck when a scheduled plan is dropped. Before T0 nothing is audible yet, so
+ * undo the scheduled fade (back to full, echo send closed). From T0 on (e.g. grabbing the
+ * fader mid echo-out) the fade is already audible: null = hold where it is, no snap to 1. */
+export function outgoingOnCancel(now, T0) {
+  return now < T0 ? [set('gain', 1, now), set('echo', 0, now)] : null;
+}
+
+// Keyboard fader: arrow keys fire input/change per step, so "release" is this long
+// without a key step (or blur), not every keyup.
+export const KEY_RELEASE_MS = 600;
+
 export const canReplan = (now, T0, margin = REPLAN_MARGIN) => now < T0 - margin;
 export const tooSoon = (T0, now) => T0 < now + MIN_LEAD;
 
