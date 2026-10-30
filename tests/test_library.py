@@ -45,11 +45,13 @@ def test_version_mismatch_drops_analysis_keeps_genre(tmp_library):
 def test_effective_genre_priority():
     s = Song(id="x", title="T", channel="C", duration=1.0, status="ready",
              genre_hint="Pop", analysis=_analysis(guess="Hip-hop"))
-    assert s.effective_genre() == "Hip-hop"
+    # The owner's "import as" genre beats the model's guess (spec: assign a genre to a
+    # whole playlist at import); the owner's per-song fix beats both.
+    assert s.effective_genre() == "Pop"
     s.genre = "Romanian sârbe"
     assert s.effective_genre() == "Romanian sârbe"
-    s.genre, s.analysis = None, None
-    assert s.effective_genre() == "Pop"
+    s.genre, s.genre_hint = None, None
+    assert s.effective_genre() == "Hip-hop"
 
 
 def test_library_env_override(tmp_path, monkeypatch):

@@ -47,12 +47,15 @@ class Song:
     duration: float
     status: str  # "queued"|"downloading"|"analyzing"|"ready"|"failed"
     error: str | None = None
-    genre: str | None = None  # owner-set; wins over genre_guess
-    genre_hint: str | None = None  # from playlist import ("import as Sârbe")
+    genre: str | None = None  # owner-set per song; wins over everything
+    genre_hint: str | None = None  # from playlist import ("import as Sârbe"); wins over genre_guess
     analysis: Analysis | None = None
 
     def effective_genre(self) -> str | None:
-        return self.genre or (self.analysis.genre_guess if self.analysis else None) or self.genre_hint
+        # Both owner labels (per-song fix, then import genre) beat the model's guess: the spec
+        # lets the owner assign a genre to a whole playlist at import, and a guess overriding
+        # that would make "import as" do nothing for every song the model has an opinion on.
+        return self.genre or self.genre_hint or (self.analysis.genre_guess if self.analysis else None)
 
 
 def song_dir(song_id: str) -> Path:
