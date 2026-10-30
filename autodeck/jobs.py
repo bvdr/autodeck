@@ -39,7 +39,8 @@ class Worker:
         out = [i for i in upcoming if i in by_id and by_id[i].status in todo]
         ahead = sum(1 for s in pool if s.status == "ready" and s.id not in played
                     and (genre_name == config.ANY_GENRE or s.effective_genre() == genre_name))
-        if ahead >= config.WINDOW_SIZE:
+        total = sum(1 for s in pool if s.status == "ready" and s.id not in played)
+        if ahead >= config.WINDOW_SIZE or total >= config.MAX_READY_AHEAD:
             return out[: config.WINDOW_SIZE]
         seen = set(out)
         queued = [s for s in pool if s.status in todo and s.id not in seen]

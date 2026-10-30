@@ -6,6 +6,10 @@ from pathlib import Path
 
 # Spec values (see docs/superpowers/specs/2026-10-30-autodeck-design.md)
 WINDOW_SIZE = 10          # songs analysed/rendered ahead in the rolling window
+# Hard ceiling on ready-but-unplayed songs of ANY genre. WINDOW_SIZE counts only the active
+# genre, and a song's genre is unknown until it's downloaded and analysed, so a rare genre
+# made the worker download the whole pool hunting for matches (140 songs / 9 GB in real use).
+MAX_READY_AHEAD = 20
 FIXED_NEXT = 2            # upcoming songs whose order is locked
 BEATMATCH_MAX_PCT = 0.08  # max tempo stretch to beatmatch (8%)
 EASE_BARS = 16            # bars over which tempo eases back to the song's own

@@ -180,3 +180,15 @@ def test_lookahead_cap(tmp_library, monkeypatch):
     assert w.wanted(pool, ["q1"], "Pop", set()) == ["q1"]
     played = {"r0", "r1", "r2"}
     assert len(w.wanted(pool, [], "Pop", played)) == 5
+
+
+def test_hard_cap_when_active_genre_is_rare(tmp_library):
+    # Regression: with a rare genre selected, only that genre's ready songs counted toward
+    # the window, so the worker downloaded the whole pool hunting for matches (140 songs,
+    # 9 GB in real use). A hard cap on ALL ready, unplayed songs stops it.
+    ready = [_song(f"r{i}", "ready", genre="Pop") for i in range(config.MAX_READY_AHEAD)]
+    pool = ready + [_song(f"q{i}") for i in range(5)]
+    w = _worker(pool, genre="Romanian sârbe")
+    assert w.wanted(pool, [], "Romanian sârbe", set()) == []
+    assert w.wanted(pool, ["q1"], "Romanian sârbe", set()) == ["q1"]  # upcoming still prepared
+    assert len(w.wanted(pool, [], "Romanian sârbe", {"r0"})) == 5  # one played -> room again
