@@ -63,11 +63,12 @@ def _steady_run_start(downbeats: np.ndarray, pulse: np.ndarray) -> int | None:
     gaps = np.diff(downbeats)
     med = np.median(gaps)
     ok = (np.abs(gaps - med) <= STEADY_TOL * med) & pulse
-    run = 0
-    for i, good in enumerate(ok):
-        run = run + 1 if good else 0
-        if run >= STEADY_BARS:
-            return i - STEADY_BARS + 1
+    # Tolerate one weak bar per 16 (fill, dropout, breakdown): a hard "16 in a row"
+    # would mistake a real song for a beatless one. The run starts at the first
+    # passing bar of the first window with >= 15 passing.
+    hits = np.convolve(ok, np.ones(STEADY_BARS, dtype=int), mode="valid")
+    for w in np.flatnonzero(hits >= STEADY_BARS - 1):
+        return int(w + np.flatnonzero(ok[w : w + STEADY_BARS])[0])
     return None
 
 
@@ -109,13 +110,17 @@ def _sections(y, start, end, downbeats, reliable) -> list[Section]:
         grid = [b for b in phrase_boundaries(list(downbeats)) if start < b < end]
         cuts = [min(grid, key=lambda g: abs(g - c)) for c in cuts] if grid else []
     cuts = sorted({c for c in cuts if start < c < end})
+    if not cuts:
+        # Contract: always intro + outro. Split at the bar line nearest the middle
+        # when we have a grid (so the cut is still a downbeat), else the raw middle.
+        mid = (start + end) / 2
+        inner = [d for d in downbeats if start < d < end] if reliable else []
+        cuts = [min(inner, key=lambda d: abs(d - mid)) if inner else mid]
     edges = [start, *cuts, end]
     # ponytail: label by position only (first=intro, last=outro); real structure
     # labelling (verse/chorus) isn't needed by the planner. Upgrade if it ever is.
     labels = ["body"] * (len(edges) - 1)
-    labels[0] = "intro"
-    if len(labels) > 1:
-        labels[-1] = "outro"
+    labels[0], labels[-1] = "intro", "outro"
     return [Section(a, b, l) for a, b, l in zip(edges, edges[1:], labels)]
 
 
@@ -160,10 +165,14 @@ def analyze(audio_path: Path, title: str, channel: str) -> Analysis:
         bar = float(np.median(np.diff(downbeats)))
         starts = [d for d in downbeats if d >= t_start - SNAP_SLACK]
         ends = [d for d in [*downbeats, downbeats[-1] + bar] if d <= t_end + SNAP_SLACK]
-        play_start = max(starts[0], downbeats[0]) if starts else t_start  # Ruling D: skip beatless intro
-        play_end = ends[-1] if ends else t_end
-        if play_end <= play_start:
-            play_start, play_end = t_start, t_end
+        if starts and ends and ends[-1] > starts[0]:
+            play_start, play_end = float(starts[0]), float(ends[-1])  # starts[0] >= downbeats[0]: Ruling D
+            if play_end > downbeats[-1] + 1e-6:
+                # Store the extrapolated bar line so every section boundary is a stored downbeat.
+                downbeats = np.append(downbeats, play_end)
+        else:
+            # Can't snap (energy edges outside the grid): no usable grid for the planner.
+            play_start, play_end, reliable = t_start, t_end, False
     else:
         play_start, play_end = t_start, t_end
 
