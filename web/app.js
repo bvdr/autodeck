@@ -22,6 +22,25 @@ const M = {
   force: null,     // owner's forced effect for the current song's exit (null = app's pick)
   fxPlan: null,    // the plan the effect dropdown was last built for
 };
+// Reload resumes where you were: the playing song + position, saved about once a second.
+// localStorage, not the server: it's this browser's playback, and it must survive a reload
+// even while the server restarts. Older than RESUME_MAX_MS = a new session, start fresh.
+const RESUME_KEY = 'autodeck.resume';
+const RESUME_MAX_MS = 12 * 3600 * 1000;
+let lastSave = 0;
+function savedResume() {
+  try {
+    const r = JSON.parse(localStorage.getItem(RESUME_KEY));
+    return r && Date.now() - r.at < RESUME_MAX_MS ? r : null;
+  } catch { return null; }
+}
+function saveResume(t) {
+  if (Date.now() - lastSave < 1000) return;
+  const d = M.decks[M.cur];
+  if (!d?.info || !d.started(t)) return;
+  lastSave = Date.now();
+  localStorage.setItem(RESUME_KEY, JSON.stringify({ id: d.info.id, title: d.info.title, pos: d.pos(t), at: lastSave }));
+}
 const FX_LABEL = { blend: 'Beat blend', half_double: 'Beat blend (½×/2×)', echo: 'Echo out',
   dropswap: 'Drop swap', cut: 'Cut', fade: 'Fade' };
 
@@ -177,7 +196,11 @@ async function play() {
     await M.ctx.resume();
     const s = await api('/api/state');
     setState(s);
-    const first = s.queue[0];
+    // Resume the song that was playing before the reload, at its position. The server's
+    // session still holds that song's time map, so /api/deck returns the same render.
+    const res = savedResume();
+    const known = res && s.pool.some((p) => p.id === res.id && p.status === 'ready');
+    const first = known ? { id: res.id, title: res.title } : s.queue[0];
     if (!first) throw new Error('Nothing ready to play yet — add songs below.');
     status(`Loading ${first.title}…`);
     const info = await api(`/api/deck/${first.id}`);
@@ -187,7 +210,9 @@ async function play() {
     M.cur = 0;
     const d = M.decks[0];
     d.apply([{ param: 'gain', type: 'set', value: 1, time: now() }], now());
-    d.start(track, now() + 0.1, S.firstOffset(info), songEnded);
+    // Resume a little before the saved spot (the save is up to 1 s old); never past the end.
+    const offset = known ? Math.min(Math.max(res.pos - 1, 0), info.duration_rendered - 5) : S.firstOffset(info);
+    d.start(track, now() + 0.1, Math.max(offset, 0), songEnded);
     onStarted(0);
   } catch (e) {
     status(e.message);
@@ -295,6 +320,7 @@ function frame() {
     else status(`Mixing into ${M.plan.res.in_deck.title} (${FX_LABEL[M.plan.kind] ?? M.plan.kind})`);
   }
   updateFx(t);
+  saveResume(t);
   requestAnimationFrame(frame);
 }
 
@@ -326,4 +352,8 @@ $('#b2b').addEventListener('click', async () => {
   try { setState(await api('/api/mode', 'POST', { beat_to_beat: on })); } catch (e) { $('#msg').textContent = e.message; }
 });
 initUi(onState);
+{
+  const r = savedResume();
+  if (r) $('#play').textContent = `▶ Resume ${r.title.length > 28 ? `${r.title.slice(0, 27)}…` : r.title} at ${fmt(r.pos)}`;
+}
 poll();
