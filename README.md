@@ -58,6 +58,15 @@ Spotify normalize to), so transitions don't jump in volume. Real libraries span 
 LUFS). Songs are never boosted into clipping: a quiet master with loud peaks is raised only as far
 as its peaks allow.
 
+## Moods
+
+Type a theme under **Mood** ("Balkan party", "Greek taverna", "90s eurodance") and press **Build**.
+autodeck reads the top public YouTube playlists for it (and Deezer's, as a second vote), ranks songs
+by how many of those playlists include them — the crowd's picks — imports the top 30, adds the mood
+as a button next to the genres and switches to it. Its songs download first. **↻** on a mood adds
+more songs from the playlists; **✕** deletes the mood (songs stay). Stored in `<library>/moods.json`.
+A song keeps its own genre and can be in several moods.
+
 ## Party mode
 
 Pick **Hits**, **Oldies** or **Latino** under *Party* (*Off* returns to the genre buttons):

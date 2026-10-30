@@ -88,6 +88,7 @@ function render(s) {
   })));
   $('#b2b').setAttribute('aria-pressed', String(!!s.beat_to_beat));
   renderParty(s);
+  renderMoods(s);
   if (s.playing !== histFor) { histFor = s.playing; if ($('#history-box').open) loadHistory(); }
   const notice = $('#notice');
   notice.hidden = !s.notice;
@@ -138,6 +139,28 @@ async function add(url) {
     $('#url').value = '';
     setState(await api('/api/state'));
   } catch (e) { msg.textContent = e.message; } // 400 {error} from the server
+}
+
+// --- moods --------------------------------------------------------------------
+async function buildMood(theme) {
+  const msg = $('#mood-msg');
+  msg.textContent = `Reading playlists for "${theme}"…`;
+  try {
+    const r = await api('/api/mood', 'POST', { theme });
+    msg.textContent = `${r.mood}: ${r.found} songs (${r.added} new, downloading first). Top: `
+      + r.songs.slice(0, 5).map((x) => x.title).join(' · ');
+    setState(await api('/api/state'));
+  } catch (e) { msg.textContent = e.message; }
+}
+
+function renderMoods(s) {
+  const m = s.moods ?? {};
+  $('#mood-list').replaceChildren(...Object.entries(m).map(([name, n]) => el('span', { className: 'chip' },
+    el('span', { textContent: `${name} (${n})` }),
+    el('button', { type: 'button', textContent: '↻', title: 'Refresh: add more songs from the playlists',
+      'aria-label': `Refresh mood ${name}`, onclick: () => buildMood(name) }),
+    el('button', { type: 'button', className: 'remove', textContent: '✕', title: 'Delete this mood (songs stay)',
+      'aria-label': `Delete mood ${name}`, onclick: () => act(`/api/mood/${encodeURIComponent(name)}`, 'DELETE') }))));
 }
 
 // --- played log ---------------------------------------------------------------
@@ -233,6 +256,11 @@ async function search(q) {
 export function initUi(stateCb) {
   onState = stateCb;
   $('#sugg-refresh').addEventListener('click', loadSuggestions);
+  $('#mood-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const t = $('#mood-theme').value.trim();
+    if (t) { buildMood(t); $('#mood-theme').value = ''; }
+  });
   $('#history-box').addEventListener('toggle', (e) => { if (e.target.open) loadHistory(); });
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value); });
   // Queue drag & drop -> POST /api/queue with pin = the dragged song.

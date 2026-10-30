@@ -62,6 +62,11 @@ summary { cursor: pointer; color: var(--dim); padding: 4px 0; }
 #add-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 #url { flex: 1; min-width: 240px; }
 
+.moods h2.inline { display: inline; font-size: 1rem; margin: 0 8px 0 0; }
+#mood-theme { min-width: 260px; }
+#mood-list { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid var(--line); border-radius: 14px; }
+.chip button { padding: 0 6px; }
 .party h2.inline { display: inline; font-size: 1rem; margin: 0 8px 0 0; }
 .party h3 { font-size: 0.95rem; margin: 8px 0 4px; }
 #party-btns { display: inline-flex; flex-wrap: wrap; gap: 8px; }

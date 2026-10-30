@@ -14,9 +14,9 @@ from dataclasses import asdict
 
 import soundfile as sf
 
-from . import config, fetch, jobs, lastfm, library, party
+from . import config, fetch, jobs, lastfm, library, moods, party
 from .library import Song
-from .planner import FORCEABLE, Transition, genre_entry, order, pick_transition
+from .planner import FORCEABLE, Transition, genre_entry, order, pick_transition, score_pair
 from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
@@ -67,6 +67,10 @@ class Engine:
         # the front of the worker's list (prepped before anything, cap or not); ready ones go to
         # the front of the queue, whatever the active genre. Dropped once they start playing.
         self.requested: list[str] = []
+        # Moods built from public playlists (moods.py): name -> song ids. A mood is selected like
+        # a genre (its name is in the genres list), but membership is this list, so a song keeps
+        # its own genre label and can be in several moods.
+        self.moods: dict[str, list[str]] = self._load_moods()
         # Party mode: a flavor (party.FLAVORS) replaces the genre filter while on; None = off.
         self.party: str | None = None
         self.rejected: set[str] = self._load_rejected()  # party.key()s the owner turned down
@@ -151,6 +155,10 @@ class Engine:
             # Party flavor replaces the genre filter; songs not looked up on Last.fm yet don't fit.
             in_genre = [s for s in cands if party.fits(s, self.party)]
             what = f"{self.party} party"
+        elif g in self.moods:
+            members = set(self.moods[g])
+            in_genre = [s for s in cands if s.id in members or s.effective_genre() == g]
+            what = g
         else:
             in_genre = [s for s in cands if g == anyg or s.effective_genre() == g]
             what = g
@@ -158,7 +166,8 @@ class Engine:
         fell_back = bool(cands) and not in_genre
         self.notice = f"No ready {what} songs yet — playing from any genre" if fell_back else None
         # order() filters by genre itself; for a party the candidates arrive pre-filtered.
-        use_genre = anyg if (fell_back or self.party) else g
+        prefiltered = bool(self.party) or g in self.moods
+        use_genre = anyg if (fell_back or prefiltered) else g
         group = {s.id for s in (cands if fell_back else in_genre)}
         cur = self.by_id(self.playing) if self.playing else None
         ok = {s.id for s in cands}
@@ -175,7 +184,7 @@ class Engine:
         pins = {i - n: sid for i, sid in self.pinned.items() if i >= n and sid not in keep}
         prev = self.by_id(keep[-1]) if keep else cur
         pin_ids = set(pins.values())  # pinned songs are the owner's choice: they stay whatever the filter
-        pool = [s for s in cands if s.id not in keep and (s.id in group or s.id in pin_ids or not self.party)]
+        pool = [s for s in cands if s.id not in keep and (s.id in group or s.id in pin_ids or not prefiltered)]
         rest = order(prev, pool, pins, use_genre, bonus=party.bonus if self.party else None)
         self.upcoming = keep + [s.id for s in rest]
 
@@ -196,6 +205,7 @@ class Engine:
                     "notice": self.notice, "playing": self.playing, "beat_to_beat": self.beat_to_beat,
                     "party": self.party, "flavors": list(party.FLAVORS), "lastfm": bool(lastfm.api_key()),
                     "next_effect": self.next_effect, "effects": list(FORCEABLE), "mix_now_seq": self.mix_now_seq,
+                    "moods": {k: len(v) for k, v in self.moods.items()},
                     "queue": [self.view(by[i]) for i in self.upcoming if i in by],
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
@@ -329,6 +339,70 @@ class Engine:
             except ValueError:
                 continue  # a half-written last line after a crash
         return out
+
+    # --- moods ----------------------------------------------------------------------
+    def _moods_file(self):
+        return config.library_root() / "moods.json"
+
+    def _load_moods(self) -> dict[str, list[str]]:
+        try:
+            d = json.loads(self._moods_file().read_text(encoding="utf-8"))
+            return {str(k): [str(i) for i in v] for k, v in d.items()} if isinstance(d, dict) else {}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return {}
+
+    def build_mood(self, theme: str, n: int = 30) -> dict:
+        """Collect the crowd's picks for a theme from public playlists, import them, and switch
+        to the mood. Returns {"mood", "found", "added", "songs": [{title, votes}]}."""
+        theme = " ".join(theme.split())[:60]
+        if not theme:
+            raise EngineError(400, "Type a mood, e.g. 'Balkan party'")
+        name = theme[:1].upper() + theme[1:]
+        if name == config.ANY_GENRE:
+            raise EngineError(400, f"'{name}' is reserved")
+        top = moods.collect(theme, max(5, min(n, 60)))  # network: seconds, outside the lock
+        if not top:
+            raise EngineError(404, f"No playlists found for '{theme}'")
+        added = 0
+        with LOCK:
+            have = {s.id: s for s in self.pool}
+            ids = []
+            for new, _votes in top:
+                s = have.get(new.id) or library.load_song(new.id)
+                if s is None or s.id not in have:
+                    s = s or new
+                    if s.genre is None and s.genre_hint is None:
+                        s.genre_hint = name  # lets the worker fetch mood songs first
+                    if s.status == "failed":
+                        s.status, s.error = "queued", None
+                    library.save_song(s)
+                    self.pool.append(s)
+                    have[s.id] = s
+                    added += 1
+                ids.append(s.id)
+            # Building an existing mood again refreshes it: new picks are added, none removed
+            # (the owner may be relying on songs already in it).
+            self.moods[name] = list(dict.fromkeys([*self.moods.get(name, []), *ids]))
+            config.write_json_atomic(self._moods_file(), self.moods)
+            if name not in config.genres():
+                config.save_genres([*config.genres(), name])
+            library.save_pool([s.id for s in self.pool])
+        self.set_genre(name)  # switch to it now; also replans the next transition
+        return {"mood": name, "found": len(top), "added": added,
+                "songs": [{"title": s.title, "votes": v} for s, v in top[:10]]}
+
+    def delete_mood(self, name: str) -> None:
+        """Forget a mood (songs stay in the library). Back to Any if it was active."""
+        with LOCK:
+            if name not in self.moods:
+                raise EngineError(404, f"No mood called {name}")
+            del self.moods[name]
+            config.write_json_atomic(self._moods_file(), self.moods)
+            config.save_genres([g for g in config.genres() if g != name] or list(config.DEFAULT_GENRES))
+            if self.genre == name:
+                self.genre = config.ANY_GENRE
+            self._recompute()
+            self._changed()
 
     # --- party mode ------------------------------------------------------------------
     def _rejected_file(self):
@@ -470,7 +544,13 @@ class Engine:
             cur = self.by_id(self.playing) if self.playing else None
             keep = None
             if cur is not None:
-                song, _ = genre_entry(cur, [s for s in self.pool if self._eligible(s)], g)
+                elig = [s for s in self.pool if self._eligible(s)]
+                if g in self.moods:  # mood membership, not genre labels: entry from its members
+                    members = set(self.moods[g])
+                    elig = [s for s in elig if s.id in members or s.effective_genre() == g]
+                    song = max(elig, key=lambda s: score_pair(cur, s)) if elig else None
+                else:
+                    song, _ = genre_entry(cur, elig, g)
                 # The best entry song replaces the fixed slot so the switch is audible next.
                 keep = [song.id] if song else []
             self._recompute(keep)  # also sets/clears the fall-back notice

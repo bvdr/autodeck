@@ -40,7 +40,7 @@ class Worker:
         ahead = sum(1 for s in pool if s.status == "ready" and s.id not in played
                     and (genre_name == config.ANY_GENRE or s.effective_genre() == genre_name))
         total = sum(1 for s in pool if s.status == "ready" and s.id not in played)
-        if ahead >= config.WINDOW_SIZE or total >= config.MAX_READY_AHEAD:
+        if ahead >= config.WINDOW_SIZE:
             return out[: config.WINDOW_SIZE]
         seen = set(out)
         queued = [s for s in pool if s.status in todo and s.id not in seen]
@@ -51,6 +51,10 @@ class Worker:
             return genre_name in (s.effective_genre(), genre.metadata_hint(s.title, s.channel, names))
 
         hit = [s.id for s in queued if matches(s)]
+        if total >= config.MAX_READY_AHEAD:
+            # The hard cap stops blind hunting through the pool, not songs KNOWN to belong to
+            # the active genre/mood (labelled at import): those still fill its window.
+            return (out + hit)[: config.WINDOW_SIZE]
         rest = [s.id for s in queued if not matches(s)]
         self._rng.shuffle(rest)
         return (out + hit + rest)[: config.WINDOW_SIZE]

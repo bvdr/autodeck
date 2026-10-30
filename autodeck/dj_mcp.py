@@ -78,7 +78,7 @@ def _summary(s: dict) -> dict:
     return {
         "playing": _song(pool[s["playing"]]) if s.get("playing") in pool else None,
         "up_next": [_song(q) for q in s.get("queue", [])[:10]],
-        "genre": s.get("genre"), "genres": s.get("genres"),
+        "genre": s.get("genre"), "genres": s.get("genres"), "moods": s.get("moods"),
         "party": s.get("party"), "party_flavors": s.get("flavors"),
         "beat_to_beat": s.get("beat_to_beat"),
         "next_effect": s.get("next_effect") or "auto", "effects": s.get("effects"),
@@ -195,6 +195,20 @@ def set_song_genre(song_id: str, genre: str = "") -> dict:
 def remove_song(song_id: str) -> dict:
     """Remove a song from the library/queue (its cached files stay on disk; re-adding restores it)."""
     return _summary(_api(f"/api/song/{song_id}", "DELETE"))
+
+
+@tool("Build or refresh a mood", open_world=True)
+def build_mood(theme: str, songs: int = 30) -> dict:
+    """Create a mood from a theme ("Balkan party", "Greek taverna", "90s eurodance"): the songs that
+    appear across popular public YouTube/Deezer playlists on it are imported and the mix switches to
+    it. Building an existing mood again adds more songs. Takes ~10-30 s."""
+    return _api("/api/mood", "POST", {"theme": theme, "songs": songs})
+
+
+@tool("Delete a mood")
+def delete_mood(name: str) -> dict:
+    """Forget a mood (its songs stay in the library); the mix returns to Any if it was active."""
+    return _summary(_api(f"/api/mood/{urllib.parse.quote(name)}", "DELETE"))
 
 
 @tool("Add songs by URL", destructive=False, open_world=True)

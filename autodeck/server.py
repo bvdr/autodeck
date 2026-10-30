@@ -48,6 +48,11 @@ class SuggestionReq(BaseModel):
     title: str
 
 
+class MoodReq(BaseModel):
+    theme: str
+    songs: int = 30
+
+
 class EffectReq(BaseModel):
     effect: str | None = None  # None = let the app pick
 
@@ -168,6 +173,16 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     def reject(req: SuggestionReq):
         eng.reject(req.artist[:200], req.title[:300])
         return {"suggestions": eng.suggestions()}
+
+    @app.post("/api/mood")
+    def build_mood(req: MoodReq):
+        # Plain def: playlist searches take seconds, FastAPI runs this in its threadpool.
+        return eng.build_mood(req.theme, req.songs)
+
+    @app.delete("/api/mood/{name}")
+    def delete_mood(name: str):
+        eng.delete_mood(name)
+        return eng.state()
 
     @app.post("/api/next_effect")
     def next_effect(req: EffectReq):

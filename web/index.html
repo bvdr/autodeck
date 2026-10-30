@@ -54,6 +54,19 @@
 
   <nav id="genres" class="genres" aria-label="Genre"></nav>
 
+  <!-- Moods: defined here by the owner. A theme ("Balkan party") is turned into a song set from
+       the songs that appear across popular public playlists; its button then sits with the genres. -->
+  <section class="moods" aria-labelledby="mood-h">
+    <form id="mood-form" class="genres">
+      <h2 id="mood-h" class="inline">Mood</h2>
+      <label for="mood-theme" class="sr-only">New mood</label>
+      <input id="mood-theme" placeholder="Balkan party, Greek taverna, 90s eurodance…" autocomplete="off">
+      <button type="submit">Build</button>
+      <span id="mood-list"></span>
+    </form>
+    <p id="mood-msg" class="dim" role="status" aria-live="polite"></p>
+  </section>
+
   <!-- Party mode: a flavor replaces the genre filter (library songs that fit, crowd-pleasers
        first, energy building); suggestions are songs you don't have, accept or reject. -->
   <section class="party" aria-labelledby="party-h">

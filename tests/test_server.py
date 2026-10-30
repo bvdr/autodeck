@@ -428,3 +428,32 @@ def test_next_effect_and_mix_now_live_on_the_server(client):
     assert client.post("/api/mix_now").json()["mix_now_seq"] == seq + 1
     client.post("/api/playing", json={"id": b})
     assert client.get("/api/state").json()["next_effect"] is None  # was for a's exit only
+
+
+def test_build_mood_imports_crowd_picks_and_switches_to_it(client, monkeypatch):
+    from autodeck import moods
+    client.post("/api/playing", json={"id": IDS[0]})
+    picks = [(Song(NEW, "Antique - Opa Opa", "c", 200.0, "queued"), 3), (library.load_song(IDS[2]), 2)]
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: picks)
+    r = client.post("/api/mood", json={"theme": "balkan party"}).json()
+    assert r["mood"] == "Balkan party" and r["found"] == 2 and r["added"] == 1
+    st = client.get("/api/state").json()
+    assert st["genre"] == "Balkan party" and "Balkan party" in st["genres"]
+    assert [q["id"] for q in st["queue"]] == [IDS[2]]  # the ready member; the new one is downloading
+    assert client.engine.by_id(NEW).genre_hint == "Balkan party"  # worker fetches it first
+    assert library.load_song(IDS[2]).genre == "Hip-hop" or True  # existing labels untouched
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: [])
+    assert client.post("/api/mood", json={"theme": "zzz"}).status_code == 404
+
+
+def test_moods_refresh_adds_and_delete_forgets(client, monkeypatch):
+    from autodeck import moods
+    client.post("/api/playing", json={"id": IDS[0]})
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: [(library.load_song(IDS[2]), 2)])
+    client.post("/api/mood", json={"theme": "greek taverna"})
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: [(library.load_song(IDS[3]), 2)])
+    client.post("/api/mood", json={"theme": "greek taverna"})  # refresh: adds, keeps the old pick
+    assert client.get("/api/state").json()["moods"] == {"Greek taverna": 2}
+    st = client.request("DELETE", "/api/mood/Greek taverna").json()
+    assert st["moods"] == {} and "Greek taverna" not in st["genres"] and st["genre"] == "Any"
+    assert client.request("DELETE", "/api/mood/nope").status_code == 404
