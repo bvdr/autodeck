@@ -9,7 +9,7 @@ import yt_dlp
 from yt_dlp.cookies import CookieLoadError
 from yt_dlp.utils import DownloadError
 
-from .library import Song, song_dir
+from .library import Song, audio_path, song_dir
 
 COOKIE_ERROR = "Couldn't read YouTube login from Chrome. Is Chrome logged in to YouTube?"
 # Cookie-READ failures. Markers are deliberately narrow: yt-dlp's sign-in / age-gate /
@@ -101,30 +101,33 @@ def expand(url: str) -> list[Song]:
 
 
 def download(song: Song) -> Path:
-    """Download <song_dir>/audio.flac (idempotent). Raises FetchError."""
+    """Download the song's audio to library.audio_path (Opus, idempotent). Raises FetchError."""
     d = song_dir(song.id)
-    out = d / "audio.flac"
+    out = audio_path(song.id)
     if out.exists():
         return out  # never re-download a cached song
     opts = {
-        "format": "bestaudio",
+        # Prefer YouTube's Opus stream: FFmpegExtractAudio then only remuxes it into audio.opus,
+        # bit-for-bit the audio YouTube sent (no re-encode, no quality loss). Only when no
+        # Opus stream exists (rare) does it transcode, at 192 kbps (transparent for Opus).
+        "format": "bestaudio[acodec=opus]/bestaudio",
         "quiet": True,
         "noprogress": True,  # quiet=True still prints progress bars
         "noplaylist": True,
         # Work under a scratch name and rename only on success: a crash mid-download or
-        # mid-conversion must never leave a truncated audio.flac that looks cached.
-        # %(ext)s becomes flac after the post-processor.
+        # mid-conversion must never leave a truncated audio file that looks cached.
+        # %(ext)s becomes opus after the post-processor.
         "outtmpl": str(d / "dl.%(ext)s"),
-        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}],
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "opus", "preferredquality": "192"}],
         **_cookie_opts(),
     }
-    scratch = d / "dl.flac"
+    scratch = d / "dl.opus"
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={song.id}"])
         if not scratch.exists():
             raise FetchError(f"Couldn't download '{song.title}': no audio file was produced")
-        os.replace(scratch, out)  # atomic: audio.flac is either absent or complete
+        os.replace(scratch, out)  # atomic: the audio file is either absent or complete
     except FetchError:
         raise
     except Exception as exc:

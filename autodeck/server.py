@@ -19,7 +19,7 @@ WEB = Path(__file__).resolve().parent.parent / "web"
 # is built means an id can never contain "/" or "..".
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 # Only the source and our renders are servable; song.json, peaks.json etc. are not.
-AUDIO_RE = re.compile(r"^(audio\.flac|render-[0-9a-f]+\.wav)$")
+AUDIO_RE = re.compile(r"^(audio\.(opus|flac)|render-[0-9a-f]+\.wav)$")
 
 
 class AddReq(BaseModel):

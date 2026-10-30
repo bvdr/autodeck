@@ -107,7 +107,7 @@ class Worker:
             analyze.write_peaks(audio, out)
 
     def _prep(self, song: Song) -> None:
-        audio = library.song_dir(song.id) / "audio.flac"
+        audio = library.audio_path(song.id)
         saved = library.load_song(song.id) if audio.exists() else None
         # load_song drops analyses with a stale version, so a hit here is current.
         if saved and saved.analysis:

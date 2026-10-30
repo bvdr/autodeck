@@ -305,7 +305,7 @@ class Engine:
             # covers [play_start, play_end]: keep that slice. Duration from the file header
             # (Song.duration is YouTube metadata, 0 for some playlist entries).
             try:
-                dur = sf.info(str(library.song_dir(s.id) / "audio.flac")).duration
+                dur = sf.info(str(library.audio_path(s.id))).duration
             except (OSError, RuntimeError):
                 dur = 0.0
             if dur > 0:

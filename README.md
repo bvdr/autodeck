@@ -31,7 +31,7 @@ Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
   public videos and playlists but not for Liked Music. Use `none` for unattended runs and tests, since
   the Keychain prompt blocks them.
 - **`AUTODECK_LIBRARY`** moves the library cache (default `~/autodeck-library/`). It holds one folder per
-  song (`audio.flac`, `analysis.json`, `peaks.json`, renders), `pool.json`, `genres.json` and the
+  song (`audio.opus`, `analysis.json`, `peaks.json`, renders), `pool.json`, `genres.json` and the
   models, plus `session.json` (what is playing, what has played, and the tempo maps of the current
   renders, so a server restart doesn't break the mix). Deleting a song's folder removes the song from
   the pool (re-add its URL to get it back). Delete `session.json` with the server stopped to start a

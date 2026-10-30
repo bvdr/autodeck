@@ -126,7 +126,7 @@ def _writing_ydl(fail):
         def download(self, urls):
             import pathlib
             pathlib.Path(self.dir).mkdir(parents=True, exist_ok=True)  # yt-dlp creates it
-            pathlib.Path(self.dir, "dl.flac").write_bytes(b"partial")
+            pathlib.Path(self.dir, "dl.opus").write_bytes(b"partial")
             pathlib.Path(self.dir, "dl.webm.part").write_bytes(b"x")
             if fail:
                 raise DownloadError("ERROR: boom")
@@ -143,8 +143,8 @@ def test_failed_download_leaves_no_audio_or_scratch(tmp_library, monkeypatch):
 def test_successful_download_renames_and_cleans(tmp_library, monkeypatch):
     monkeypatch.setattr(yt_dlp, "YoutubeDL", _writing_ydl(False))
     p = fetch.download(_song())
-    assert p.name == "audio.flac" and p.read_bytes() == b"partial"
-    assert [x.name for x in song_dir("abc123").iterdir()] == ["audio.flac"]
+    assert p.name == "audio.opus" and p.read_bytes() == b"partial"
+    assert [x.name for x in song_dir("abc123").iterdir()] == ["audio.opus"]
 
 
 def test_browser_none_disables_cookies(monkeypatch):
@@ -155,3 +155,27 @@ def test_browser_none_disables_cookies(monkeypatch):
     assert fetch._cookie_opts() == {"cookiesfrombrowser": ("firefox",)}
     monkeypatch.delenv("AUTODECK_BROWSER")
     assert fetch._cookie_opts() == {"cookiesfrombrowser": ("chrome",)}
+
+
+def test_download_asks_ffmpeg_for_opus(tmp_library, monkeypatch):
+    # Opus, not FLAC: the YouTube stream is lossy already, FLAC was a 15x bigger copy (~60 MB/song).
+    seen = {}
+
+    class Y:
+        def __init__(self, opts): seen.update(opts)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def download(self, urls): raise DownloadError("ERROR: stop")
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Y)
+    with pytest.raises(fetch.FetchError):
+        fetch.download(_song())
+    assert seen["postprocessors"][0]["preferredcodec"] == "opus"
+
+
+def test_legacy_flac_still_counts_as_cached(tmp_library, monkeypatch):
+    # Libraries from before the Opus switch keep working without a re-download.
+    p = song_dir("abc123") / "audio.flac"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"x")
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _raising_ydl(AssertionError("must not be called")))
+    assert fetch.download(_song()) == p

@@ -62,6 +62,22 @@ def song_dir(song_id: str) -> Path:
     return config.library_root() / song_id
 
 
+# Songs are stored as Opus (~4 MB) instead of FLAC (~60 MB): the source is YouTube's lossy
+# stream anyway, so FLAC only made a 15x bigger copy of the same quality. Libraries from
+# before the switch still have audio.flac; it's read (the owner's existing ones were converted in place)
+# until replaced. One helper so no caller hardcodes a file name.
+AUDIO_NAMES = ("audio.opus", "audio.flac")
+
+
+def audio_path(song_id: str) -> Path:
+    """The song's cached audio file: audio.opus, a legacy audio.flac, else the opus path (absent)."""
+    d = song_dir(song_id)
+    for name in AUDIO_NAMES:
+        if (d / name).exists():
+            return d / name
+    return d / AUDIO_NAMES[0]
+
+
 def save_song(song: Song) -> None:
     d = song_dir(song.id)
     d.mkdir(parents=True, exist_ok=True)

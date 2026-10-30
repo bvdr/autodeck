@@ -19,7 +19,7 @@ import soundfile as sf
 from autodeck.config import EASE_BARS
 
 log = logging.getLogger(__name__)
-from autodeck.library import ANALYSIS_VERSION, Song, song_dir
+from autodeck.library import ANALYSIS_VERSION, Song, audio_path, song_dir
 from autodeck.planner import Transition
 
 _EPS = 1e-6
@@ -110,9 +110,13 @@ def _is_identity(tm: TimeMap) -> bool:
     return all(abs((o1 - o0) - (r1 - r0)) < 1e-4 for (o0, r0), (o1, r1) in zip(tm.points, tm.points[1:]))
 
 
+RB_ARGS = {"--centre-focus": ""}  # see render()
+
+
 def _hash(tm: TimeMap) -> str:
-    # Rounded so float noise doesn't bust the cache; version so re-analysis re-renders.
-    key = json.dumps([[round(o, 3), round(r, 3)] for o, r in tm.points] + [ANALYSIS_VERSION])
+    # Rounded so float noise doesn't bust the cache; version so re-analysis re-renders;
+    # stretch options so a quality change never serves an old render.
+    key = json.dumps([[round(o, 3), round(r, 3)] for o, r in tm.points] + [ANALYSIS_VERSION, RB_ARGS])
     return hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
@@ -120,7 +124,7 @@ def render(song: Song, tm: TimeMap) -> Path:
     out = song_dir(song.id) / f"render-{_hash(tm)}.wav"
     if out.exists():
         return out
-    y, sr = sf.read(song_dir(song.id) / "audio.flac", dtype="float32", always_2d=False)
+    y, sr = sf.read(audio_path(song.id), dtype="float32", always_2d=False)
     o_start, o_end = tm.points[0][0], tm.points[-1][0]
     y = y[int(round(o_start * sr)): int(round(o_end * sr))]
     if not _is_identity(tm):
@@ -128,7 +132,12 @@ def render(song: Song, tm: TimeMap) -> Path:
         # pair is required or rubberband stops mapping early.
         pairs = [(int(round((o - o_start) * sr)), int(round(r * sr))) for o, r in tm.points]
         pairs[-1] = (len(y), pairs[-1][1])
-        y = pyrubberband.timemap_stretch(y, sr, pairs)
+        # Owner wants high sound quality. centre-focus keeps the stereo image (and mono
+        # compatibility) intact. NOT the R3 '--fine' engine: in rubberband 4.0 it ignores
+        # the --timemap keyframes (stretches evenly instead of blend-then-ease), which would
+        # break beat alignment; the onset test in test_render catches that.
+        # A copy: pyrubberband adds --time/--timemap into the dict it is given.
+        y = pyrubberband.timemap_stretch(y, sr, pairs, rbargs=dict(RB_ARGS))
     # Atomic write: the player may be reading/serving while the worker renders.
     # Unique temp name: /api/deck and /api/transition can render the same map at once,
     # and a shared "<name>.tmp" would let them clobber each other (last os.replace wins, whole).
