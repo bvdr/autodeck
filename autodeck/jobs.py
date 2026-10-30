@@ -13,9 +13,9 @@ log = logging.getLogger(__name__)
 class Worker:
     # ponytail: one thread, one song at a time. If prep falls behind playback,
     # use 2 threads (download in parallel with analyze).
-    def __init__(self, get_state: Callable[[], tuple[list[Song], list[str], str]],
+    def __init__(self, get_state: Callable[[], tuple[list[Song], list[str], str, set[str]]],
                  on_change: Callable[[], None] = lambda: None, seed: int = 0):
-        # get_state -> (pool, upcoming ids, active genre); the server owns all three.
+        # get_state -> (pool, upcoming ids, active genre, played ids); the server owns all four.
         self.get_state = get_state
         self.on_change = on_change
         # Fixed seed per instance: the "rest of the queue" order is random but reproducible in tests.
@@ -23,16 +23,26 @@ class Worker:
         self._wake = threading.Event()
         self._stop = False
         self._thread: threading.Thread | None = None
-        self._done: set[str] = set()  # ids handled by this worker; never loop on one song
 
     # --- selection (pure apart from the seeded RNG) ---------------------------
-    def wanted(self, pool: list[Song], upcoming: list[str], genre_name: str) -> list[str]:
-        """Ids to prepare, in priority order: upcoming, genre matches, the rest. Max WINDOW_SIZE."""
+    def wanted(self, pool: list[Song], upcoming: list[str], genre_name: str,
+               played: set[str] = frozenset()) -> list[str]:
+        """Ids to prepare, in priority order: upcoming, genre matches, the rest. Max WINDOW_SIZE.
+
+        Look-ahead cap: once WINDOW_SIZE ready, unplayed songs of the active genre exist,
+        only not-yet-ready upcoming songs are prepared (the spec says ~10 ahead, not the pool).
+        """
         by_id = {s.id: s for s in pool}
+        # downloading/analyzing count as todo: after a crash they'd otherwise be stuck
+        # forever; both steps are resumable (download is idempotent, analysis re-runs).
         todo = ("queued", "downloading", "analyzing")  # ready/failed never need work
         out = [i for i in upcoming if i in by_id and by_id[i].status in todo]
+        ahead = sum(1 for s in pool if s.status == "ready" and s.id not in played
+                    and (genre_name == config.ANY_GENRE or s.effective_genre() == genre_name))
+        if ahead >= config.WINDOW_SIZE:
+            return out[: config.WINDOW_SIZE]
         seen = set(out)
-        queued = [s for s in pool if s.status == "queued" and s.id not in seen]
+        queued = [s for s in pool if s.status in todo and s.id not in seen]
         names = config.genres()
 
         def matches(s: Song) -> bool:
@@ -57,19 +67,22 @@ class Worker:
         self._stop = True
         self._wake.set()
         if self._thread:
-            self._thread.join()
+            # Bounded: a download/analyze in flight can't be interrupted. The thread is a
+            # daemon, so giving up here never blocks interpreter exit.
+            self._thread.join(timeout=5)
 
     def _run(self) -> None:
         while not self._stop:
             try:
-                pool, upcoming, active = self.get_state()
-                ids = [i for i in self.wanted(pool, upcoming, active) if i not in self._done]
+                pool, upcoming, active, played = self.get_state()
+                # Selection is purely status-based: every _prep ends ready/failed, so no
+                # "done" set is needed and retry/re-add (status back to queued) just works.
+                ids = self.wanted(pool, upcoming, active, played)
                 if not ids:
                     # Idle: sleep until poked; the timeout is a safety net for missed pokes.
                     self._wake.wait(2)
                     self._wake.clear()
                     continue
-                self._done.add(ids[0])
                 self._prep(next(s for s in pool if s.id == ids[0]))
             except Exception:  # never let the thread die
                 log.exception("worker loop error")
@@ -81,7 +94,10 @@ class Worker:
             song.status, song.error = status, error
             if analysis is not None:
                 song.analysis = analysis
-            library.save_song(song)
+            # The server may have removed this song during a long download; saving now
+            # would resurrect its song.json. Identity check against the live pool.
+            if any(s is song for s in self.get_state()[0]):
+                library.save_song(song)
         self.on_change()
 
     def _peaks(self, audio) -> None:

@@ -17,8 +17,8 @@ def _analysis():
                     genre_guess=None, language=None)
 
 
-def _worker(pool, upcoming=(), genre="Any", on_change=lambda: None):
-    return jobs.Worker(lambda: (pool, list(upcoming), genre), on_change)
+def _worker(pool, upcoming=(), genre="Any", on_change=lambda: None, played=()):
+    return jobs.Worker(lambda: (pool, list(upcoming), genre, set(played)), on_change)
 
 
 def test_wanted_order_and_limits(tmp_library):
@@ -109,3 +109,74 @@ def test_concurrent_atomic_writes(tmp_path):
     [t.start() for t in ts]; [t.join() for t in ts]
     assert json.loads(path.read_text())["w"] in range(4)
     assert [p.name for p in tmp_path.iterdir()] == ["x.json"]  # no temp litter
+
+
+def _stubs(monkeypatch, dl=None):
+    def default_dl(song):
+        p = library.song_dir(song.id) / "audio.flac"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+    monkeypatch.setattr(fetch, "download", dl or default_dl)
+    monkeypatch.setattr(analyze, "analyze", lambda *a: _analysis())
+    monkeypatch.setattr(analyze, "write_peaks", lambda a, o, *r: o.write_text("[]"))
+
+
+def test_retry_after_failed_is_reprocessed(tmp_library, monkeypatch):
+    pool = [_song("a")]
+    calls = []
+
+    def dl(song):
+        calls.append(1)
+        if len(calls) == 1:
+            raise fetch.FetchError("x")
+        return _stubs_dl(song)
+
+    _stubs_dl = lambda song: (library.song_dir(song.id) / "audio.flac")  # noqa: E731
+    _stubs(monkeypatch, dl)
+    ev = threading.Event()
+    w = _worker(pool, on_change=lambda: ev.set() if pool[0].status == "failed" else None)
+    with _Stopper(w):
+        assert ev.wait(10)
+        ev.clear()
+        pool[0].status = "queued"  # what the server's retry does
+        w.poke()
+        w.on_change = lambda: ev.set() if pool[0].status == "ready" else None
+        assert ev.wait(10)
+    assert len(calls) == 2
+
+
+def test_crashed_downloading_song_is_wanted(tmp_library):
+    pool = [_song("a", "downloading"), _song("b", "analyzing")]
+    assert set(_worker(pool).wanted(pool, [], "Any")) == {"a", "b"}
+
+
+def test_removed_song_not_resurrected(tmp_library, monkeypatch):
+    pool = [_song("a")]
+    started, release = threading.Event(), threading.Event()
+
+    def dl(song):
+        started.set()
+        release.wait(10)
+        raise fetch.FetchError("gone")
+
+    _stubs(monkeypatch, dl)
+    w = _worker(pool)
+    with _Stopper(w):
+        assert started.wait(10)
+        pool.clear()  # server removes the song mid-download
+        (library.song_dir("a") / "song.json").unlink(missing_ok=True)
+        release.set()
+        w.stop()
+    assert not (library.song_dir("a") / "song.json").exists()
+
+
+def test_lookahead_cap(tmp_library, monkeypatch):
+    ready = [_song(f"r{i}", "ready", genre="Pop") for i in range(12)]
+    pool = ready + [_song(f"q{i}") for i in range(5)]
+    w = _worker(pool, genre="Pop")
+    assert w.wanted(pool, [], "Pop", set()) == []
+    # not-ready upcoming songs are always prepared regardless of the cap
+    assert w.wanted(pool, ["q1"], "Pop", set()) == ["q1"]
+    played = {"r0", "r1", "r2"}
+    assert len(w.wanted(pool, [], "Pop", played)) == 5
