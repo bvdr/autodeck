@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 
 from . import library
@@ -69,6 +70,9 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
     app.state.engine = eng
+    # DNS rebinding guard: binding 127.0.0.1 isn't enough, a malicious page can point its
+    # own hostname at 127.0.0.1 and drive /api/add or DELETE. Its Host header gives it away.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     # Every error body is {"error": msg}, which is what the UI shows the owner.
     @app.exception_handler(EngineError)

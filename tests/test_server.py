@@ -39,7 +39,8 @@ def client(tmp_library):
     library.save_pool(IDS)
     eng = Engine()
     # TestClient is used without `with`, so the lifespan (worker thread) never starts.
-    c = TestClient(create_app(eng))
+    # base_url sets Host: 127.0.0.1 (the default "testserver" is rejected by TrustedHost).
+    c = TestClient(create_app(eng), base_url="http://127.0.0.1")
     c.engine = eng
     return c
 
@@ -60,6 +61,20 @@ def test_state_shape(client):
     assert [q["id"] for q in s["queue"]] == IDS  # nothing playing: pool order
     assert s["pool_counts"] == {"ready": 4}
     assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot"}
+    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) == set(s["queue"][0])
+
+
+def test_pool_shows_failed_song_with_error(client):
+    client.engine.pool.append(Song("ffffffffff6", "gone", "c", 0, "failed", error="video removed"))
+    s = client.get("/api/state").json()
+    f = next(p for p in s["pool"] if p["id"] == "ffffffffff6")
+    assert f["status"] == "failed" and f["error"] == "video removed"
+    assert "ffffffffff6" not in [q["id"] for q in s["queue"]]
+
+
+def test_foreign_host_rejected(client):
+    assert client.get("/api/state", headers={"host": "evil.example"}).status_code == 400
+    assert client.get("/api/state", headers={"host": "localhost:8765"}).status_code == 200
 
 
 def test_empty_genre_sets_notice_and_never_goes_silent(client):

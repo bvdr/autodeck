@@ -123,6 +123,9 @@ class Engine:
             return {"version": self.version, "genre": self.genre, "genres": config.genres(),
                     "notice": self.notice, "playing": self.playing,
                     "queue": [self.view(by[i]) for i in self.upcoming if i in by],
+                    # Whole pool too: the UI shows per-song status/errors and lets the owner
+                    # relabel or delete songs that aren't (or can't be) in the queue.
+                    "pool": [self.view(s) for s in self.pool],
                     "pool_counts": counts}
 
     def add(self, url: str, genre: str | None) -> int:

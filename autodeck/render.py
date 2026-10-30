@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,7 +130,14 @@ def render(song: Song, tm: TimeMap) -> Path:
         pairs[-1] = (len(y), pairs[-1][1])
         y = pyrubberband.timemap_stretch(y, sr, pairs)
     # Atomic write: the player may be reading/serving while the worker renders.
-    tmp = out.with_name(out.name + ".tmp")
-    sf.write(tmp, y, sr, format="WAV", subtype="PCM_16")
-    os.replace(tmp, out)
+    # Unique temp name: /api/deck and /api/transition can render the same map at once,
+    # and a shared "<name>.tmp" would let them clobber each other (last os.replace wins, whole).
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=out.name + ".", suffix=".tmp")
+    os.close(fd)
+    try:
+        sf.write(tmp, y, sr, format="WAV", subtype="PCM_16")
+        os.replace(tmp, out)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     return out
