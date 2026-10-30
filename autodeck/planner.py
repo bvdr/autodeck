@@ -292,7 +292,9 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
         hit = _search(a, [length], after, floors, late)
         if hit:
             body = next((x for x in bn.sections if x.label == "body"), None)
-            if (force != "echo" and body
+            # Drop swap only when the owner forces it: they disliked it as an automatic pick
+            # (2026-10-30), so unrelated-tempo pairs get an echo out instead.
+            if (force == "dropswap" and body
                     and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm)):
                 return mk("dropswap", hit[1], body.start, length)
             return mk("echo", hit[1], bn.play_start, length)

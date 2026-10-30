@@ -64,10 +64,12 @@ def test_half_double():
     assert t.tempo_ratio == pytest.approx(170 / 172)
 
 
-@pytest.mark.parametrize("body_at,kind", [(None, "dropswap"), (1 + 60 / 90 * 4 * 40, "echo")])
-def test_unmatched_dropswap_or_echo(body_at, kind):
+# Owner ruled out automatic drop swaps (2026-10-30): auto is always echo; dropswap only forced.
+@pytest.mark.parametrize("body_at,force,kind", [(None, "dropswap", "dropswap"), (None, None, "echo"),
+                                                 (1 + 60 / 90 * 4 * 40, None, "echo")])
+def test_unmatched_dropswap_or_echo(body_at, force, kind):
     a, b = make_song(150), make_song(90, body_at=body_at)
-    t = pick_transition(a, b)
+    t = pick_transition(a, b, force=force)
     assert t.kind == kind and t.tempo_ratio == 1.0
     assert t.out_at in phrase_boundaries(a.analysis.downbeats)
     if kind == "dropswap":
@@ -318,3 +320,10 @@ def test_blends_are_at_most_8_bars_and_a_quarter_of_a_short_song():
     t2 = pick_transition(make_song(100), short)
     play = short.analysis.play_end - short.analysis.play_start
     assert t2.length <= 0.25 * play + 1e-6
+
+
+def test_dropswap_is_never_picked_automatically():
+    # Owner disliked drop swaps; unrelated tempos get an echo unless dropswap is forced.
+    a, b = make_song(150), make_song(90, body_at=None)
+    assert pick_transition(a, b).kind == "echo"
+    assert pick_transition(a, b, force="dropswap").kind == "dropswap"
