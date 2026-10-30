@@ -92,6 +92,11 @@ def load_song(song_id: str) -> Song | None:
         pass
     except (ValueError, TypeError, KeyError):
         pass  # corrupt analysis.json: same as a version mismatch, drop it and keep the song
+    if analysis is None and meta.get("status") == "ready":
+        # "ready" means "has a current analysis". Without one, the worker (which only
+        # prepares queued/downloading/analyzing) would never redo it and the planner
+        # would never play it. Requeue; audio is cached, so this re-analyzes only.
+        meta["status"] = "queued"
     return Song(**meta, analysis=analysis)
 
 

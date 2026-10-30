@@ -77,6 +77,16 @@ def test_corrupt_analysis_drops_analysis_keeps_song(tmp_library):
     (library.song_dir("c") / "analysis.json").write_text('{"version": 1, "bp')
     loaded = library.load_song("c")
     assert loaded.analysis is None and loaded.genre == "Pop"
+    assert loaded.status == "queued"  # a "ready" song without analysis would never be re-prepared
+
+
+def test_stale_analysis_version_requeues_ready_song(tmp_library):
+    from autodeck.jobs import Worker
+    library.save_song(_song(genre="Pop", analysis=_analysis(version=library.ANALYSIS_VERSION - 1)))
+    loaded = library.load_song("c")
+    assert (loaded.analysis, loaded.status, loaded.genre) == (None, "queued", "Pop")
+    w = Worker(lambda: ([loaded], [], "Any", set()), lambda: None)
+    assert w.wanted([loaded], [], "Any") == ["c"]
 
 
 def test_corrupt_song_json_is_missing_song(tmp_library):
