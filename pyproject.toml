@@ -30,6 +30,8 @@ packages = ["autodeck"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# network tests hit real YouTube; opt in with: pytest -m network
+addopts = "-m 'not network'"
 markers = [
     "slow: heavy tests (real audio analysis / rendering)",
     "network: tests that hit the real network (YouTube)",
