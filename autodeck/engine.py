@@ -217,9 +217,16 @@ class Engine:
             # a song outside the queue leaves pin indices as they were.
             self.pinned = {i - (1 if pos is not None and pos < i else 0): p
                            for i, p in self.pinned.items() if p != sid}
-            self.playing = sid
+            prev, self.playing = self.playing, sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
             self._save_session()
+        if prev and prev != sid:
+            # The song that just handed over is decoded in the browser already, and its renders
+            # (~40 MB WAVs each) are never served again: delete them, or they pile up (1.3 GB in
+            # one evening). Outside the lock: plain file deletes. A replay re-renders on demand.
+            for r in library.song_dir(prev).glob("render-*.wav"):
+                r.unlink(missing_ok=True)
+        with LOCK:
             self._recompute()
             self._changed()
 

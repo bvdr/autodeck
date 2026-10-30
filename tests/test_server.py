@@ -279,3 +279,16 @@ def test_deck_peaks_cover_only_the_played_span(client):
     pk = client.get(f"/api/deck/{IDS[0]}").json()["peaks"]
     assert len(pk) == 240
     assert pk[0] == pytest.approx(120 / 480) and pk[-1] == pytest.approx(359 / 480)
+
+
+def test_previous_song_renders_are_deleted_when_the_next_starts(client):
+    # Renders are ~40 MB WAVs and nothing removed them (1.3 GB after one evening). The
+    # browser holds the decoded audio, so the file of the song that just handed over is dead.
+    a, b = IDS[0], IDS[1]
+    client.post("/api/playing", json={"id": a})
+    client.get(f"/api/deck/{a}")
+    assert list(library.song_dir(a).glob("render-*.wav"))
+    tr = client.get(f"/api/transition?from={a}").json()
+    client.post("/api/playing", json={"id": b, "plan_id": tr["plan_id"]})
+    assert not list(library.song_dir(a).glob("render-*.wav"))
+    assert list(library.song_dir(b).glob("render-*.wav"))  # the playing song keeps its render
