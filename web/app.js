@@ -143,7 +143,6 @@ function cancelPlan() {
 async function onStarted(deck) {
   const d = M.decks[deck];
   try { setState(await api('/api/playing', 'POST', { id: d.info.id, plan_id: d.planId })); } catch (e) { status(e.message); }
-  M.force = null; // a forced effect was for the previous song's exit
   requestPlan(deck);
 }
 
@@ -176,6 +175,15 @@ function songEnded(deck) {
 
 // --- poll + replan ------------------------------------------------------------
 function onState(s) {
+  // Server-held controls (set from the dropdown, the API or the MCP DJ):
+  // a mix-now request and the forced effect for the current song's exit.
+  if (M.mixSeq === undefined) M.mixSeq = s.mix_now_seq;
+  else if (s.mix_now_seq > M.mixSeq) { M.mixSeq = s.mix_now_seq; if (M.ctx) mixNow(); }
+  if ((s.next_effect ?? null) !== M.force) {
+    M.force = s.next_effect ?? null;
+    M.fxPlan = null;
+    if (M.ctx && M.req && !M.req.loading && (!M.plan || S.canReplan(now(), M.plan.T0))) requestPlan(M.cur, M.req.after);
+  }
   const r = M.req;
   if (!M.ctx || !r || r.loading || M.manual || r.id !== M.decks[r.deck].info?.id) return;
   const nextId = s.queue.find((q) => q.id !== r.id)?.id;
@@ -405,9 +413,8 @@ function updateFx(t) {
 }
 fx.addEventListener('change', () => {
   if (!M.plan || !S.canReplan(now(), M.plan.T0)) { status('Too late to change this mix.'); return; }
-  M.force = fx.value || null;
-  M.fxPlan = null;
-  requestPlan(M.cur, M.req?.after ?? null); // re-render with the chosen effect; latest wins
+  // Stored on the server (shared with the MCP DJ); onState sees the change and replans.
+  api('/api/next_effect', 'POST', { effect: fx.value || null }).then(setState).catch((e) => status(e.message));
 });
 
 $('#play').addEventListener('click', play);

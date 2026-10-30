@@ -48,6 +48,10 @@ class SuggestionReq(BaseModel):
     title: str
 
 
+class EffectReq(BaseModel):
+    effect: str | None = None  # None = let the app pick
+
+
 class ModeReq(BaseModel):
     beat_to_beat: bool
 
@@ -157,6 +161,16 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     def reject(req: SuggestionReq):
         eng.reject(req.artist[:200], req.title[:300])
         return {"suggestions": eng.suggestions()}
+
+    @app.post("/api/next_effect")
+    def next_effect(req: EffectReq):
+        eng.set_next_effect(req.effect)
+        return eng.state()
+
+    @app.post("/api/mix_now")
+    def mix_now():
+        eng.mix_now()
+        return eng.state()
 
     @app.post("/api/mode")
     def mode(req: ModeReq):

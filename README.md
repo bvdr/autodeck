@@ -93,6 +93,19 @@ is active) and plays it next once it's ready.
   songs that speed up live stay locked; where the beat grid at the blend is irregular (breakdowns,
   spoken parts) the app uses a phrase-aligned echo, drop-swap or cut instead of beat-matching.
 
+## DJ assistant (MCP)
+
+`autodeck/dj_mcp.py` is an MCP server (stdio) that lets an assistant DJ: it reads what's playing and
+steers the running app through the same API the page uses. Register it with Claude Code:
+
+    claude mcp add --scope user autodeck -- uv --directory ~/gits/bvdr/autodeck run python -m autodeck.dj_mcp
+
+Tools: now_playing, list_library, get_history, search_songs, get_suggestions (read-only);
+play_next, mix_now, set_next_effect, set_genre, start_party, stop_party, set_beat_to_beat,
+accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs. autodeck itself must be
+running (`AUTODECK_URL`, default http://127.0.0.1:8765). The forced next effect and "mix now" live on
+the server, so the page, the API and the assistant stay in sync.
+
 ## Tests
 
     uv run pytest                                    # everything except network (default addopts)

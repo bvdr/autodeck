@@ -415,3 +415,16 @@ def test_played_songs_are_logged_newest_first_with_their_effect(client):
     assert [x["id"] for x in h] == [b, a]
     assert h[0]["effect"] == tr["transition"]["kind"] and h[1]["effect"] is None
     assert h[0]["bpm"] == 122.0 and h[0]["at"]
+
+
+def test_next_effect_and_mix_now_live_on_the_server(client):
+    a, b = IDS[0], IDS[1]
+    client.post("/api/playing", json={"id": a})
+    st = client.post("/api/next_effect", json={"effect": "cut"}).json()
+    assert st["next_effect"] == "cut"
+    assert client.get(f"/api/transition?from={a}").json()["transition"]["kind"] == "cut"  # used without ?kind
+    assert client.post("/api/next_effect", json={"effect": "explode"}).status_code == 400
+    seq = client.post("/api/mix_now").json()["mix_now_seq"]
+    assert client.post("/api/mix_now").json()["mix_now_seq"] == seq + 1
+    client.post("/api/playing", json={"id": b})
+    assert client.get("/api/state").json()["next_effect"] is None  # was for a's exit only

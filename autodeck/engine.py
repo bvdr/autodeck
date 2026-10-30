@@ -72,6 +72,11 @@ class Engine:
         self.rejected: set[str] = self._load_rejected()  # party.key()s the owner turned down
         self._sugg: tuple[tuple, float, list] | None = None  # ((playing, party), time, list)
         self._enrich_stop = threading.Event()
+        # Effect forced for the playing song's exit (dropdown, MCP). Server-side so every
+        # client agrees; cleared when the next song starts. mix_now_seq: bumped by "mix now"
+        # requests from anywhere (MCP); the player mixes when it sees a new value.
+        self.next_effect: str | None = None
+        self.mix_now_seq = 0
         # Owner's "beat to beat" mode: blends skip a's outro and b's intro (planner._main_view).
         self.beat_to_beat = False
         # Created here, started by the server lifespan (tests never start it).
@@ -190,6 +195,7 @@ class Engine:
             return {"version": self.version, "genre": self.genre, "genres": config.genres(),
                     "notice": self.notice, "playing": self.playing, "beat_to_beat": self.beat_to_beat,
                     "party": self.party, "flavors": list(party.FLAVORS), "lastfm": bool(lastfm.api_key()),
+                    "next_effect": self.next_effect, "effects": list(FORCEABLE), "mix_now_seq": self.mix_now_seq,
                     "queue": [self.view(by[i]) for i in self.upcoming if i in by],
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
@@ -251,6 +257,7 @@ class Engine:
             if sid in self.requested:
                 self.requested.remove(sid)
             if sid != self.playing:  # a pulled-back fader re-reports the same song: one entry
+                self.next_effect = None  # the forced effect was for the previous song's exit
                 self._log_played(sid, plan[2] if plan and plan[0] == sid else None)
             prev, self.playing = self.playing, sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
@@ -436,6 +443,20 @@ class Engine:
     def stop_enrichment(self) -> None:
         self._enrich_stop.set()
 
+    def set_next_effect(self, effect: str | None) -> None:
+        if effect is not None and effect not in FORCEABLE:
+            raise EngineError(400, f"Unknown transition effect: {effect}")
+        with LOCK:
+            self.next_effect = effect
+            self._changed()  # the player replans the not-yet-started mix with it
+
+    def mix_now(self) -> None:
+        with LOCK:
+            if not self.playing:
+                raise EngineError(409, "Nothing is playing")
+            self.mix_now_seq += 1
+            self._changed()
+
     def set_beat_to_beat(self, on: bool) -> None:
         with LOCK:
             self.beat_to_beat = bool(on)
@@ -554,6 +575,7 @@ class Engine:
         if kind is not None and kind not in FORCEABLE:
             raise EngineError(400, f"Unknown transition effect: {kind}")
         with LOCK:
+            kind = kind or self.next_effect
             a = self._ready(from_id)
             nxt = next((i for i in self.upcoming if i != from_id), None)
             b = self.by_id(nxt) if nxt else None
