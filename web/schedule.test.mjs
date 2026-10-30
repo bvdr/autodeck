@@ -148,8 +148,11 @@ test('first offset is the trimmed play_start', () => {
 
 test('cancelling a plan: reset the outgoing before T0, hold it from T0 on (echo-out grab)', () => {
   const p = S.plan(res('echo', 4), 10, 5);
+  // Before T0 every effect control goes back to idle (filters open, sends closed, rate 1).
   assert.deepEqual(S.outgoingOnCancel(60, p.T0), [
-    { param: 'gain', type: 'set', value: 1, time: 60 }, { param: 'echo', type: 'set', value: 0, time: 60 }]);
+    { param: 'gain', type: 'set', value: 1, time: 60 }, { param: 'echo', type: 'set', value: 0, time: 60 },
+    { param: 'lp', type: 'set', value: S.LP_IDLE, time: 60 }, { param: 'gate', type: 'set', value: 1, time: 60 },
+    { param: 'rev', type: 'set', value: 0, time: 60 }, { param: 'rate', type: 'set', value: 1, time: 60 }]);
   assert.equal(S.outgoingOnCancel(p.T0, p.T0), null);
   assert.equal(S.outgoingOnCancel(p.T0 + 2, p.T0), null);
   assert.ok(S.KEY_RELEASE_MS >= 300);
@@ -174,4 +177,44 @@ test('setState never re-renders under a focused select, even once dirty', async 
   assert.throws(() => setState(st(2)), /render/);
   assert.ok(renders > 0);
   delete globalThis.document;
+});
+
+test('exit effects land the incoming after the effect; beat-matched ones overlap', () => {
+  for (const k of ['echo', 'loop_roll', 'brake', 'backspin', 'reverb', 'gate', 'riser']) {
+    const t = S.timing(10, res(k, 4));
+    close(t.inStart, t.T0 + 4);
+  }
+  for (const k of ['blend', 'bass_swap', 'filter_sweep']) close(S.timing(10, res(k, 16)).inStart, 70);
+});
+
+test('bass swap: the bass jumps across on a bar line halfway through, both songs never bass-full together', () => {
+  const p = S.plan(res('bass_swap', 16), 10, 0, 0.5); // bar = 2 s, mid = T0 + 8
+  const outHp = ev(p.out, 'hp').find((e) => e.value === S.BASS_CUT);
+  const inHp = ev(p.in, 'hp').find((e) => e.value === S.HP_IDLE && e.time > 0);
+  close(outHp.time, 78);
+  close(inHp.time, 78);
+  close(ev(p.in, 'hp').find((e) => e.value === S.BASS_CUT).time, 70);
+});
+
+test('filter sweep: outgoing lowpass sweeps down, incoming highpass sweeps open', () => {
+  const p = S.plan(res('filter_sweep', 16), 10, 0);
+  assert.equal(ev(p.out, 'lp', 'exp')[0].value, S.SWEEP_LP);
+  assert.equal(ev(p.in, 'hp', 'exp')[0].value, S.HP_IDLE);
+  assert.equal(ev(p.in, 'hp').find((e) => e.type === 'set' && e.time === 70).value, S.SWEEP_HP);
+});
+
+test('gate chops on 1/8 notes for the whole effect; roll/backspin/riser are deck fx events', () => {
+  const p = S.plan(res('gate', 4), 10, 0, 0.5); // 1/8 note = 0.25 s -> 16 chops in 4 s
+  assert.equal(ev(p.out, 'gate').filter((e) => e.value === 0).length, 16);
+  for (const k of ['loop_roll', 'backspin', 'riser']) {
+    const f = ev(S.plan(res(k, 4), 10, 0, 0.5).out, 'fx')[0];
+    assert.ok(f && f.time === 70 && f.duration === 4 && f.bar === 2);
+  }
+});
+
+test('incoming always starts with every effect send/filter idle', () => {
+  const p = S.plan(res('cut', 0), 10, 0);
+  for (const [param, v] of [['hp', S.HP_IDLE], ['lp', S.LP_IDLE], ['gate', 1], ['rev', 0], ['echo', 0]]) {
+    assert.equal(ev(p.in, param)[0].value, v);
+  }
 });

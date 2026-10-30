@@ -41,8 +41,9 @@ function saveResume(t) {
   lastSave = Date.now();
   localStorage.setItem(RESUME_KEY, JSON.stringify({ id: d.info.id, title: d.info.title, pos: d.pos(t), at: lastSave }));
 }
-const FX_LABEL = { blend: 'Beat blend', half_double: 'Beat blend (½×/2×)', echo: 'Echo out',
-  dropswap: 'Drop swap', cut: 'Cut', fade: 'Fade' };
+const FX_LABEL = { blend: 'Beat blend', half_double: 'Beat blend (½×/2×)', bass_swap: 'Bass swap',
+  filter_sweep: 'Filter sweep', echo: 'Echo out', loop_roll: 'Loop roll', brake: 'Brake', backspin: 'Backspin',
+  reverb: 'Reverb wash', gate: 'Gate / stutter', riser: 'Riser → drop', dropswap: 'Drop swap', cut: 'Cut', fade: 'Fade' };
 
 const now = () => M.ctx.currentTime;
 const status = (t) => { $('#status').textContent = t; };
@@ -189,7 +190,9 @@ async function play() {
     if (!M.ctx) {
       M.ctx = new AudioContext();
       const master = new GainNode(M.ctx);
-      master.connect(M.ctx.destination);
+      // Live performance FX on the master bus, after both decks, so the owner's hands never
+      // fight a scheduled transition's automation (which lives on the deck nodes).
+      M.live = liveFx(M.ctx, master);
       M.decks = [0, 1].map((i) => new Deck(M.ctx, master, $(`#deck${i}`)));
       requestAnimationFrame(frame);
     }
@@ -323,6 +326,43 @@ function frame() {
   saveResume(t);
   requestAnimationFrame(frame);
 }
+
+// --- live FX: filter knob + echo throw ----------------------------------------
+function liveFx(ctx, input) {
+  const hp = new BiquadFilterNode(ctx, { type: 'highpass', frequency: S.HP_IDLE });
+  const lp = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: S.LP_IDLE });
+  const send = new GainNode(ctx, { gain: 0 });
+  const delay = new DelayNode(ctx, { maxDelayTime: 2, delayTime: 0.5 });
+  const fb = new GainNode(ctx, { gain: S.ECHO_FEEDBACK });
+  input.connect(hp).connect(lp).connect(ctx.destination);
+  lp.connect(send).connect(delay).connect(fb).connect(delay);
+  delay.connect(ctx.destination);
+  return { hp, lp, send, delay };
+}
+const filterKnob = $('#live-filter');
+filterKnob.addEventListener('input', () => {
+  if (!M.live) return;
+  // One knob, DJ-mixer style: left of centre = lowpass closing, right = highpass opening.
+  const x = filterKnob.valueAsNumber / 100, t = now();
+  const lp = x < 0 ? S.LP_IDLE * (200 / S.LP_IDLE) ** -x : S.LP_IDLE;
+  const hp = x > 0 ? S.HP_IDLE * (4000 / S.HP_IDLE) ** x : S.HP_IDLE;
+  M.live.lp.frequency.setTargetAtTime(lp, t, 0.02);
+  M.live.hp.frequency.setTargetAtTime(hp, t, 0.02);
+});
+filterKnob.addEventListener('dblclick', () => { filterKnob.value = 0; filterKnob.dispatchEvent(new Event('input')); });
+const throwBtn = $('#live-echo');
+const echoOn = (on) => {
+  if (!M.live) return;
+  const t = now(), d = M.decks[M.cur];
+  M.live.delay.delayTime.setValueAtTime(60 / (d?.info?.bpm_playing || 120) / 2, t); // 1/8 note
+  M.live.send.gain.setTargetAtTime(on ? 1 : 0, t, 0.01);
+  throwBtn.setAttribute('aria-pressed', String(on));
+};
+// Hold to throw: echoes keep ringing out after release, like a DJ mixer's echo button.
+throwBtn.addEventListener('pointerdown', () => echoOn(true));
+for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) throwBtn.addEventListener(ev, () => echoOn(false));
+throwBtn.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); echoOn(true); } });
+throwBtn.addEventListener('keyup', () => echoOn(false));
 
 // --- effect dropdown --------------------------------------------------------
 const fx = $('#fx');

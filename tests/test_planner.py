@@ -275,3 +275,24 @@ def test_order_bonus_breaks_ties_toward_the_bonus():
     assert [s.id for s in order(cur, [a, b], {}, "Any", bonus=lambda p, s: 0.2 if s.id == "b" else 0)][0] == "b"
     far = make_song(150, "3B", id="far")  # a big bonus still can't beat a much better mix
     assert order(cur, [a, far], {}, "Any", bonus=lambda p, s: 0.1 if s.id == "far" else 0)[0].id == "a"
+
+
+@pytest.mark.parametrize("force", ["bass_swap", "filter_sweep"])
+def test_beatmatched_effects_keep_the_blend_timing(force):
+    a, b = make_song(122), make_song(124)
+    base, t = pick_transition(a, b), pick_transition(a, b, force=force)
+    assert t.kind == force
+    assert (t.out_at, t.in_at, t.length, t.tempo_ratio) == (base.out_at, base.in_at, base.length, base.tempo_ratio)
+
+
+@pytest.mark.parametrize("force,bars", [("loop_roll", 2), ("brake", 1), ("backspin", 1), ("reverb", 2),
+                                         ("gate", 2), ("riser", 4)])
+def test_exit_effects_land_on_a_phrase_and_last_their_bars(force, bars):
+    a, b = make_song(122), make_song(150, body_at=None)
+    t = pick_transition(a, b, force=force)
+    assert t.kind == force and t.tempo_ratio == 1.0
+    assert t.out_at in phrase_boundaries(a.analysis.downbeats)
+    assert t.length == pytest.approx(bars * 240 / 122)
+    assert t.out_at + t.length <= a.analysis.play_end + 1e-6
+    body = [x for x in b.analysis.sections if x.label == "body"][0]
+    assert t.in_at == (body.start if force != "reverb" else b.analysis.play_start)

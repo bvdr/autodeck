@@ -22,10 +22,16 @@ export const PREP_LEAD = 4;
 export const HP_IDLE = 20;       // Hz: highpass this low is inaudible, i.e. "off"
 export const HP_BLEND = 300;     // Hz: incoming starts bass-less so two basslines don't stack
 export const ECHO_FEEDBACK = 0.5;
+export const LP_IDLE = 20000;    // Hz: lowpass this high is "off"
+export const BASS_CUT = 250;     // Hz: highpass that removes a song's bass (bass swap)
+export const SWEEP_HP = 1500;    // Hz: incoming starts this thin in a filter sweep
+export const SWEEP_LP = 300;     // Hz: outgoing ends this muffled in a filter sweep
 export const CURVE_POINTS = 64;  // enough for a smooth cos/sin; setValueCurveAtTime interpolates
 
 const QUICK = new Set(['cut', 'dropswap']); // instant swaps: their `length` is not a crossfade
 const EQUAL_POWER = new Set(['blend', 'half_double']);
+// Exit effects: the outgoing does its thing for `length`, then the incoming lands.
+export const EXIT = new Set(['echo', 'loop_roll', 'brake', 'backspin', 'reverb', 'gate', 'riser']);
 
 /** Equal-power crossfade curves: out = cos, in = sin, so out² + in² = 1 at every point. */
 export function equalPower(n = CURVE_POINTS) {
@@ -49,8 +55,8 @@ export function firstOffset(deck) {
 export function timing(outZero, res) {
   const { kind, length } = res.transition;
   const T0 = outZero + res.out_at_rendered;
-  // Echo: the outgoing echoes out over `length`, then the incoming lands after it.
-  const inStart = kind === 'echo' ? T0 + length : T0;
+  // Exit effects (echo, roll, brake…): the outgoing plays out over `length`, then the incoming lands.
+  const inStart = EXIT.has(kind) ? T0 + length : T0;
   const len = QUICK.has(kind) ? 0 : length;
   return { kind, T0, length: len, inStart, inOffset: res.in_at_rendered,
            inZero: inStart - res.in_at_rendered,
@@ -75,14 +81,60 @@ const lin = (param, value, time) => ({ param, type: 'linear', value, time });
 export function plan(res, outZero, now, beat = 0.5) {
   const t = timing(outZero, res);
   const { kind, T0, length: L } = t;
+  const bar = 4 * beat;
   const out = [set('gain', 1, now)];
-  const inn = [set('hp', HP_IDLE, now), set('echo', 0, now)];
+  // The incoming deck may carry a previous song's effect state: every send/filter back to idle.
+  const inn = [set('hp', HP_IDLE, now), set('echo', 0, now), set('lp', LP_IDLE, now),
+    set('gate', 1, now), set('rev', 0, now)];
+  const fx = (type, extra = {}) => ({ param: 'fx', type, time: T0, duration: L, bar, beat, ...extra });
   if (EQUAL_POWER.has(kind)) {
     const c = equalPower();
     out.push({ param: 'gain', type: 'curve', values: c.out, time: T0, duration: L });
     inn.push(set('gain', 0, now), { param: 'gain', type: 'curve', values: c.in, time: T0, duration: L },
       // Bass comes back over the first half; exp ramp because pitch perception is logarithmic.
       set('hp', HP_BLEND, T0), { param: 'hp', type: 'exp', value: HP_IDLE, time: T0 + L / 2 });
+  } else if (kind === 'bass_swap') {
+    // Both songs at full level; only one has bass. The bass jumps across on the bar line
+    // halfway through, so two basslines never play together (the classic club blend).
+    const mid = T0 + Math.max(1, Math.round(L / 2 / bar)) * bar;
+    out.push(set('hp', HP_IDLE, now), set('hp', BASS_CUT, mid), set('gain', 1, mid), lin('gain', 0, T0 + L));
+    inn.push(set('gain', 0, now), set('gain', 0, T0), lin('gain', 1, mid),
+      set('hp', BASS_CUT, T0), set('hp', HP_IDLE, mid));
+  } else if (kind === 'filter_sweep') {
+    // Outgoing is slowly muffled (lowpass down) while the incoming opens up from thin (highpass down).
+    const c = equalPower();
+    out.push(set('lp', LP_IDLE, now), set('lp', LP_IDLE, T0), { param: 'lp', type: 'exp', value: SWEEP_LP, time: T0 + L },
+      set('gain', 1, T0 + 0.75 * L), lin('gain', 0, T0 + L));
+    inn.push(set('gain', 0, now), { param: 'gain', type: 'curve', values: c.in, time: T0, duration: L },
+      set('hp', SWEEP_HP, T0), { param: 'hp', type: 'exp', value: HP_IDLE, time: T0 + L });
+  } else if (kind === 'loop_roll') {
+    // The bar before T0 repeats in halves, then quarters, then the incoming drops (deck.fx).
+    out.push(fx('roll'));
+    inn.push(set('gain', 1, now));
+  } else if (kind === 'brake') {
+    // Vinyl stop: playback slows to a halt (pitch drops with it, on purpose).
+    out.push(set('rate', 1, now), set('rate', 1, T0), lin('rate', 0.05, T0 + L),
+      set('gain', 1, T0 + 0.6 * L), lin('gain', 0, T0 + L));
+    inn.push(set('gain', 1, now));
+  } else if (kind === 'backspin') {
+    out.push(fx('backspin'));
+    inn.push(set('gain', 1, now));
+  } else if (kind === 'reverb') {
+    // Dissolve into a reverb tail; the tail keeps ringing after the dry signal is gone.
+    out.push(set('rev', 0, now), set('rev', 0, T0), lin('rev', 1, T0 + L / 4),
+      set('gain', 1, T0), lin('gain', 0, T0 + L));
+    inn.push(set('gain', 1, now));
+  } else if (kind === 'gate') {
+    // Stutter: the outgoing chops on 1/8 notes, then the incoming drops.
+    const step = beat / 2;
+    out.push(set('gate', 1, now));
+    for (let x = T0; x < T0 + L - 1e-6; x += step) out.push(set('gate', 1, x), set('gate', 0, x + step / 2));
+    out.push(set('gain', 0, T0 + L));
+    inn.push(set('gain', 1, now));
+  } else if (kind === 'riser') {
+    // White-noise riser builds over the outgoing's last bars, then a hard cut into the drop.
+    out.push(fx('riser'), set('gain', 1, now), set('gain', 0, T0 + L));
+    inn.push(set('gain', 1, now));
   } else if (kind === 'fade') {
     out.push(set('gain', 1, T0), lin('gain', 0, T0 + L));
     inn.push(set('gain', 0, now), set('gain', 0, T0), lin('gain', 1, T0 + L));
@@ -133,7 +185,8 @@ export function releaseRamps(now, bar, gains, winner) {
  * undo the scheduled fade (back to full, echo send closed). From T0 on (e.g. grabbing the
  * fader mid echo-out) the fade is already audible: null = hold where it is, no snap to 1. */
 export function outgoingOnCancel(now, T0) {
-  return now < T0 ? [set('gain', 1, now), set('echo', 0, now)] : null;
+  return now < T0 ? [set('gain', 1, now), set('echo', 0, now), set('lp', LP_IDLE, now),
+    set('gate', 1, now), set('rev', 0, now), set('rate', 1, now)] : null;
 }
 
 // Keyboard fader: arrow keys fire input/change per step, so "release" is this long

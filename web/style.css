@@ -65,6 +65,8 @@ summary { cursor: pointer; color: var(--dim); padding: 4px 0; }
 .party h2.inline { display: inline; font-size: 1rem; margin: 0 8px 0 0; }
 .party h3 { font-size: 0.95rem; margin: 8px 0 4px; }
 #party-btns { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
+#live-filter { width: 110px; accent-color: var(--accent); }
 .fx { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
 .search { margin: 16px 0; }
 #search-form { display: flex; gap: 8px; }

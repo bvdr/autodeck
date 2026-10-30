@@ -181,7 +181,15 @@ def _fade_out(a: Song, after: float | None) -> float:
     return float(min(cand, key=lambda s: (e[s], -s))) if cand else end
 
 
-FORCEABLE = ("blend", "echo", "dropswap", "cut", "fade")  # "blend" also covers half_double
+# Effects the owner can force from the dropdown. "blend" also covers half_double.
+# Beat-matched (overlap, both songs at one tempo): blend, bass_swap, filter_sweep.
+# Exit effects (outgoing does its thing for N bars on a phrase, then the incoming lands):
+EXIT_FX_BARS = {"echo": 2, "loop_roll": 2, "brake": 1, "backspin": 1, "reverb": 2, "gate": 2, "riser": 4}
+# These land the incoming on its drop (first full-beat bar) when it's near the start: a
+# stop/stutter/riser into a quiet intro would fall flat.
+INTO_DROP = {"loop_roll", "brake", "backspin", "gate", "riser"}
+MATCHED_FX = ("blend", "bass_swap", "filter_sweep")
+FORCEABLE = (*MATCHED_FX, *EXIT_FX_BARS, "dropswap", "cut", "fade")
 
 
 def pick_transition(a: Song, b: Song, after: float | None = None, entered: Transition | None = None,
@@ -227,7 +235,7 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
 
     kind, ratio = tempo_relation(an.bpm, bn.bpm)
     outro = _section_len(a, "outro", first=False)
-    if force in ("echo", "dropswap", "cut"):
+    if force is not None and force not in MATCHED_FX:
         kind = "none"  # owner chose a non-beatmatched effect: skip the blend
 
     if kind != "none":
@@ -244,11 +252,21 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
             lb = _local_bpm(b, bn.play_start, bn.play_start + max(n_len * ratio, LOCAL_MIN_BARS * _bar(bn.bpm)))
             local = tempo_relation(la, lb) if la and lb else ("none", 1.0)
             if local[0] != "none":
-                return mk("blend" if local[0] == "match" else "half_double", out_at, bn.play_start, n_len, local[1])
+                label = force if force in ("bass_swap", "filter_sweep") else (
+                    "blend" if local[0] == "match" else "half_double")
+                return mk(label, out_at, bn.play_start, n_len, local[1])
             # ponytail: one exit tried; junk/drifting bars there -> phrase cut/echo, not another exit.
         kind = "none"  # no fitting overlap, or the bars at it can't be trusted: cut/echo below
 
     # Non-matched (or blend that can't fit): cut / echo / dropswap on a phrase boundary.
+    if force in EXIT_FX_BARS and force != "echo":
+        length = EXIT_FX_BARS[force] * bar_a
+        hit = _search(a, [length], after, floors, late) if outro >= length else None
+        if hit:
+            body = next((x for x in bn.sections if x.label == "body"), None)
+            drop = (force in INTO_DROP and body is not None
+                    and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm))
+            return mk(force, hit[1], body.start if drop else bn.play_start, length)
     length = ECHO_BARS * bar_a
     if kind == "none" and outro >= length and force != "cut":
         hit = _search(a, [length], after, floors, late)
