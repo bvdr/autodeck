@@ -1,1 +1,68 @@
-<!doctype html><title>autodeck</title><p>autodeck UI placeholder (Task 10 replaces this).</p>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>autodeck</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <header>
+    <h1>autodeck</h1>
+    <button id="play" type="button">▶ Play</button>
+    <button id="mixnow" type="button">Mix now</button>
+    <p id="status" role="status" aria-live="polite">Press Play to start.</p>
+    <p id="msg" role="alert"></p>
+  </header>
+
+  <p id="notice" class="notice" role="status" hidden></p>
+
+  <!-- Layout B: Deck A | crossfader | Deck B -->
+  <section class="mixer" aria-label="Decks">
+    <article class="deck" id="deck0" aria-label="Deck A">
+      <h2>A <span class="time"></span></h2>
+      <p class="title">—</p><p class="artist"></p>
+      <p class="meta"><span class="genre"></span> <span class="bpm"></span> <span class="key"></span></p>
+      <canvas aria-hidden="true"></canvas>
+    </article>
+    <div class="xf">
+      <label for="xfader">Crossfader</label>
+      <input id="xfader" type="range" min="0" max="1000" value="0">
+      <span class="xf-ends" aria-hidden="true"><span>A</span><span>B</span></span>
+    </div>
+    <article class="deck" id="deck1" aria-label="Deck B">
+      <h2>B <span class="time"></span></h2>
+      <p class="title">—</p><p class="artist"></p>
+      <p class="meta"><span class="genre"></span> <span class="bpm"></span> <span class="key"></span></p>
+      <canvas aria-hidden="true"></canvas>
+    </article>
+  </section>
+
+  <nav id="genres" class="genres" aria-label="Genre"></nav>
+
+  <section aria-labelledby="queue-h">
+    <h2 id="queue-h">Up next</h2>
+    <ol id="queue" class="list"></ol>
+    <p id="queue-empty" class="dim">Nothing queued yet.</p>
+    <details>
+      <summary id="pool-summary">Library</summary>
+      <ul id="pool" class="list"></ul>
+    </details>
+  </section>
+
+  <section id="drop" class="drop" tabindex="0" aria-label="Add songs: drop or paste a YouTube link here">
+    <p>Drop or paste a YouTube song or playlist link here</p>
+    <form id="add-form">
+      <label for="url">URL</label>
+      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+      <label for="import-genre">import as</label>
+      <select id="import-genre"><option value="">auto-detect</option></select>
+      <button type="submit">Add</button>
+    </form>
+    <p id="add-msg" role="status" aria-live="polite"></p>
+  </section>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
