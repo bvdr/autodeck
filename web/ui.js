@@ -86,6 +86,7 @@ function render(s) {
     textContent: g, className: 'genre', 'aria-pressed': String(g === s.genre), onclick: () => act('/api/genre', 'POST', { genre: g }),
   })));
   $('#b2b').setAttribute('aria-pressed', String(!!s.beat_to_beat));
+  renderParty(s);
   const notice = $('#notice');
   notice.hidden = !s.notice;
   notice.textContent = s.notice ?? '';
@@ -137,6 +138,45 @@ async function add(url) {
   } catch (e) { msg.textContent = e.message; } // 400 {error} from the server
 }
 
+// --- party mode ---------------------------------------------------------------
+const FLAVOR_LABEL = { hits: 'Hits', oldies: 'Oldies', latino: 'Latino' };
+let suggFor = null; // "playing|party" the suggestions list was loaded for
+
+function renderParty(s) {
+  $('#party-btns').replaceChildren(...[null, ...(s.flavors ?? [])].map((f) => el('button', {
+    textContent: f ? FLAVOR_LABEL[f] ?? f : 'Off', className: 'genre', 'aria-pressed': String((s.party ?? null) === f),
+    onclick: () => act('/api/party', 'POST', { flavor: f }),
+  })));
+  $('#sugg-wrap').hidden = !s.party;
+  const k = `${s.playing}|${s.party}`;
+  if (s.party && k !== suggFor) { suggFor = k; loadSuggestions(); }
+  if (!s.party) suggFor = null;
+}
+
+function suggRow(x) {
+  const body = { artist: x.artist, title: x.title };
+  return el('li', { className: 'row' },
+    el('span', { className: 'name' }, el('b', { textContent: x.title }), el('small', { textContent: ` ${x.artist}` })),
+    el('span', { className: 'src', textContent: x.reason }),
+    el('button', { textContent: '✓ Accept', title: 'Add it and play it soon', 'aria-label': `Accept ${x.title}`,
+      onclick: async (e) => {
+        e.target.disabled = true; $('#sugg-msg').textContent = `Finding ${x.title} on YouTube…`;
+        try { setState(await api('/api/suggestions/accept', 'POST', body)); $('#sugg-msg').textContent = `${x.title}: preparing, plays next.`; e.target.closest('li').remove(); } catch (err) { $('#sugg-msg').textContent = err.message; e.target.disabled = false; }
+      } }),
+    el('button', { className: 'remove', textContent: '✕', title: 'Never suggest this again', 'aria-label': `Reject ${x.title}`,
+      onclick: async () => { try { showSugg((await api('/api/suggestions/reject', 'POST', body)).suggestions); } catch (err) { report(err); } } }));
+}
+
+function showSugg(list) {
+  $('#sugg').replaceChildren(...list.map(suggRow));
+  $('#sugg-msg').textContent = list.length ? '' : (last?.lastfm ? 'No suggestions right now.' : 'Suggestions need a Last.fm API key (see README).');
+}
+
+async function loadSuggestions() {
+  $('#sugg-msg').textContent = 'Finding suggestions…';
+  try { showSugg((await api('/api/suggestions')).suggestions); } catch (e) { $('#sugg-msg').textContent = e.message; }
+}
+
 // --- search -----------------------------------------------------------------
 // Case- and diacritic-insensitive, so "sarba" finds "Sârba".
 const fold = (t) => (t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -171,6 +211,7 @@ async function search(q) {
 
 export function initUi(stateCb) {
   onState = stateCb;
+  $('#sugg-refresh').addEventListener('click', loadSuggestions);
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value); });
   // Queue drag & drop -> POST /api/queue with pin = the dragged song.
   const q = $('#queue');

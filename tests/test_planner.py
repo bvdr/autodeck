@@ -267,3 +267,11 @@ def test_owner_can_force_a_transition_effect(force):
 def test_forcing_an_impossible_blend_falls_back_to_the_normal_choice():
     a, b = make_song(122), make_song(150)  # unrelated tempos
     assert pick_transition(a, b, force="blend") == pick_transition(a, b)
+
+
+def test_order_bonus_breaks_ties_toward_the_bonus():
+    cur = make_song(122, "8A")
+    a, b = make_song(123, "8A", id="a"), make_song(123, "8A", id="b")  # mix equally well
+    assert [s.id for s in order(cur, [a, b], {}, "Any", bonus=lambda p, s: 0.2 if s.id == "b" else 0)][0] == "b"
+    far = make_song(150, "3B", id="far")  # a big bonus still can't beat a much better mix
+    assert order(cur, [a, far], {}, "Any", bonus=lambda p, s: 0.1 if s.id == "far" else 0)[0].id == "a"

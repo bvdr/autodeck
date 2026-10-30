@@ -49,6 +49,20 @@
 
   <nav id="genres" class="genres" aria-label="Genre"></nav>
 
+  <!-- Party mode: a flavor replaces the genre filter (library songs that fit, crowd-pleasers
+       first, energy building); suggestions are songs you don't have, accept or reject. -->
+  <section class="party" aria-labelledby="party-h">
+    <div class="genres" role="group" aria-labelledby="party-h">
+      <h2 id="party-h" class="inline">Party</h2>
+      <span id="party-btns"></span>
+    </div>
+    <div id="sugg-wrap" hidden>
+      <h3>Suggestions <button id="sugg-refresh" type="button" title="Refresh suggestions" aria-label="Refresh suggestions">↻</button></h3>
+      <p id="sugg-msg" class="dim" role="status" aria-live="polite"></p>
+      <ul id="sugg" class="list"></ul>
+    </div>
+  </section>
+
   <!-- Search: library matches first (instant, local), then YouTube. "Play next" preps the song
        ahead of everything and queues it next once it's ready (POST /api/request). -->
   <section aria-labelledby="search-h" class="search">

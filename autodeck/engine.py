@@ -6,12 +6,15 @@ calls get_state() while already holding it, so any second lock here could
 deadlock; reusing the same RLock can't.
 """
 import json
+import logging
+import threading
+import time
 import uuid
 from dataclasses import asdict
 
 import soundfile as sf
 
-from . import config, fetch, jobs, library
+from . import config, fetch, jobs, lastfm, library, party
 from .library import Song
 from .planner import FORCEABLE, Transition, genre_entry, order, pick_transition
 from .render import TimeMap, render, time_map_for
@@ -64,6 +67,11 @@ class Engine:
         # the front of the worker's list (prepped before anything, cap or not); ready ones go to
         # the front of the queue, whatever the active genre. Dropped once they start playing.
         self.requested: list[str] = []
+        # Party mode: a flavor (party.FLAVORS) replaces the genre filter while on; None = off.
+        self.party: str | None = None
+        self.rejected: set[str] = self._load_rejected()  # party.key()s the owner turned down
+        self._sugg: tuple[tuple, float, list] | None = None  # ((playing, party), time, list)
+        self._enrich_stop = threading.Event()
         # Owner's "beat to beat" mode: blends skip a's outro and b's intro (planner._main_view).
         self.beat_to_beat = False
         # Created here, started by the server lifespan (tests never start it).
@@ -94,7 +102,7 @@ class Engine:
             "playing": self.playing, "played": sorted(self.played),
             "maps": {k: tm.points for k, tm in self.maps.items()},
             "entered": {k: asdict(t) for k, t in self.entered.items()},
-            "beat_to_beat": self.beat_to_beat})
+            "beat_to_beat": self.beat_to_beat, "party": self.party})
 
     def _load_session(self) -> None:
         try:
@@ -110,6 +118,7 @@ class Engine:
             return  # corrupt session.json: start a fresh session rather than crash
         self.playing, self.played, self.maps, self.entered = playing, played, maps, entered
         self.beat_to_beat = bool(d.get("beat_to_beat", False))
+        self.party = d.get("party") if d.get("party") in party.FLAVORS else None
 
     def by_id(self, sid: str) -> Song | None:
         return next((s for s in self.pool if s.id == sid), None)
@@ -133,11 +142,19 @@ class Engine:
         overrides them (genre switch)."""
         g, anyg = self.genre, config.ANY_GENRE
         cands = [s for s in self.pool if self._eligible(s)]
-        in_genre = [s for s in cands if g == anyg or s.effective_genre() == g]
+        if self.party:
+            # Party flavor replaces the genre filter; songs not looked up on Last.fm yet don't fit.
+            in_genre = [s for s in cands if party.fits(s, self.party)]
+            what = f"{self.party} party"
+        else:
+            in_genre = [s for s in cands if g == anyg or s.effective_genre() == g]
+            what = g
         # Review Focus 3: the genre ran dry -> play from any genre (with a notice), never go silent.
         fell_back = bool(cands) and not in_genre
-        self.notice = f"No ready {g} songs yet — playing from any genre" if fell_back else None
-        use_genre = anyg if fell_back else g
+        self.notice = f"No ready {what} songs yet — playing from any genre" if fell_back else None
+        # order() filters by genre itself; for a party the candidates arrive pre-filtered.
+        use_genre = anyg if (fell_back or self.party) else g
+        group = {s.id for s in (cands if fell_back else in_genre)}
         cur = self.by_id(self.playing) if self.playing else None
         ok = {s.id for s in cands}
         asked = [i for i in self.requested if i in ok]  # owner's picks play next, any genre
@@ -152,7 +169,9 @@ class Engine:
         n = len(keep)
         pins = {i - n: sid for i, sid in self.pinned.items() if i >= n and sid not in keep}
         prev = self.by_id(keep[-1]) if keep else cur
-        rest = order(prev, [s for s in cands if s.id not in keep], pins, use_genre)
+        pin_ids = set(pins.values())  # pinned songs are the owner's choice: they stay whatever the filter
+        pool = [s for s in cands if s.id not in keep and (s.id in group or s.id in pin_ids or not self.party)]
+        rest = order(prev, pool, pins, use_genre, bonus=party.bonus if self.party else None)
         self.upcoming = keep + [s.id for s in rest]
 
     def view(self, s: Song) -> dict:
@@ -169,6 +188,7 @@ class Engine:
                 counts[s.status] = counts.get(s.status, 0) + 1
             return {"version": self.version, "genre": self.genre, "genres": config.genres(),
                     "notice": self.notice, "playing": self.playing, "beat_to_beat": self.beat_to_beat,
+                    "party": self.party, "flavors": list(party.FLAVORS), "lastfm": bool(lastfm.api_key()),
                     "queue": [self.view(by[i]) for i in self.upcoming if i in by],
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
@@ -271,6 +291,105 @@ class Engine:
                 self.requested.append(sid)
             self._recompute()
             self._changed()
+
+    # --- party mode ------------------------------------------------------------------
+    def _rejected_file(self):
+        return config.library_root() / "rejected.json"
+
+    def _load_rejected(self) -> set[str]:
+        try:
+            return set(json.loads(self._rejected_file().read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            return set()
+
+    def set_party(self, flavor: str | None) -> None:
+        if flavor is not None and flavor not in party.FLAVORS:
+            raise EngineError(400, f"Unknown party flavor: {flavor}")
+        with LOCK:
+            self.party = flavor
+            self._sugg = None
+            cur = self.by_id(self.playing) if self.playing else None
+            keep = None
+            if cur is not None and flavor:
+                # Like a genre switch: the best-fitting ready song becomes next, so it's audible soon.
+                fit = [s for s in self.pool if self._eligible(s) and party.fits(s, flavor)]
+                if fit:
+                    from .planner import score_pair
+                    keep = [max(fit, key=lambda s: score_pair(cur, s) + party.bonus(cur, s)).id]
+            self._save_session()
+            self._recompute(keep)
+            self._changed()
+
+    def suggestions(self) -> list[dict]:
+        with LOCK:
+            k = (self.playing, self.party)
+            if self._sugg and self._sugg[0] == k and time.time() - self._sugg[1] < 300:
+                return self._sugg[2]
+            cur = self.by_id(self.playing) if self.playing else None
+            pool, rejected = list(self.pool), set(self.rejected)
+        res = party.suggestions(cur, self.party, pool, rejected)  # network: outside the lock
+        with LOCK:
+            self._sugg = (k, time.time(), res)
+        return res
+
+    def accept(self, artist: str, title: str) -> None:
+        """Owner accepted a suggestion: find it on YouTube, then prep it and play it next."""
+        try:
+            hits = fetch.search(f"{artist} {title}", 3)
+        except fetch.FetchError as e:
+            raise EngineError(400, str(e)) from e
+        if not hits:
+            raise EngineError(404, f"Couldn't find {artist} – {title} on YouTube")
+        h = hits[0]
+        with LOCK:
+            self._sugg = None
+        self.request(h.id, h.title, h.channel, h.duration)
+
+    def reject(self, artist: str, title: str) -> None:
+        with LOCK:
+            self.rejected.add(party.key(artist, title))
+            config.write_json_atomic(self._rejected_file(), sorted(self.rejected))
+            if self._sugg:  # drop it from the cached list right away
+                k, t, lst = self._sugg
+                self._sugg = (k, t, [x for x in lst if party.key(x["artist"], x["title"]) != party.key(artist, title)])
+
+    def enrich_once(self) -> bool:
+        """Look up one song's Last.fm facts (ready songs first). False when nothing is left."""
+        if not lastfm.api_key():
+            return False
+        with LOCK:
+            todo = sorted((s for s in self.pool if s.meta is None and s.status != "failed"),
+                          key=lambda s: s.status != "ready")
+            s = todo[0] if todo else None
+        if s is None:
+            return False
+        a, t = lastfm.split_title(s.title, s.channel)
+        info = lastfm.track_info(a, t)  # network: outside the lock
+        tags = list(dict.fromkeys(info.get("tags", []) + lastfm.artist_tags(a)))
+        with LOCK:
+            if any(x is s for x in self.pool):
+                s.meta = {"artist": a, "title": t, "listeners": info.get("listeners", 0), "tags": tags}
+                library.save_song(s)
+                if self.party and s.status == "ready":
+                    self._recompute()
+                    self.version += 1
+        return True
+
+    def start_enrichment(self) -> None:
+        """Background thread filling Song.meta from Last.fm, one song at a time.
+        ponytail: one slow thread (rate-limited in lastfm); a 500-song library takes ~10 min."""
+        def run():
+            while not self._enrich_stop.is_set():
+                try:
+                    busy = self.enrich_once()
+                except Exception:
+                    logging.getLogger(__name__).exception("last.fm enrichment failed")
+                    busy = False
+                self._enrich_stop.wait(0.2 if busy else 60)
+        threading.Thread(target=run, daemon=True, name="autodeck-lastfm").start()
+
+    def stop_enrichment(self) -> None:
+        self._enrich_stop.set()
 
     def set_beat_to_beat(self, on: bool) -> None:
         with LOCK:

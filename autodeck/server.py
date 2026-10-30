@@ -39,6 +39,15 @@ class RequestReq(BaseModel):
     duration: float = 0.0
 
 
+class PartyReq(BaseModel):
+    flavor: str | None = None  # None = party off
+
+
+class SuggestionReq(BaseModel):
+    artist: str
+    title: str
+
+
 class ModeReq(BaseModel):
     beat_to_beat: bool
 
@@ -75,9 +84,11 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         # Only runs under a real server (or `with TestClient(...)`), so plain tests
         # never get a background thread.
         eng.worker.start()
+        eng.start_enrichment()
         try:
             yield
         finally:
+            eng.stop_enrichment()
             eng.worker.stop()
 
     app = FastAPI(lifespan=lifespan)
@@ -123,6 +134,25 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     def request_song(req: RequestReq):
         eng.request(_id(req.id), req.title[:300], req.channel[:300], req.duration)
         return eng.state()
+
+    @app.post("/api/party")
+    def set_party(req: PartyReq):
+        eng.set_party(req.flavor)
+        return eng.state()
+
+    @app.get("/api/suggestions")
+    def suggestions():
+        return {"suggestions": eng.suggestions()}
+
+    @app.post("/api/suggestions/accept")
+    def accept(req: SuggestionReq):
+        eng.accept(req.artist[:200], req.title[:300])
+        return eng.state()
+
+    @app.post("/api/suggestions/reject")
+    def reject(req: SuggestionReq):
+        eng.reject(req.artist[:200], req.title[:300])
+        return {"suggestions": eng.suggestions()}
 
     @app.post("/api/mode")
     def mode(req: ModeReq):

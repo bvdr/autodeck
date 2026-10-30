@@ -58,6 +58,18 @@ Spotify normalize to), so transitions don't jump in volume. Real libraries span 
 LUFS). Songs are never boosted into clipping: a quiet master with loud peaks is raised only as far
 as its peaks allow.
 
+## Party mode
+
+Pick **Hits**, **Oldies** or **Latino** under *Party* (*Off* returns to the genre buttons):
+- The queue plays only library songs that fit the flavor, crowd-pleasers first and energy building,
+  still beat/key matched. Facts come from Last.fm (listener counts, track and artist tags), looked
+  up in the background for every song (~10 min for 500 songs, cached a week).
+- **Suggestions** lists songs you don't have that people play with the current song, plus the
+  flavor's top chart. **✓ Accept** finds it on YouTube, preps it and plays it next; **✕** hides it
+  for good (`<library>/rejected.json`).
+- Needs a free Last.fm API key in `~/.config/autodeck/lastfm.env` as `LASTFM_API_KEY=...` (or the
+  env var). Without it party mode can't tell flavors apart and shows no suggestions.
+
 ## Search
 
 Type a song or artist in **Search**. Matches from your library show first, then YouTube results.

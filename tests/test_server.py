@@ -353,3 +353,53 @@ def test_transition_lists_possible_effects_and_honours_a_forced_one(client):
     forced = client.get("/api/transition", params={"from": a, "kind": "cut"}).json()
     assert forced["transition"]["kind"] == "cut" and forced["forced"] == "cut"
     assert client.get("/api/transition", params={"from": a, "kind": "explode"}).status_code == 400
+
+
+def _meta(eng, sid, **m):
+    s = eng.by_id(sid)
+    s.meta = {"artist": "A", "title": s.title, "listeners": 0, "tags": [], **m}
+
+
+def test_party_flavor_filters_the_queue_and_persists(client):
+    eng = client.engine
+    client.post("/api/playing", json={"id": IDS[0]})
+    _meta(eng, IDS[1], tags=["80s"])
+    _meta(eng, IDS[2], tags=["reggaeton"])
+    st = client.post("/api/party", json={"flavor": "latino"}).json()
+    assert st["party"] == "latino" and st["queue"][0]["id"] == IDS[2]
+    assert [q["id"] for q in st["queue"]] == [IDS[2]]  # only latino songs while the party runs
+    assert json.loads((config.library_root() / "session.json").read_text())["party"] == "latino"
+    st = client.post("/api/party", json={"flavor": None}).json()
+    assert st["party"] is None and len(st["queue"]) == 3
+    assert client.post("/api/party", json={"flavor": "metal"}).status_code == 400
+
+
+def test_party_with_no_fitting_song_never_goes_silent(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    st = client.post("/api/party", json={"flavor": "oldies"}).json()
+    assert st["queue"] and "oldies party" in st["notice"]
+
+
+def test_suggestions_accept_and_reject(client, monkeypatch):
+    from autodeck import fetch, party
+    monkeypatch.setattr(party, "suggestions", lambda cur, flavor, pool, rejected, n=8: [
+        {"artist": "Toto", "title": "Rosanna", "reason": "r"}] if party.key("Toto", "Rosanna") not in rejected else [])
+    assert client.get("/api/suggestions").json()["suggestions"][0]["title"] == "Rosanna"
+    monkeypatch.setattr(fetch, "search", lambda q, n=10: [Song(NEW, "Toto - Rosanna", "Toto", 330.0, "queued")])
+    st = client.post("/api/suggestions/accept", json={"artist": "Toto", "title": "Rosanna"}).json()
+    assert any(p["id"] == NEW for p in st["pool"]) and NEW in client.engine.requested
+    left = client.post("/api/suggestions/reject", json={"artist": "Toto", "title": "Rosanna"}).json()
+    assert left["suggestions"] == []
+    assert party.key("Toto", "Rosanna") in json.loads((config.library_root() / "rejected.json").read_text())
+
+
+def test_enrichment_fills_meta_from_lastfm(client, monkeypatch):
+    from autodeck import lastfm
+    monkeypatch.setattr(lastfm, "api_key", lambda: "k")
+    monkeypatch.setattr(lastfm, "track_info", lambda a, t: {"listeners": 2_000_000, "tags": ["80s"]})
+    monkeypatch.setattr(lastfm, "artist_tags", lambda a: ["rock", "80s"])
+    eng = client.engine
+    while eng.enrich_once():
+        pass
+    s = library.load_song(IDS[0])
+    assert s.meta["listeners"] == 2_000_000 and s.meta["tags"] == ["80s", "rock"]

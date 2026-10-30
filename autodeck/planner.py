@@ -43,7 +43,13 @@ def score_pair(a: Song, b: Song) -> float:
             + 0.2 * (1 - abs(_energy(a) - _energy(b))))
 
 
-def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: str) -> list[Song]:
+def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: str,
+          bonus=None) -> list[Song]:
+    """Greedy set order: each next song is the best mix from the previous one.
+
+    `bonus(prev, s) -> float` is added to the mix score (party mode: popularity and rising
+    energy), so it only reorders songs that mix about equally well.
+    """
     ready = [s for s in candidates if s.status == "ready" and s.analysis and s.id != current.id]
     pool = [s for s in ready if genre == ANY_GENRE or s.effective_genre() == genre]
     by_id = {s.id: s for s in ready}
@@ -61,7 +67,7 @@ def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: 
         if i in pins:
             nxt = pins[i]
         else:
-            nxt = max(rest, key=lambda s: score_pair(prev, s))
+            nxt = max(rest, key=lambda s: score_pair(prev, s) + (bonus(prev, s) if bonus else 0.0))
             rest.remove(nxt)
         out.append(nxt)
         prev = nxt

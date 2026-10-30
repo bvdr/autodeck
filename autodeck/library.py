@@ -50,6 +50,9 @@ class Song:
     genre: str | None = None  # owner-set per song; wins over everything
     genre_hint: str | None = None  # from playlist import ("import as Sârbe"); wins over genre_guess
     analysis: Analysis | None = None
+    # Party-mode facts from Last.fm (party.py): {"artist", "title", "listeners", "tags"}.
+    # None = not looked up yet. Plain dict, saved in song.json; old files simply lack it.
+    meta: dict | None = None
 
     def effective_genre(self) -> str | None:
         # Both owner labels (per-song fix, then import genre) beat the model's guess: the spec
