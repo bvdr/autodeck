@@ -60,20 +60,21 @@ def save_song(song: Song) -> None:
     analysis = meta.pop("analysis")
     # Analysis lives in its own file so it can be invalidated/replaced without
     # touching owner-set data (genre) in song.json.
-    (d / "song.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    config.write_json_atomic(d / "song.json", meta)
     a_path = d / "analysis.json"
     if analysis is None:
         a_path.unlink(missing_ok=True)
     else:
-        a_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+        config.write_json_atomic(a_path, analysis)
 
 
 def load_song(song_id: str) -> Song | None:
     d = song_dir(song_id)
     try:
         meta = json.loads((d / "song.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
+        Song(**meta)  # validate shape too
+    except (FileNotFoundError, ValueError, TypeError):
+        return None  # missing or corrupt song.json == no such song
     analysis = None
     try:
         raw = json.loads((d / "analysis.json").read_text(encoding="utf-8"))
@@ -83,6 +84,8 @@ def load_song(song_id: str) -> Song | None:
             analysis = Analysis(**raw)
     except FileNotFoundError:
         pass
+    except (ValueError, TypeError, KeyError):
+        pass  # corrupt analysis.json: same as a version mismatch, drop it and keep the song
     return Song(**meta, analysis=analysis)
 
 
@@ -91,14 +94,12 @@ def _pool_file() -> Path:
 
 
 def save_pool(ids: list[str]) -> None:
-    f = _pool_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(ids), encoding="utf-8")
+    config.write_json_atomic(_pool_file(), ids)
 
 
 def load_pool() -> list[Song]:
     try:
         ids = json.loads(_pool_file().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
+    except (FileNotFoundError, ValueError):
+        return []  # missing or corrupt pool.json: start empty rather than crash
     return [s for s in (load_song(i) for i in ids) if s]

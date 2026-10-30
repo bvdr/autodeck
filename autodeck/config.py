@@ -25,6 +25,19 @@ def library_root() -> Path:
 LIBRARY: Path = library_root()
 
 
+def write_json_atomic(path: Path, data) -> None:
+    """Write JSON via temp file + os.replace so a crash never leaves truncated JSON.
+
+    The background worker writes these files constantly; readers must only ever
+    see the old or the new complete file. Temp lives in the same dir so the
+    replace stays on one filesystem (atomic).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def _genres_file() -> Path:
     return library_root() / "genres.json"
 
@@ -33,11 +46,9 @@ def genres() -> list[str]:
     """Owner-editable genre list (without "Any"); falls back to the defaults."""
     try:
         return json.loads(_genres_file().read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    except (FileNotFoundError, ValueError):  # missing or corrupt -> defaults
         return list(DEFAULT_GENRES)
 
 
 def save_genres(items: list[str]) -> None:
-    f = _genres_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    write_json_atomic(_genres_file(), items)

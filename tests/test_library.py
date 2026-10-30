@@ -66,3 +66,28 @@ def test_pool_and_genres_roundtrip(tmp_library):
     assert config.genres() == config.DEFAULT_GENRES
     config.save_genres(["Jazz"])
     assert config.genres() == ["Jazz"]
+
+
+def _song(**kw):
+    return Song(id="c", title="T", channel="C", duration=2.0, status="ready", **kw)
+
+
+def test_corrupt_analysis_drops_analysis_keeps_song(tmp_library):
+    library.save_song(_song(genre="Pop", analysis=_analysis()))
+    (library.song_dir("c") / "analysis.json").write_text('{"version": 1, "bp')
+    loaded = library.load_song("c")
+    assert loaded.analysis is None and loaded.genre == "Pop"
+
+
+def test_corrupt_song_json_is_missing_song(tmp_library):
+    library.save_song(_song())
+    (library.song_dir("c") / "song.json").write_text("")
+    assert library.load_song("c") is None
+    library.save_pool(["c"])
+    assert library.load_pool() == []  # pool survives a bad entry
+
+
+def test_corrupt_genres_falls_back_to_defaults(tmp_library):
+    from autodeck import config
+    (tmp_library / "genres.json").write_text("[\"Po")
+    assert config.genres() == config.DEFAULT_GENRES
