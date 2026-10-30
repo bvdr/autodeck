@@ -42,6 +42,16 @@ class TimeMap:
         (o0, r0), (o1, r1) = self.points[self._seg(t)], self.points[self._seg(t) + 1]
         return r0 + (t - o0) * (r1 - r0) / (o1 - o0)
 
+    def to_original(self, r: float) -> float:
+        """Inverse of to_rendered (the map is strictly increasing, so it's well defined).
+        The player reports positions in rendered seconds; the planner wants original time."""
+        if len(self.points) < 2:
+            return r - self.points[0][1] + self.points[0][0]
+        i = bisect.bisect_right([p[1] for p in self.points], r) - 1
+        i = min(max(i, 0), len(self.points) - 2)  # edge segments extrapolate, like to_rendered
+        (o0, r0), (o1, r1) = self.points[i], self.points[i + 1]
+        return o0 + (r - r0) * (o1 - o0) / (r1 - r0)
+
     def speed_at(self, t: float) -> float:
         """d(original)/d(rendered) = playback-speed factor (right-continuous at breakpoints)."""
         if len(self.points) < 2:
