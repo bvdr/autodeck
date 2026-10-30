@@ -268,3 +268,14 @@ def test_corrupt_or_stale_session_is_ignored(tmp_library):
          "maps": {"zzzzzzzzzz9": [[0, 0], [1, 1]]}, "entered": {}}))
     e = Engine()
     assert e.playing is None and e.played == {IDS[0]} and e.maps == {}
+
+
+def test_deck_peaks_cover_only_the_played_span(client):
+    # peaks.json covers the whole 48 s source; the deck draws them over the trimmed render
+    # [play_start, play_end], so unsliced they were stretched and misaligned.
+    a = client.engine.by_id(IDS[0])
+    a.analysis.play_start, a.analysis.play_end = 12.0, 36.0
+    (library.song_dir(IDS[0]) / "peaks.json").write_text(json.dumps([i / 480 for i in range(480)]))
+    pk = client.get(f"/api/deck/{IDS[0]}").json()["peaks"]
+    assert len(pk) == 240
+    assert pk[0] == pytest.approx(120 / 480) and pk[-1] == pytest.approx(359 / 480)

@@ -9,6 +9,8 @@ import json
 import uuid
 from dataclasses import asdict
 
+import soundfile as sf
+
 from . import config, fetch, jobs, library
 from .library import Song
 from .planner import Transition, genre_entry, order, pick_transition
@@ -298,6 +300,17 @@ class Engine:
             peaks = json.loads(peaks_file.read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             peaks = []
+        if peaks:
+            # Peaks span the whole source but the deck draws them over the render, which only
+            # covers [play_start, play_end]: keep that slice. Duration from the file header
+            # (Song.duration is YouTube metadata, 0 for some playlist entries).
+            try:
+                dur = sf.info(str(library.song_dir(s.id) / "audio.flac")).duration
+            except (OSError, RuntimeError):
+                dur = 0.0
+            if dur > 0:
+                n = len(peaks)
+                peaks = peaks[int(ps / dur * n): max(int(round(pe / dur * n)), int(ps / dur * n) + 1)]
         r = tm.to_rendered
         return {"id": s.id, "title": s.title, "channel": s.channel, "genre": s.effective_genre(),
                 "key": an.key, "camelot": an.camelot, "bpm_original": an.bpm,

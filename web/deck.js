@@ -120,8 +120,8 @@ export class Deck {
     q('.key').textContent = i ? [i.key, i.camelot].filter(Boolean).join(' · ') : '';
   }
 
-  /** Static layer: peaks, sections, downbeats. Peaks are of the source audio and are
-   * stretched over the rendered duration. ponytail: tempo-eased stretches are drawn
+  /** Static layer: peaks, sections, downbeats. Peaks are of the source audio's played span
+   * [play_start, play_end] (the server slices them) and are stretched over the rendered duration. ponytail: tempo-eased stretches are drawn
    * linearly (sub-second error); map peaks through the time map if it ever matters. */
   drawStatic(w, h) {
     const c = new OffscreenCanvas(w, h), g = c.getContext('2d'), i = this.info;
