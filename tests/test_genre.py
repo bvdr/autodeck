@@ -54,11 +54,14 @@ def test_model_runs(click_track):
 
 
 class _FakeWhisper:
-    def __init__(self, lang, prob):
-        self.r = (lang, prob, [])
+    """Returns the given probs one call at a time (one call per language window)."""
+    def __init__(self, lang, *probs):
+        self.lang, self.probs, self.calls = lang, list(probs), 0
 
     def detect_language(self, audio):
-        return self.r
+        p = self.probs[self.calls % len(self.probs)]
+        self.calls += 1
+        return self.lang, p, [(self.lang, p)]
 
 
 @pytest.mark.parametrize("prob,want_lang,want_genre", [(0.3, None, "Hip-hop"), (0.9, "ro", "Romanian hip-hop")])
@@ -88,3 +91,15 @@ def test_failed_download_not_retried(monkeypatch, tmp_library, click_track):
     assert guess_genre(p, "plain", "x", G) == (None, None)
     assert guess_genre(p, "plain", "x", G) == (None, None)
     assert len(calls) == 1
+
+
+def test_language_averages_windows(monkeypatch, click_track):
+    # Real B.U.G. Mafia numbers: the middle window alone (0.43) misses the 0.5 bar,
+    # the 3-window mean (0.75, 0.43, 0.38 -> 0.52) clears it.
+    import autodeck.genre as g
+
+    fake = _FakeWhisper("ro", 0.75, 0.43, 0.38)
+    monkeypatch.setattr(g, "_whisper", fake)
+    monkeypatch.setattr(g, "_styles", lambda y: ["Hip Hop---Gangsta"])
+    assert guess_genre(click_track(seconds=40), "Toti Borfasi", "B.U.G. Mafia", G) == ("Romanian hip-hop", "ro")
+    assert fake.calls == 3

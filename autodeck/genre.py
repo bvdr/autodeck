@@ -79,6 +79,7 @@ _whisper = None
 # Set when a model can't be fetched/loaded. Offline first run would otherwise retry the
 # download (up to the timeout) for every single song; one failure per process is enough.
 _unavailable: set[str] = set()
+LANG_WINDOWS = (0.25, 0.5, 0.75)  # song positions of the language-ID windows
 MIN_LANG_PROB = 0.5  # tiny whisper picks an arbitrary language on instrumentals; below this, say "unknown"
 
 
@@ -153,8 +154,21 @@ def _language(y: np.ndarray) -> str | None:
         except Exception:
             _unavailable.add("whisper")
             raise
-    lang, prob, _ = _whisper.detect_language(audio=_middle(y, SNIPPET_S).astype(np.float32))
-    return lang if prob >= MIN_LANG_PROB else None
+    # Average the language probabilities of 3 windows (25/50/75 %), not one middle window:
+    # a single 30 s snippet is noisy on rap over a heavy beat (B.U.G. Mafia "Toti Borfasi":
+    # middle window ro=0.43, i.e. rejected and labelled plain Hip-hop; 3-window mean ro=0.52).
+    # Instrumentals stay below the bar (sarbe: top language 0.29 / 0.43). ~0.1 s per window.
+    n = SNIPPET_S * SR
+    acc: dict[str, float] = {}
+    for f in LANG_WINDOWS:
+        c = int(len(y) * f)
+        w = y[max(c - n // 2, 0) : max(c - n // 2, 0) + n].astype(np.float32)
+        for lang, p in _whisper.detect_language(audio=w)[2]:
+            acc[lang] = acc.get(lang, 0.0) + p / len(LANG_WINDOWS)
+    if not acc:
+        return None
+    lang = max(acc, key=acc.get)
+    return lang if acc[lang] >= MIN_LANG_PROB else None
 
 
 def guess_genre(audio_path: Path, title: str, channel: str, genres: list[str]) -> tuple[str | None, str | None]:
