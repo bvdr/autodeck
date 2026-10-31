@@ -15,9 +15,11 @@ test('the "playing from" sentence names the source', () => {
 
 test('only the source that is on is active; the other shows its default', () => {
   assert.deepEqual(sourceSelects({ genre: 'Balkan party', party: null }),
-    { vibe: { value: 'Balkan party', active: true }, party: { value: 'Off', active: false } });
+    { vibe: { value: 'Balkan party', active: true }, party: { value: 'Off', active: false }, playlist: { value: 'None', active: false } });
   assert.deepEqual(sourceSelects({ genre: 'Any', party: 'hits' }),
-    { vibe: { value: 'Any', active: false }, party: { value: 'Hits', active: true } });
+    { vibe: { value: 'Any', active: false }, party: { value: 'Hits', active: true }, playlist: { value: 'None', active: false } });
+  assert.deepEqual(sourceSelects({ genre: 'Any', party: null, playlist: { name: 'Balkan brass' } }),
+    { vibe: { value: 'Any', active: false }, party: { value: 'Off', active: false }, playlist: { value: 'Balkan brass', active: true } });
   const none = sourceSelects({ genre: 'Any', party: null });
   assert.equal(none.vibe.active || none.party.active, false);
 });

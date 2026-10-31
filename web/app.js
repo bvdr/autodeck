@@ -231,6 +231,7 @@ function onState(s) {
     if (M.ctx && M.req && !M.req.loading && (!M.plan || S.canReplan(now(), M.plan.T0))) requestPlan(M.cur, M.req.after);
   }
   if (!live()) pickOpener(s);
+  fadeOutIfLast(s);
   const r = M.req;
   if (!M.ctx || !r || r.loading || M.manual || r.id !== M.decks[r.deck].info?.id) return;
   const nextId = s.queue.find((q) => q.id !== r.id)?.id;
@@ -243,6 +244,22 @@ function onState(s) {
   } else {
     r.version = s.version; // seen; don't re-evaluate until the next change
   }
+}
+
+/** "Stop after last" (a playlist's at-the-end choice): its last song fades out over its final
+ * seconds; the end of the queue then turns ON AIR off as usual (songEnded -> stopLive). Undone
+ * if something joins Up next after all (a kept song, the owner changing the choice). */
+const FADE_S = 8;
+function fadeOutIfLast(s) {
+  const d = M.decks[M.cur];
+  if (!M.ctx || !d?.busy || !d.info || M.plan) return;
+  const isLast = s.source?.kind === 'playlist' && s.playlist?.at_end === 'stop' && !s.queue.some((q) => q.id !== d.info.id);
+  if (isLast === (M.fade === d.info.id)) return;
+  const g = d.param('gain'), end = d.zero + d.info.duration_rendered, t = Math.max(now(), end - FADE_S);
+  g.cancelScheduledValues(t);
+  g.setValueAtTime(1, t);
+  if (isLast) g.linearRampToValueAtTime(0, end);
+  M.fade = isLast ? d.info.id : null;
 }
 
 async function poll() {
@@ -868,6 +885,11 @@ initOnboard({ api, setOpener, last: getState });
 initUi((s) => { renderOnboard(s); onState(s); }, {
   loadOpener: (song) => { if (!live()) loadOpener(song, null, true); },
   isLive: live,
+  // Playlist rows say "now playing on A" / "next on deck B".
+  decks: {
+    of: (id) => { const i = live() ? M.decks.findIndex((d) => d.busy && d.info?.id === id) : -1; return i < 0 ? null : 'AB'[i]; },
+    next: () => (!live() ? null : 'AB'[M.plan ? M.plan.inDeck : 1 - M.cur]),
+  },
 });
 // Canvas text (NOW tag, END/START) is drawn in Plex Mono: redraw the idle lanes once it has loaded.
 document.fonts?.ready.then(() => { idleKey = ''; });

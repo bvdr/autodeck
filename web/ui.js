@@ -25,7 +25,8 @@ export async function api(path, method = 'GET', body) {
 }
 
 let onState = () => {};
-let hooks = { loadOpener: () => {}, isLive: () => false };
+// decks: which deck letter plays a song / takes the next one (app.js knows; the playlist rows say it).
+let hooks = { loadOpener: () => {}, isLive: () => false, decks: { of: () => null, next: () => null } };
 let last = null;
 let dragging = false;
 let dirty = false; // a state arrived while we couldn't render; render when the owner is done
@@ -78,6 +79,9 @@ function genreSelect(song, genres, label) {
 
 const STATUS_ICON = { ready: 'circle-check', analyzing: 'loader', downloading: 'loader', queued: 'hourglass', failed: 'circle-alert' };
 const cap = (t) => t[0].toUpperCase() + t.slice(1);
+/** The active source in a few words: "Hits party", "Balkan brass", "Pop", "Any". */
+const srcName = (s) => (s.playlist ? s.playlist.name : s.party ? `${cap(s.party)} party` : s.genre);
+export const ordinal = (n) => (n % 100 >= 11 && n % 100 <= 13 ? `${n}th` : `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`);
 /** Status badge: icon + word, so status never rests on colour alone. */
 function badge(kind, text = cap(kind), title = '') {
   const spin = kind === 'analyzing' || kind === 'downloading';
@@ -104,7 +108,9 @@ const titleOf = (id) => last?.pool.find((p) => p.id === id)?.title ?? id;
 /** Up next row kind: the owner's (kept) or an auto pick, with the note under the title. Pure. */
 export function upNextNote(song, s) {
   if (song.kept) return { auto: false, sub: [song.channel, song.kept_from ? `kept from ${song.kept_from}` : null].filter(Boolean).join(' · ') };
-  const from = s.notice ? 'any genre' : s.source?.label ?? 'whole library';
+  // A playlist's auto picks are its own songs; library songs fill in only around it (downloading, or the end).
+  const from = s.source?.kind === 'playlist' ? (song.in_playlist ? s.source.label : 'library')
+    : s.notice ? 'any genre' : s.source?.label ?? 'whole library';
   return { auto: true, badge: `Auto · ${from}`, sub: song.channel };
 }
 
@@ -154,7 +160,7 @@ function renderQueue(s) {
   $('#queue-empty').textContent = s.pool_counts?.ready ? 'Nothing left to play. Keep songs from Suggestions or search.'
     : 'Nothing is ready yet. Songs join Up next as they finish preparing.';
   const c = s.pool_counts, working = (c.analyzing ?? 0) + (c.downloading ?? 0);
-  const what = s.party ? `${cap(s.party)} party` : s.genre;
+  const what = srcName(s);
   $('#queue-count').textContent = [what, `${c.ready ?? 0} ready`, working ? `${working} analyzing` : null,
     c.queued ? `${c.queued} queued` : null].filter(Boolean).join(' · ');
   const total = Math.max(1, s.pool.length);
@@ -170,8 +176,11 @@ function render(s) {
   renderParty(s);
   renderMoods(s, moods);
   renderSources(s);
+  renderPlChips(s);
+  renderPlHead(s);
   const notice = $('#notice');
-  notice.hidden = !s.notice;
+  // While a playlist plays its notices (the end is near, songs still downloading) sit in its panel.
+  notice.hidden = !s.notice || s.source?.kind === 'playlist';
   notice.querySelector('span').textContent = s.notice ?? '';
   renderQueue(s);
   renderLogs(s);
@@ -203,7 +212,7 @@ function renderGenres(s, moods) {
   const box = $('#genres');
   const plain = s.genres.filter((g) => !(g in moods));
   box.replaceChildren(...['Any', ...plain].map((g) => el('button', {
-    type: 'button', textContent: g, className: 'chip', 'aria-pressed': String(g === s.genre && !s.party),
+    type: 'button', textContent: g, className: 'chip', 'aria-pressed': String(g === s.genre && !s.party && !s.playlist),
     onclick: () => act('/api/genre', 'POST', { genre: g }),
   })), el('button', { type: 'button', className: 'chip ghost build', hidden: !$('#mood-form').hidden,
     onclick: openComposer }, icon('plus'), 'Build a mood'));
@@ -396,18 +405,20 @@ const FLAVOR_LABEL = { hits: 'Hits', oldies: 'Oldies', latino: 'Latino' };
 
 // --- sources (Vibe / Party dropdowns, design mNazX) ------------------------------------
 /** "Playing from" sentence for state.source (null = Any with party off). */
-export function sourceSentence(src) {
+export function sourceSentence(src, pl = null) {
   if (!src) return 'Next songs come from your whole library, auto-ordered.';
+  if (src.kind === 'playlist') return `Playing the ${src.name} playlist, ${pl?.order === 'mix' ? 'in mix order' : 'in order'}.`;
   if (src.kind === 'party') return 'Party is on: crowd-pleasers, energy building.';
   return `Next songs come from the ${src.name} ${src.kind}.`;
 }
 /** What each dropdown shows. The active one (the source that's on) gets the outline and red dot;
  * the other shows its default (Any / Off) dimmed. */
 export function sourceSelects(s) {
-  const party = s.party ?? null;
+  const party = s.party ?? null, pl = s.playlist ?? null;
   return {
-    vibe: { value: party ? 'Any' : s.genre, active: !party && s.genre !== 'Any' },
+    vibe: { value: party || pl ? 'Any' : s.genre, active: !party && !pl && s.genre !== 'Any' },
     party: { value: party ? FLAVOR_LABEL[party] ?? cap(party) : 'Off', active: !!party },
+    playlist: { value: pl ? pl.name : 'None', active: !!pl },
   };
 }
 /** The line over the draft. */
@@ -416,25 +427,27 @@ export function draftNote(src) {
   if (src.kind === 'party') return `Drafted by Party: ${src.label}. ✓ adds to Up next, ✕ never suggests it in ${src.label} again.`;
   return `Drafted from ${src.label}. ✓ adds to Up next, ✕ never suggests it here again.`;
 }
-// Party copy is the design's (TTMRy 02). Off's: "Vibe or playlist decides" until playlists ship.
-const PARTY_OPTS = [[null, 'Off', 'Vibe decides'], ['hits', 'Hits', 'Big songs everyone knows'],
+// Party copy is the design's (TTMRy 02).
+const PARTY_OPTS = [[null, 'Off', 'Vibe or playlist decides'], ['hits', 'Hits', 'Big songs everyone knows'],
   ['oldies', 'Oldies', '60s to 90s classics'], ['latino', 'Latino', 'Reggaeton, salsa, bachata']];
 
 function renderSources(s) {
   const sel = sourceSelects(s);
-  for (const k of ['vibe', 'party']) {
+  for (const k of MENUS) {
     const b = $(`#src-${k}`);
     b.classList.toggle('on', sel[k].active);
     b.querySelector('.v span').textContent = sel[k].value;
   }
-  $('#src-line').textContent = sourceSentence(s.source);
+  $('#src-line').textContent = sourceSentence(s.source, s.playlist);
   // An open menu is rebuilt so a mood that finished building (or was deleted) shows up.
   if (!$('#vibe-menu').hidden) buildVibeMenu(s);
+  // (Not while the owner types in its Add field: a rebuild would eat the text.)
+  if (!$('#playlist-menu').hidden && !document.activeElement?.matches('#playlist-menu :is(input, select)')) buildPlaylistMenu(s);
 }
 
-function option(label, desc, on, onclick, extra = []) {
+function option(label, desc, on, onclick, extra = [], lead = null) {
   return el('div', { className: `opt${on ? ' on' : ''}` },
-    el('button', { type: 'button', className: 'pick', 'aria-pressed': String(on), onclick },
+    el('button', { type: 'button', className: 'pick', 'aria-pressed': String(on), onclick }, lead,
       el('span', { className: 'ot' }, el('b', { textContent: label }), desc ? el('small', { textContent: desc }) : null)),
     ...extra, on ? icon('check', 'check') : null);
 }
@@ -460,16 +473,18 @@ function buildPartyMenu(s) {
   $('#party-menu').replaceChildren(...PARTY_OPTS.map(([f, label, desc]) =>
     option(label, desc, (s.party ?? null) === f, pick('/api/party', { flavor: f }))));
 }
+const MENUS = ['vibe', 'party', 'playlist'];
 function toggleMenu(name, open) {
   const menu = $(`#${name}-menu`), btn = $(`#src-${name}`);
   open ??= menu.hidden;
-  if (open) { closeMenus(); (name === 'vibe' ? buildVibeMenu : buildPartyMenu)(last); }
+  if (open) { closeMenus(); ({ vibe: buildVibeMenu, party: buildPartyMenu, playlist: buildPlaylistMenu })[name](last); }
   menu.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
   if (open) (menu.querySelector('.opt.on .pick') ?? menu.querySelector('.pick'))?.focus();
 }
 function closeMenus() {
-  for (const n of ['vibe', 'party']) { $(`#${n}-menu`).hidden = true; $(`#src-${n}`).setAttribute('aria-expanded', 'false'); }
+  for (const n of MENUS) { $(`#${n}-menu`).hidden = true; $(`#src-${n}`).setAttribute('aria-expanded', 'false'); }
+  if (plMenu.where === 'drop') plMenu = {};
 }
 
 // --- draft (Suggestions tab, design j2Exi) -------------------------------------------------
@@ -488,7 +503,9 @@ let draft = { for: null, src: null, rows: [], total: 0, kept: 0, excluded: 0, lo
 let sweepTimer = 0;
 // Reloaded when the source changes, a song starts (it left Up next / joined Played; party picks
 // follow what's playing) or a mood is refreshed.
-const draftKey = (s) => (s.source ? `${s.source.key}|${s.playing}|${s.moods?.[s.source.name] ?? ''}` : '');
+// A playlist's rows follow every change (songs getting ready, next song planned, a sync).
+const draftKey = (s) => (!s.source ? '' : s.source.kind === 'playlist' ? `${s.source.key}|${s.playing}|${s.version}`
+  : `${s.source.key}|${s.playing}|${s.moods?.[s.source.name] ?? ''}`);
 
 function renderParty(s) {
   // Phone's Vibe tab: the segmented control, as before.
@@ -505,13 +522,21 @@ function renderParty(s) {
 
 async function loadDraft() {
   const want = draft.for;
-  draft = { ...draft, src: last?.source ?? null, rows: [], total: 0, kept: 0, excluded: 0, loading: !!last?.source, error: null };
-  renderDraft();
+  // The same playlist reloading (a song got ready, the next one changed): keep its rows on screen,
+  // and any ✕ still showing Undo, instead of flashing an empty "Drafting…" list.
+  const same = last?.source?.kind === 'playlist' && draft.src?.key === last.source.key;
+  const held = same ? draft.rows.filter((r) => r.state === 'excluded' && r.until > Date.now()) : [];
+  if (!same) {
+    draft = { ...draft, src: last?.source ?? null, rows: [], total: 0, kept: 0, excluded: 0, loading: !!last?.source, error: null };
+    renderDraft();
+  }
   if (!last?.source) return;
   try {
     const r = await api('/api/suggestions');
     if (draft.for !== want) return; // the source changed while Last.fm was answering
-    draft = { ...draft, src: r.source, rows: r.suggestions.map((x) => ({ x, state: 'new' })), total: r.suggestions.length, loading: false };
+    const rows = r.suggestions.map((x) => ({ x, state: 'new' }));
+    for (const h of held) if (!rows.some((q) => q.x.id === h.x.id)) rows.splice(Math.min(h.at, rows.length), 0, h);
+    draft = { ...draft, src: r.source, playlist: r.playlist ?? null, rows, total: r.suggestions.length, loading: false, error: null };
   } catch (e) { draft = { ...draft, loading: false, error: e.message }; }
   renderDraft();
 }
@@ -587,6 +612,8 @@ async function addAll() {
 }
 
 function renderDraft() {
+  if (draft.src?.kind === 'playlist') { renderPlaylistDraft(); return; }
+  $('#pl-notes').replaceChildren();
   const { src, rows } = draft, n = pendingRows(rows).length;
   const done = $('#sugg-done'), all = $('#sugg-all');
   all.hidden = !n;
@@ -622,6 +649,349 @@ function renderDraft() {
   done.querySelector('.d').textContent = detail + next[0];
   done.querySelector('.btn').replaceChildren(icon(src.kind === 'genre' ? 'plus' : 'refresh-cw'), next[1]);
   done.querySelector('.btn').onclick = next[2];
+}
+
+
+// --- saved playlists (design HJGfo) ---------------------------------------------------------
+/** "2 h ago" for a unix time in seconds. */
+export function ago(ts, now = Date.now() / 1000) {
+  const m = Math.max(0, Math.floor((now - ts) / 60));
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+}
+const songs = (n) => `${n} song${n === 1 ? '' : 's'}`;
+/** "48 songs · 12 ready" / "86 songs · all ready" (the dropdown rows). */
+export const plCount = (p) => `${songs(p.count)} · ${p.ready >= p.count ? 'all ready' : `${p.ready} ready`}`;
+/** The head's line: counts and the last sync, or "N left" near the end (the at-end notice is due). */
+export function plMeta(p) {
+  if (p.left != null && p.left <= 2 && p.count > 2) return `${songs(p.count)} · ${p.left} left`;
+  return `${plCount(p)} · synced ${ago(p.synced_at)}`;
+}
+/** A playlist row's second line (design 04/05). `decks.of(id)` = the deck letter playing it,
+ * `decks.next()` = the deck the next song goes on. Pure. */
+export function plRowNote(x, decks = { of: () => null, next: () => null }, isNew = false) {
+  const n = `#${x.pos}`, tail = x.last ? ' · last one' : '';
+  if (x.state === 'played') return `${n} · played ${x.played_at ?? ''}`.trim();
+  if (x.state === 'playing') { const d = decks.of(x.id); return `${n} · now playing${d ? ` on ${d}` : ''}`; }
+  if (x.state === 'failed') return `${n} · can’t play`;
+  if (isNew) return `${n} · new on YouTube`;
+  if (x.state === 'waiting') return `${n} · downloading, skipped for now`;
+  if (x.plan != null) return `${n} → ${x.plan === 0 ? 'next' : ordinal(x.plan + 2)}${x.why ? ` · ${x.why}` : ''}${tail}`;
+  if (x.state === 'next') { const d = decks.next(); return `${n} · next${d ? ` on deck ${d}` : ''}${tail}`; }
+  if (x.state === 'kept') return `${n} · In Up next`;
+  return [n, x.artist].filter(Boolean).join(' · ') + tail;
+}
+/** The ↻ result (design 07). */
+export function syncNote(r) {
+  const a = r.added.length;
+  if (!a && !r.removed) return 'Synced: nothing changed on YouTube.';
+  const added = a ? `${a} new ${a === 1 ? 'song' : 'songs'} added (${r.added.map((k) => `#${k}`).join(', ')}).` : 'no new songs.';
+  const gone = r.removed ? ` ${r.removed} ${r.removed === 1 ? 'was' : 'were'} removed on YouTube: out of the playlist, still in your library.` : '';
+  return `Synced: ${added}${gone}`;
+}
+export const savedNote = (r) => `${r.playlist.name} saved: ${songs(r.found)} found, ${r.added} new to the library. Downloading from the top.`;
+export const removedNote = (r) => `Removed ${r.name}. Its ${songs(r.count)} stay in your library.${r.was_playing ? ' Playing from Vibe: Any.' : ''}`;
+export const failedNote = (p) => `${songs(p.failed)} in ${p.name} can’t play${p.fail_reason ? ` (${p.fail_reason})` : ''}. They’re skipped; Retry is in Library.`;
+const AT_END = [['keep_going', 'Keep going', 'Similar songs from the library, then back to Vibe: Any'],
+  ['repeat', 'Repeat playlist', 'Start again from #1'], ['stop', 'Stop after last', 'Fade out, ON AIR turns off']];
+
+let plSaving = 0;            // saves in flight: a "Reading playlist…" row each
+let plNote = null;           // the dropdown's report: {kind, text, act?: [label, icon, fn]}
+let plAdd = null;            // the Add field when open: {url, genre, err?, act?}
+const plSyncing = new Set(); // ids being re-read
+const plNew = {};            // id -> Set of song ids the last sync found ("new on YouTube")
+let plSynced = null;         // {id, kind, text}: the last sync's report, shown in the playlist's panel
+let plMenu = {};             // the open ⋯ menu: {id, where: 'drop' | 'head', sub?: 'genre'}
+let plAtEnd = false;         // the "At the end" list is open
+let renaming = null;         // id whose name is an input right now
+const plFailTold = (id) => +(localStorage.getItem(`autodeck.plfail.${id}`) || 0);
+const plFailShown = {};      // id -> count: "can't play" listed once per new failure, then quiet
+
+/** Cover: the first four songs' thumbnails, 2 × 2 (design 03). */
+function cover(ids, cls = '') {
+  return el('span', { className: `cover ${cls}`.trim(), 'aria-hidden': 'true' }, ...[0, 1, 2, 3].map((k) => {
+    const id = ids?.[k];
+    if (!id) return el('i');
+    const img = el('img', { src: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, alt: '', loading: 'lazy' });
+    img.onerror = () => img.remove();
+    return el('i', {}, img);
+  }));
+}
+const plById = (id) => last?.playlists?.find((p) => p.id === id);
+function plRefresh() {
+  if (!last) return;
+  renderPlHead(last);
+  if (!$('#playlist-menu').hidden) buildPlaylistMenu(last);
+  renderDraft();
+}
+function plReport(kind, text, act = null) {
+  plNote = { kind, text, act };
+  moodReport(kind === 'working' ? 'info' : kind, text); // under the dropdowns too, for when the menu is closed
+}
+
+async function pickPlaylist(p) {
+  closeMenus();
+  await act('/api/playlist', 'POST', { id: p ? p.id : null });
+  // Picking re-reads it when the last sync is over a day old (design 07).
+  if (p?.stale) syncPlaylist(p.id);
+}
+
+async function syncPlaylist(id) {
+  if (plSyncing.has(id)) return;
+  plSyncing.add(id);
+  plMenu = {};
+  plRefresh();
+  const name = plById(id)?.name ?? 'Playlist';
+  try {
+    const r = await api(`/api/playlists/${id}/sync`, 'POST');
+    plNew[id] = new Set(r.new_ids);
+    plSynced = { id, kind: 'ok', text: syncNote(r) };
+  } catch (e) { plSynced = { id, kind: 'failed', text: `${name}: ${e.message}` }; }
+  plSyncing.delete(id);
+  if (last?.playlist?.id !== id) moodReport(plSynced.kind, plSynced.text); // not on screen in the panel
+  draft.for = null; // reload the rows
+  try { setState(await api('/api/state')); } catch (e) { report(e); }
+  plRefresh();
+}
+
+async function savePlaylist(url, genre) {
+  if (!url) return;
+  plAdd = null;
+  plSaving++;
+  plNote = null;
+  plRefresh();
+  try {
+    const r = await api('/api/playlists', 'POST', { url, genre: genre || null });
+    if (r.existing) {
+      // Saving it twice opens the saved one (design 12).
+      plReport('info', `${r.playlist.name} is already saved. It was synced ${ago(r.playlist.synced_at)}.`,
+        [`Play from ${r.playlist.name}`, 'play', () => pickPlaylist(r.playlist)]);
+    } else plReport('working', savedNote(r));
+    plSaving--;
+    setState(await api('/api/state'));
+  } catch (e) {
+    plSaving--;
+    // Errors stay in the Add field, next to the link, with the one action that fixes it (design 10-11).
+    plAdd = { url, genre, err: e.message, act: /[?&]v=|youtu\.be\//.test(url) ? ['Add this song', 'plus', () => addSong(url)] : null };
+  }
+  plRefresh();
+}
+async function addSong(url) {
+  plAdd = null;
+  try {
+    const r = await api('/api/add', 'POST', { url });
+    plReport('ok', `Added ${songs(r.added)} to the library.`);
+    setState(await api('/api/state'));
+  } catch (e) { plAdd = { url, err: e.message }; }
+  plRefresh();
+}
+
+async function patchPlaylist(id, body) {
+  try {
+    await api(`/api/playlists/${id}`, 'PATCH', body);
+    draft.for = null; // before setState: the reload it starts must not be dropped as stale
+    setState(await api('/api/state'));
+  } catch (e) { report(e); }
+  plRefresh();
+}
+async function removePlaylist(p) {
+  plMenu = {};
+  closeMenus();
+  try {
+    const r = await api(`/api/playlists/${p.id}`, 'DELETE');
+    setState(r.state);
+    // No confirm step: the songs stay (design 08/09).
+    plNote = null;
+    moodReport('info', removedNote(r));
+  } catch (e) { report(e); }
+}
+
+function startRename(p) {
+  renaming = p.id;
+  plMenu = {};
+  plRefresh();
+  document.querySelector('.pl-rename')?.select();
+}
+function renameInput(p) {
+  const done = (save) => {
+    if (renaming !== p.id) return;
+    const v = inp.value.trim();
+    renaming = null;
+    if (save && v && v !== p.name) patchPlaylist(p.id, { name: v }); else plRefresh();
+  };
+  const inp = el('input', { className: 'pl-rename', value: p.name, 'aria-label': `Rename ${p.name}`, maxLength: 100,
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); done(true); } if (e.key === 'Escape') { e.stopPropagation(); done(false); } },
+    onblur: () => done(true) });
+  return inp;
+}
+
+/** The ⋯ menu (design 08), in the dropdown or under the playlist's head. */
+function manageMenu(p) {
+  const item = (ic, label, desc, onclick, cls = '') => el('button', { type: 'button', className: `mi ${cls}`.trim(), onclick },
+    icon(ic), el('span', { className: 'ot' }, el('b', { textContent: label }), desc ? el('small', { textContent: desc }) : null));
+  if (plMenu.sub === 'genre') {
+    return el('div', { className: 'pl-manage', role: 'group', 'aria-label': `Treat ${p.name} songs as` },
+      ...[null, ...(last?.genres ?? [])].map((g) => option(g ?? 'Their own genres', g ? '' : 'Each song keeps its own genre',
+        (p.genre ?? null) === g, () => { plMenu = {}; patchPlaylist(p.id, { genre: g }); })));
+  }
+  return el('div', { className: 'pl-manage', role: 'group', 'aria-label': `${p.name}: more` },
+    item('pencil', 'Rename', 'Default is the name on YouTube', () => startRename(p)),
+    item('tag', 'Treat songs as…', p.genre ? `All as ${p.genre}` : 'A genre for the whole list, or their own genres',
+      () => { plMenu = { ...plMenu, sub: 'genre' }; plRefresh(); }),
+    item('refresh-cw', 'Sync now', `Last synced ${ago(p.synced_at)}`, () => syncPlaylist(p.id)),
+    el('a', { className: 'mi', href: p.url, target: '_blank', rel: 'noopener', onclick: () => { plMenu = {}; closeMenus(); } },
+      icon('external-link'), el('span', { className: 'ot' }, el('b', { textContent: 'Open on YouTube' }))),
+    item('trash-2', 'Remove playlist', 'Songs stay in your library', () => removePlaylist(p), 'danger'));
+}
+
+function addField() {
+  const a = plAdd;
+  const input = el('input', { id: 'pl-url', type: 'url', value: a.url ?? '', placeholder: 'youtube.com/playlist?list=…', autocomplete: 'off',
+    spellcheck: false, 'aria-describedby': 'pl-err', 'aria-label': 'YouTube playlist link' });
+  const save = el('button', { type: 'submit', className: 'btn primary needs-server', disabled: !!a.err }, icon('bookmark'), 'Save');
+  input.oninput = () => { a.url = input.value; if (a.err) { a.err = null; a.act = null; save.disabled = false; field.classList.remove('bad'); err.replaceChildren(); act.replaceChildren(); } };
+  const field = el('label', { className: `field${a.err ? ' bad' : ''}` }, icon('link'), input);
+  const genre = el('select', { id: 'pl-genre', 'aria-label': 'Treat songs as', onchange: () => { a.genre = genre.value; } },
+    el('option', { value: '', textContent: 'Their own genres' }), ...(last?.genres ?? []).map((g) => el('option', { value: g, textContent: g })));
+  genre.value = a.genre ?? '';
+  const err = el('p', { id: 'pl-err', className: 'field-msg bad', role: 'alert' }, ...(a.err ? [icon('circle-alert'), a.err] : []));
+  const act = el('span', {}, a.act ? el('button', { type: 'button', className: 'btn', onclick: a.act[2] }, icon(a.act[1]), a.act[0]) : null);
+  const form = el('form', { className: 'pl-add', onsubmit: (e) => { e.preventDefault(); savePlaylist(input.value.trim(), genre.value); } },
+    el('p', { className: 'label', textContent: 'Add a YouTube playlist' }),
+    el('div', { className: 'row-fields' }, field, save), err, act,
+    el('label', { className: 'inline-label' }, 'Treat songs as', genre));
+  form.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); plAdd = null; plRefresh(); $('#src-playlist').focus(); } });
+  return form;
+}
+
+function noteEl(n) {
+  if (!n) return null;
+  const ic = { working: 'loader', ok: 'circle-check', failed: 'circle-alert', warn: 'circle-alert', info: n.act ? 'bookmark' : 'info' }[n.kind];
+  return el('div', { className: 'pl-note' },
+    el('p', { className: `report ${n.kind}`, role: 'status' }, icon(ic, n.kind === 'working' ? 'spin' : ''), el('span', { textContent: n.text })),
+    n.act ? el('button', { type: 'button', className: 'btn', onclick: n.act[2] }, icon(n.act[1]), n.act[0]) : null);
+}
+
+function buildPlaylistMenu(s) {
+  const pls = s.playlists ?? [], cur = s.playlist?.id ?? null;
+  const drop = plMenu.where === 'drop' ? plById(plMenu.id) : null;
+  const rows = pls.map((p) => {
+    const syncing = plSyncing.has(p.id);
+    const o = option(p.name, syncing ? 'Syncing with YouTube…' : plCount(p), p.id === cur, () => pickPlaylist(p), [
+      iconBtn(syncing ? 'loader' : 'refresh-cw', `Sync ${p.name} with YouTube`, () => syncPlaylist(p.id), `hov${syncing ? ' busy' : ''}`),
+      iconBtn('ellipsis', `More for ${p.name}`, () => { plMenu = plMenu.id === p.id ? {} : { id: p.id, where: 'drop' }; buildPlaylistMenu(last); }, 'hov')],
+    cover(p.covers));
+    o.classList.add('pl-opt');
+    if (renaming === p.id) o.querySelector('.ot b').replaceWith(renameInput(p));
+    return [o, drop?.id === p.id ? manageMenu(p) : null];
+  });
+  $('#playlist-menu').replaceChildren(...[
+    option('None', 'Vibe or party decides', !cur, () => pickPlaylist(null)),
+    pls.length || plSaving ? el('p', { className: 'label grp', textContent: 'Saved' }) : null,
+    ...Array.from({ length: plSaving }, () => el('div', { className: 'opt building pl-opt', role: 'status' },
+      el('span', { className: 'cover reading' }, icon('loader', 'spin')),
+      el('span', { className: 'ot' }, el('b', { textContent: 'YouTube playlist' }), el('small', {}, icon('loader', 'spin'), ' Reading playlist…')))),
+    ...rows.flat(),
+    plAdd ? addField() : el('button', { type: 'button', className: 'opt-add', onclick: () => { plAdd = { url: '', genre: '' }; plNote = null; buildPlaylistMenu(last); $('#pl-url')?.focus(); } },
+      icon('plus'), 'Add a YouTube playlist'),
+    noteEl(plNote)].filter(Boolean));
+  if (renaming) document.querySelector('#playlist-menu .pl-rename')?.focus();
+}
+
+/** Phone Vibe tab: the saved playlists as chips (picking only; saving lives on the desktop). */
+function renderPlChips(s) {
+  const pls = s.playlists ?? [];
+  $('#pl-chips-h').hidden = !pls.length;
+  $('#pl-chips').replaceChildren(...(pls.length ? [null, ...pls] : []).map((p) => el('button', {
+    type: 'button', className: 'chip', textContent: p ? p.name : 'None', 'aria-pressed': String((s.playlist?.id ?? null) === (p?.id ?? null)),
+    onclick: () => pickPlaylist(p) })));
+}
+
+/** The playlist's head over its rows (design 04-08): cover, name, counts, ↻ ⋯, order, at the end. */
+function renderPlHead(s) {
+  const p = s.source?.kind === 'playlist' ? s.playlist : null, head = $('#pl-head');
+  head.hidden = !p;
+  if (!p) { head.replaceChildren(); return; }
+  if (head.contains(document.activeElement) && document.activeElement.matches('input')) return; // renaming
+  const syncing = plSyncing.has(p.id), open = plMenu.where === 'head' && plMenu.id === p.id;
+  const more = iconBtn('ellipsis', `More for ${p.name}`, () => { plMenu = open ? {} : { id: p.id, where: 'head' }; plAtEnd = false; renderPlHead(last); }, `framed${open ? ' on' : ''}`);
+  more.setAttribute('aria-expanded', String(open));
+  const end = AT_END.find((x) => x[0] === p.at_end) ?? AT_END[0];
+  const endBtn = el('button', { type: 'button', className: 'btn raised small-btn', 'aria-expanded': String(plAtEnd),
+    onclick: () => { plAtEnd = !plAtEnd; plMenu = {}; renderPlHead(last); } }, end[1], icon('chevron-down', 'caret'));
+  head.replaceChildren(...[
+    el('div', { className: 'pl-top' }, cover(p.covers, 'big'),
+      el('div', { className: 'pl-name' }, el('p', { className: 'label', textContent: 'Playlist' }),
+        renaming === p.id ? renameInput(p) : el('h3', { textContent: p.name }),
+        el('p', { className: `pl-meta${syncing ? ' working' : ''}`, textContent: syncing ? 'Syncing with YouTube…' : plMeta(p) })),
+      iconBtn(syncing ? 'loader' : 'refresh-cw', `Sync ${p.name} with YouTube`, () => syncPlaylist(p.id), `framed${syncing ? ' busy' : ''}`),
+      more),
+    open ? manageMenu(p) : null,
+    el('div', { className: 'pl-ctl' },
+      el('div', { className: 'segmented small', role: 'group', 'aria-label': 'Order' },
+        ...[['playlist', 'Playlist order'], ['mix', 'Mix order']].map(([k, label]) => el('button', { type: 'button', textContent: label,
+          'aria-pressed': String(p.order === k), onclick: () => p.order !== k && patchPlaylist(p.id, { order: k }) }))),
+      el('span', { className: 'at-end' }, el('span', { className: 'dim small', textContent: 'At the end' }), endBtn)),
+    plAtEnd ? el('div', { className: 'pl-manage at-end-list', role: 'group', 'aria-label': 'At the end' },
+      ...AT_END.map(([k, label, desc]) => option(label, desc, p.at_end === k, () => { plAtEnd = false; patchPlaylist(p.id, { at_end: k }); }))) : null].filter(Boolean));
+  if (renaming === p.id) head.querySelector('.pl-rename')?.focus();
+}
+
+function plRow(r) {
+  const { x } = r, p = draft.playlist, out = r.state === 'excluded';
+  const isNew = !!plNew[p?.id]?.has(x.id) && !['played', 'playing', 'next', 'kept'].includes(x.state);
+  const keep = async () => {
+    r.working = true; renderDraft();
+    try { setState(await api('/api/suggestions/accept', 'POST', { id: x.id, artist: x.artist, title: x.title })); x.state = 'kept'; }
+    catch (e) { report(e); }
+    r.working = false; renderDraft();
+  };
+  const body = { id: x.id };
+  const exclude = async () => {
+    try { await api(`/api/playlists/${p.id}/exclude`, 'POST', body); } catch (e) { report(e); return; }
+    r.state = 'excluded'; r.until = Date.now() + UNDO_MS; r.at = draft.rows.indexOf(r);
+    renderDraft();
+    clearTimeout(sweepTimer);
+    sweepTimer = setTimeout(sweep, UNDO_MS + 50);
+    try { setState(await api('/api/state')); } catch { /* next poll */ }
+  };
+  const undo = async () => {
+    try { await api(`/api/playlists/${p.id}/unexclude`, 'POST', body); } catch (e) { report(e); return; }
+    r.state = 'new'; draft.for = null; setState(await api('/api/state').catch(() => last));
+  };
+  const xBtn = () => el('button', { type: 'button', className: 'icon-btn excl', title: 'Skip it in this playlist from now on',
+    'aria-label': `Skip ${x.title} in ${p?.name ?? 'this playlist'}`, onclick: exclude }, icon('x'));
+  const st = x.state;
+  const acts = out ? el('button', { type: 'button', className: 'btn undo', onclick: undo }, icon('undo-2'), 'Undo')
+    : ['played', 'playing', 'failed'].includes(st) ? null
+      : el('span', { className: 'acts' },
+        r.working ? el('span', { className: 'badge working' }, icon('loader', 'spin'), 'Adding…')
+          : st === 'next' || (st === 'waiting' && !isNew) ? null
+            : el('button', { type: 'button', className: `icon-btn keep${st === 'kept' ? ' on' : ''}`, disabled: st === 'kept',
+              'aria-label': st === 'kept' ? `${x.title} is in Up next` : `Keep ${x.title}: add it to Up next`,
+              title: st === 'kept' ? 'In Up next' : 'Add to Up next', onclick: keep }, icon('check')),
+        st === 'kept' || r.working ? null : xBtn());
+  return el('li', { className: `row draft-row pl-row ${st}${isNew ? ' new' : ''}${out ? ' excluded' : ''}` }, thumb(x),
+    el('span', { className: 'text' }, el('span', { className: 't', textContent: x.title }),
+      el('span', { className: 's', textContent: out ? 'Skipped in this playlist from now on' : plRowNote(x, hooks.decks, isNew) })),
+    el('span', { className: 'meta', textContent: x.bpm ? x.bpm.toFixed(1) : '–', title: x.bpm ? 'BPM' : 'Tempo unknown yet' }), acts);
+}
+
+function renderPlaylistDraft() {
+  const p = last?.playlist ?? draft.playlist;
+  $('#sugg-all').hidden = true;
+  $('#sugg-done').hidden = true;
+  const msg = $('#sugg-msg');
+  msg.hidden = !(draft.loading || draft.error);
+  msg.textContent = draft.loading ? 'Reading the playlist…' : draft.error ?? '';
+  $('#tab-sugg .n').textContent = String(draft.rows.filter((r) => r.state !== 'excluded').length);
+  $('#sugg').replaceChildren(...draft.rows.map(plRow));
+  // Songs YouTube won't serve: listed once per new failure, then skipped quietly (design 12).
+  if (p?.failed > plFailTold(p.id)) { plFailShown[p.id] = p.failed; localStorage.setItem(`autodeck.plfail.${p.id}`, String(p.failed)); }
+  const notes = [
+    last?.notice ? noteEl({ kind: 'warn', text: last.notice }) : null,
+    plSynced?.id === p?.id ? noteEl(plSynced) : null,
+    p && plFailShown[p.id] ? noteEl({ kind: 'warn', text: failedNote({ ...p, failed: plFailShown[p.id] }) }) : null].filter(Boolean);
+  $('#pl-notes').replaceChildren(...notes);
 }
 
 // --- search -----------------------------------------------------------------
@@ -692,7 +1062,7 @@ function renderOpeners(s) {
       : el('button', { type: 'button', className: 'btn', 'aria-label': `Load ${p.title} in A`, onclick: () => hooks.loadOpener(p) },
         icon('arrow-down-to-line'), 'Load in A'))));
   if (!list.length) $('#op-list').append(el('li', { className: 'empty-note', textContent: q ? 'No ready song matches.' : 'Nothing here yet.' }));
-  $('#op-foot span').textContent = `Up next is planned from whatever plays first: ${s.queue.length} ready in ${s.party ? `${cap(s.party)} party` : s.genre}.`;
+  $('#op-foot span').textContent = `Up next is planned from whatever plays first: ${s.queue.length} ready in ${srcName(s)}.`;
   for (const b of document.querySelectorAll('[data-op]')) b.setAttribute('aria-pressed', String(b.dataset.op === opTab));
 }
 
@@ -824,7 +1194,7 @@ export function initUi(stateCb, h = {}) {
   onState = stateCb;
   hooks = { ...hooks, ...h };
   // Sources: Vibe / Party dropdowns (one open at a time; Esc or a click outside closes).
-  for (const n of ['vibe', 'party']) {
+  for (const n of MENUS) {
     $(`#src-${n}`).addEventListener('click', () => toggleMenu(n));
     $(`#${n}-menu`).addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenus(); $(`#src-${n}`).focus(); } });
   }
@@ -867,6 +1237,8 @@ export function initUi(stateCb, h = {}) {
     if (!e.target.closest('#search-panel, #search-form') && !matchMedia('(max-width: 600px)').matches) panel.hidden = true;
     if (!e.target.closest('.pop, #add-btn, #menu-btn, #settings-btn')) closePops();
     if (!e.target.closest('.src-wrap')) closeMenus();
+    // The playlist head's ⋯ and "At the end" lists close on a click elsewhere.
+    if ((plMenu.where === 'head' || plAtEnd) && !e.target.closest('#pl-head')) { plMenu = {}; plAtEnd = false; if (last) renderPlHead(last); }
   });
   // Openers
   for (const b of document.querySelectorAll('[data-op]')) b.addEventListener('click', () => { opTab = b.dataset.op; $('#op-find').value = ''; renderOpeners(last); });
@@ -878,11 +1250,10 @@ export function initUi(stateCb, h = {}) {
   });
   // Queue reorder: pointer-based drag (sortable.js) -> POST /api/queue with pin = the dragged song.
   // Re-renders wait while dragging, so the list isn't rebuilt under the finger.
-  const ord = (n) => (n % 100 >= 11 && n % 100 <= 13 ? `${n}th` : `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`);
   sortable($('#queue'), {
     onStart: () => { dragging = true; },
     onEnd: () => { dragging = false; },
-    onMove: (gap, index) => { gap.textContent = `Drop here: plays ${ord(index + 1)}`; },
+    onMove: (gap, index) => { gap.textContent = `Drop here: plays ${ordinal(index + 1)}`; },
     onDrop: (id, index) => {
       if (!last) return;
       const ids = last.queue.map((x) => x.id);

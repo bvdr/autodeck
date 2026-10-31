@@ -378,7 +378,7 @@ body.live .openers, body:not(.live) .upnext { display: none; }
    white outline and the red on-air dot; the other shows its default, dimmed. */
 .src-head { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
 #src-line { font-size: 14px; color: var(--text-2); }
-.src-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+.src-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
 .src-wrap { position: relative; min-width: 0; }
 .src-select { width: 100%; height: 60px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
   column-gap: 10px; padding: 0 14px; background: var(--raised); border: 1px solid transparent; border-radius: var(--r-md);
@@ -440,6 +440,72 @@ body.live .openers, body:not(.live) .upnext { display: none; }
 .draft-row.kept .s { color: var(--ready); }
 .draft-row.excluded :is(.thumb, .t, .s, .meta) { opacity: .45; }
 .btn.undo { height: var(--target); font-size: 13px; padding: 0 12px; }
+/* Saved playlists (design HJGfo). Cover = the first four songs' thumbnails, 2 x 2. */
+.cover { width: 40px; height: 40px; flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; overflow: hidden;
+  border-radius: var(--r-sm); background: var(--raised); }
+.cover i { position: relative; background: #2b2833; overflow: hidden; }
+.cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cover.big { width: 64px; height: 64px; }
+.cover.reading { display: grid; place-items: center; grid-template-columns: 1fr; border: 1px solid var(--line); background: var(--bg); color: var(--text-3); }
+.pl-menu { width: max(100%, 400px); }
+.opt.pl-opt .pick { display: flex; gap: 12px; align-items: center; padding: 6px 8px; }
+.opt.pl-opt.building { padding: 6px 8px; gap: 12px; color: var(--text); }
+.opt.pl-opt.building small { color: var(--working); display: inline-flex; gap: 4px; align-items: center; }
+.opt .hov.busy { opacity: 1; color: var(--working); }
+.pl-add { display: grid; gap: 10px; padding: 12px 10px; margin-top: 4px; border-top: 1px solid var(--line); }
+.pl-add .label { font-size: 10px; }
+.pl-add .inline-label { font-size: 13px; color: var(--text-2); }
+.pl-add .field { background: var(--bg); }
+.pl-add .field input[type="url"] { border: 0; background: none; padding: 0; font: 13px var(--mono); }  /* the .field draws the box */
+.pl-note { display: grid; gap: 8px; justify-items: start; padding: 6px 4px 2px; }
+.pl-note .report { width: 100%; }
+.report.working { color: var(--working); background: #7CC4FF0d; border-color: #7CC4FF33; }
+.report.info { color: var(--text-2); }
+.pl-manage { display: grid; gap: 2px; padding: 6px; margin: 8px 0; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-md); }
+.pl-menu .pl-manage { margin: 2px 0 6px 52px; }
+.mi { display: flex; gap: 12px; align-items: flex-start; min-height: var(--target); padding: 8px 10px; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--text); text-align: left; text-decoration: none; cursor: pointer; font: inherit; }
+.mi:hover, .mi:focus-visible { background: #2b2833; }
+.mi .i { margin-top: 2px; color: var(--text-2); }
+.mi .ot { display: grid; gap: 2px; }
+.mi b { font: 600 14px/1.2 var(--body); }
+.mi small { font-size: 12px; color: var(--text-3); }
+.mi.danger { border-top: 1px solid var(--line); border-radius: 0 0 var(--r-sm) var(--r-sm); margin-top: 4px; padding-top: 12px; }
+.mi.danger, .mi.danger .i { color: var(--failed); }
+.pl-head { padding: 12px 0 4px; }
+.pl-top { display: flex; gap: 14px; align-items: center; }
+.pl-name { flex: 1; min-width: 0; }
+.pl-name .label { font-size: 10px; }
+.pl-name h3 { margin: 2px 0; font: 700 28px/1.05 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-meta { font-size: 13px; color: var(--text-3); }
+.pl-meta.working { color: var(--working); }
+.pl-rename { width: 100%; margin: 2px 0; padding: 2px 6px; font: 700 26px/1.05 var(--display); color: var(--text);
+  background: var(--bg); border: 1px solid var(--text-3); border-radius: var(--r-sm); }
+.icon-btn.framed { border: 1px solid var(--line); border-radius: var(--r-md); }
+.icon-btn.framed.on { border-color: var(--text); color: var(--text); }
+.icon-btn.busy { color: var(--working); }
+.icon-btn.busy .i, .opt .hov.busy .i { animation: spin 1s linear infinite; }
+.pl-ctl { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; }
+.segmented.small { padding: 3px; }
+.segmented.small button { height: 32px; font-size: 13px; padding: 0 12px; }
+.at-end { display: inline-flex; gap: 8px; align-items: center; }
+.small-btn { height: 32px; font-size: 13px; padding: 0 10px; gap: 6px; }
+.small-btn .caret { width: 14px; height: 14px; }
+.at-end-list { margin-left: auto; max-width: 360px; }
+.pl-row.played :is(.thumb, .t, .s, .meta) { opacity: .5; }
+.pl-row.playing { background: var(--on-air-dim); background: #FF4D2E1f; }
+.pl-row.playing .s { color: var(--on-air); }
+.pl-row.next { background: #A98BFF14; }
+.pl-row.next .s { color: var(--deck-b); }
+.pl-row.waiting .s { color: var(--working); }
+.pl-row.new { background: #6EE7A80f; }
+.pl-row.new .s { color: var(--ready); }
+.pl-row.failed .s { color: var(--failed); }
+.pl-row.failed :is(.thumb, .t) { opacity: .5; }
+.pl-row.kept .s { color: var(--ready); }
+.pl-notes { display: grid; gap: 8px; }
+.pl-notes:empty { display: none; }
+.pl-notes .pl-note { padding: 8px 0 0; }
 .empty-state.done .t { color: var(--text); }
 .empty-state.done .btn { margin-top: 8px; }
 
@@ -617,6 +683,9 @@ body.live .openers, body:not(.live) .upnext { display: none; }
   .upnext .panel-head .label { flex: none; }
   .upnext .panel-head .mono { margin-left: auto; font-size: 11px; }
   .legend { display: none; }
+  .pl-ctl { flex-wrap: wrap; }
+  .pl-ctl .segmented button, .at-end { white-space: nowrap; }
+  .pl-name h3 { font-size: 24px; }
   .vibe .label#vibe-h { display: none; }
   .party-row { flex-direction: column; align-items: stretch; }
   .party-row .segmented { display: flex; }
