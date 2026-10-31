@@ -214,3 +214,10 @@ def test_search_returns_songs_from_youtube_search(monkeypatch):
     assert seen["url"] == "ytsearch8:sarba taraf"
     assert seen["opts"]["extract_flat"]  # one request, titles only
     assert [(s.id, s.title, s.duration) for s in res] == [("abcdefghijk", "Sârba", 200.0)]
+
+
+def test_read_playlist_returns_the_youtube_name(monkeypatch):
+    info = {"title": "Balkan brass", "entries": [{"id": "aaaaaaaaaaa", "title": "A"}]}
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _fake_info(info))
+    name, songs = fetch.read_playlist("https://www.youtube.com/playlist?list=PL1")
+    assert name == "Balkan brass" and [s.id for s in songs] == ["aaaaaaaaaaa"]

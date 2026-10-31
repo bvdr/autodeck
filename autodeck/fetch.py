@@ -91,8 +91,10 @@ def _song_from_entry(e: dict) -> Song | None:
     )
 
 
-def expand(url: str) -> list[Song]:
-    """Songs for a video or playlist URL, status "queued". No audio is downloaded."""
+def read_playlist(url: str) -> tuple[str | None, list[Song]]:
+    """(title, songs) for a video or playlist URL, songs status "queued". No audio is downloaded.
+    The title is the playlist's name on YouTube (saved playlists start with it); for a video
+    it's the video title."""
     kind, _ = classify_url(url)
     opts = {"quiet": True, "skip_download": True, "noplaylist": kind == "video", **_cookie_opts()}
     if kind == "playlist":
@@ -103,7 +105,12 @@ def expand(url: str) -> list[Song]:
     except Exception as exc:
         raise FetchError(_cookie_error() if _is_cookie_error(exc) else f"Couldn't read {url}: {_short_reason(exc)}") from exc
     entries = info.get("entries") if kind == "playlist" else [info]
-    return [s for s in (_song_from_entry(e) for e in entries or [] if e) if s]
+    return info.get("title"), [s for s in (_song_from_entry(e) for e in entries or [] if e) if s]
+
+
+def expand(url: str) -> list[Song]:
+    """Songs for a video or playlist URL, status "queued". No audio is downloaded."""
+    return read_playlist(url)[1]
 
 
 def search(query: str, n: int = 10) -> list[Song]:
