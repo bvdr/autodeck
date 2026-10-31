@@ -1,13 +1,16 @@
 // Mixer state machine: which deck is on air, the scheduled transition, replanning,
-// Mix now and the manual crossfader. Timing math lives in schedule.js (pure, tested),
+// Mix now and the manual crossfader, plus what shows it: the ON AIR sign and the lanes.
+// Timing math lives in schedule.js (pure, tested), lane geometry in lanes.js (pure, tested),
 // Web Audio plumbing in deck.js, everything else on the page in ui.js.
 import * as S from './schedule.js';
-import { Deck, loadTrack } from './deck.js';
-import { api, initUi, setState, getState } from './ui.js';
+import { Deck, loadTrack, laneText } from './deck.js';
+import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
+import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab } from './ui.js';
 
 const $ = (sel) => document.querySelector(sel);
 const POLL_MS = 2000;
 const MAX_RETRIES = 3; // tooSoon refetches before giving up and letting the song play out
+const RATE_MS = 30000; // "How was that mix?" stays this long after a mix, then goes by itself
 
 const M = {
   ctx: null, decks: [], cur: 0,
@@ -20,7 +23,9 @@ const M = {
   timers: [],      // setTimeouts belonging to M.plan
   manual: false,
   force: null,     // owner's forced effect for the current song's exit (null = app's pick)
-  fxPlan: null,    // the plan the effect dropdown was last built for
+  fxPlan: null,    // the plan the effect picker was last built for
+  rate: null,      // { from, to, title, until } the hand-over the sign asks about
+  lastPlan: null,  // the plan that just finished: keeps the lane view steady through the swap
 };
 // Reload resumes where you were: the playing song + position, saved about once a second.
 // localStorage, not the server: it's this browser's playback, and it must survive a reload
@@ -39,17 +44,23 @@ function saveResume(t) {
   const d = M.decks[M.cur];
   if (!d?.info || !d.started(t)) return;
   lastSave = Date.now();
-  localStorage.setItem(RESUME_KEY, JSON.stringify({ id: d.info.id, title: d.info.title, pos: d.pos(t), at: lastSave }));
+  localStorage.setItem(RESUME_KEY, JSON.stringify({ id: d.info.id, title: d.info.title, channel: d.info.channel,
+    pos: d.pos(t), at: lastSave }));
 }
-const FX_LABEL = { blend: 'Beat blend', half_double: 'Beat blend (½×/2×)', bass_swap: 'Bass swap',
-  filter_sweep: 'Filter sweep', echo: 'Echo out', loop_roll: 'Loop roll', brake: 'Brake', backspin: 'Backspin',
-  reverb: 'Reverb wash', gate: 'Gate / stutter', riser: 'Riser → drop', dropswap: 'Drop swap', cut: 'Cut', fade: 'Fade' };
 
 const now = () => M.ctx.currentTime;
-const status = (t) => { $('#status').textContent = t; };
+// Status line in the sign (a polite live region). Transient messages clear themselves so a
+// stale "Mix already under way." doesn't hang around; sticky ones wait for the next status.
+let statusTimer = 0;
+const status = (t, sticky = false) => {
+  clearTimeout(statusTimer);
+  $('#status').textContent = t;
+  if (t && !sticky) statusTimer = setTimeout(() => { $('#status').textContent = ''; }, 8000);
+};
 const at = (ctxTime, fn) => M.timers.push(setTimeout(fn, Math.max(0, ctxTime - now()) * 1000));
 const clearTimers = () => { M.timers.forEach(clearTimeout); M.timers = []; };
 const curId = () => M.decks[M.cur].info?.id;
+const live = () => !!M.ctx && M.decks.some((d) => d.busy);
 
 // --- transitions ------------------------------------------------------------
 /** Ask the server for the transition out of `deck`'s song. `after` = rendered seconds. */
@@ -57,7 +68,7 @@ async function requestPlan(deck, after = null, retries = 0) {
   const d = M.decks[deck], id = d.info.id, seq = ++M.seq;
   M.req = { seq, deck, id, after, version: getState()?.version, mode: !!getState()?.beat_to_beat,
             inId: undefined, retries, loading: true };
-  status('Preparing next mix…');
+  status('Preparing next mix…', true);
   let res;
   try {
     const q = new URLSearchParams({ from: id });
@@ -70,7 +81,7 @@ async function requestPlan(deck, after = null, retries = 0) {
       M.req.loading = false; M.req.inId = null;
       // Server restarting / network blip: keep trying while this song still plays, so a
       // short outage never ends the mix. songEnded() is the last safety net.
-      status(`Next mix failed (${e.message}) — retrying…`);
+      status(`Next mix failed (${e.message}) — retrying…`, true);
       setTimeout(() => { if (seq === M.seq && M.decks[deck]?.info?.id === id && !M.plan) requestPlan(deck, after, retries); }, 3000);
     }
     return;
@@ -90,7 +101,7 @@ function tryApply() {
     M.next = null;
     // Latest response wins: no next song any more (e.g. it was deleted) drops the old plan.
     if (M.plan && S.canReplan(now(), M.plan.T0)) cancelPlan();
-    if (!M.plan) status('End of queue — this song plays to its end.');
+    if (!M.plan) status('');
     return;
   }
   const t = now(), out = M.decks[M.cur], inc = M.decks[1 - M.cur];
@@ -106,11 +117,12 @@ function tryApply() {
     // T0 passed while rendering (or a pulled-back song's exit is behind us): ask for
     // the next boundary instead. Capped so a song at its very end can't loop forever.
     if (M.req.retries < MAX_RETRIES) requestPlan(M.cur, out.pos(t) + S.PREP_LEAD, M.req.retries + 1);
-    else status('No usable mix point left — this song plays to its end.');
+    else status('No usable mix point left — this song plays to its end.', true);
     return;
   }
   M.next = null;
-  M.plan = { ...p, res: n, inDeck: 1 - M.cur };
+  M.plan = { ...p, res: n, inDeck: 1 - M.cur, bar: 4 * beat };
+  status('');
   const inIdx = 1 - M.cur;
   inc.start(n.track, p.inStart, p.inOffset, songEnded);
   inc.planId = n.plan_id; // reported with /api/playing so the server commits this render's map
@@ -150,11 +162,17 @@ async function onStarted(deck) {
 function swap() {
   const old = M.cur;
   M.timers = [];
+  // The sign asks once about this hand-over (unless it's rated already).
+  const a = M.decks[old].info, b = M.decks[1 - old].info;
+  if (a && b && !getState()?.pairs?.[`${a.id}>${b.id}`]) {
+    M.rate = { from: a.id, to: b.id, title: `${a.title} → ${b.title} · ${FX_LABEL[M.plan?.kind] ?? ''}`, until: Date.now() + RATE_MS };
+  }
+  M.lastPlan = M.plan;
   M.plan = null;
   // The old source stops itself (stopAt in tryApply); its onended frees the slot.
   M.decks[old].param('echo').setValueAtTime(0, now());
   M.cur = 1 - old;
-  if (M.req?.loading) status('Preparing next mix…'); // frame() stops updating status once M.plan is gone
+  if (M.req?.loading) status('Preparing next mix…', true); // the sign shows it until the plan arrives
   tryApply(); // the new current's exit may already be fetched
 }
 
@@ -164,10 +182,11 @@ function songEnded(deck) {
     // start the next queued song straight away. Only a truly empty queue stops the music.
     const next = getState()?.queue.find((q) => q.id !== deck.info?.id);
     if (next) {
-      startSong(next).catch((e) => { status(e.message); $('#play').disabled = false; });
+      startSong(next).catch((e) => { status(e.message); });
       return;
     }
-    status('Stopped — end of queue. Add songs and press Play to start again.');
+    status('Stopped — end of queue. Add songs and press Play to start again.', true);
+    document.body.classList.replace('live', 'idle');
     $('#play').disabled = false;
   }
   tryApply(); // a slot just freed: a waiting plan may now be scheduled
@@ -175,7 +194,7 @@ function songEnded(deck) {
 
 // --- poll + replan ------------------------------------------------------------
 function onState(s) {
-  // Server-held controls (set from the dropdown, the API or the MCP DJ):
+  // Server-held controls (set from the picker, the API or the MCP DJ):
   // a mix-now request and the forced effect for the current song's exit.
   if (M.mixSeq === undefined) M.mixSeq = s.mix_now_seq;
   else if (s.mix_now_seq > M.mixSeq) { M.mixSeq = s.mix_now_seq; if (M.ctx) mixNow(); }
@@ -184,6 +203,7 @@ function onState(s) {
     M.fxPlan = null;
     if (M.ctx && M.req && !M.req.loading && (!M.plan || S.canReplan(now(), M.plan.T0))) requestPlan(M.cur, M.req.after);
   }
+  if (!live()) pickOpener(s);
   const r = M.req;
   if (!M.ctx || !r || r.loading || M.manual || r.id !== M.decks[r.deck].info?.id) return;
   const nextId = s.queue.find((q) => q.id !== r.id)?.id;
@@ -199,12 +219,122 @@ function onState(s) {
 }
 
 async function poll() {
-  try { setState(await api('/api/state')); } catch { /* server restarting; next poll retries */ }
+  try {
+    setState(await api('/api/state'));
+    online(true);
+  } catch { online(false); /* server restarting; next poll retries */ }
   setTimeout(poll, POLL_MS);
+}
+/** Server unreachable: the music keeps going from what's loaded; server-only controls dim. */
+function online(ok) {
+  document.body.classList.toggle('offline', !ok);
+  $('#offline').hidden = ok;
+}
+
+// --- the opener (before anything plays) ------------------------------------------
+// The PLAY lamp holds one song: the one to resume after a reload, else the first in Up next,
+// or whatever the owner loaded from "Or start with". Its deck payload is fetched ahead so
+// lane A shows the waveform and Play starts without a second /api/deck round trip.
+const O = { id: null, title: '', channel: '', at: null, resume: null, chosen: false, info: null };
+
+function pickOpener(s) {
+  const ready = (id) => s.pool.some((p) => p.id === id && p.status === 'ready');
+  if (O.id && !ready(O.id)) { O.id = null; O.chosen = false; }
+  if (!O.id || (!O.chosen && !O.resume)) {
+    const r = savedResume();
+    if (r && ready(r.id)) loadOpener({ id: r.id, title: r.title, channel: r.channel }, r);
+    else if (s.queue[0] && s.queue[0].id !== O.id) loadOpener(s.queue[0]);
+  }
+  renderIdle();
+}
+
+/** Put `song` on the PLAY button. `resume` = the saved position record, if resuming. */
+function loadOpener(song, resume = null, chosen = false) {
+  Object.assign(O, { id: song.id, title: song.title, channel: song.channel ?? '', resume,
+    at: resume ? Math.max(0, resume.pos - 1) : null, chosen, info: null });
+  setOpener(song.id);
+  laneText($('#deck0'), null);
+  $('#deck0 .title').textContent = song.title;
+  $('#deck0 .artist').textContent = song.channel ?? '';
+  lanes[0].setInfo(null);
+  const id = song.id;
+  api(`/api/deck/${id}`).then((info) => {
+    if (O.id !== id || live()) return;
+    O.info = info;
+    O.channel = info.channel;
+    laneText($('#deck0'), info);
+    lanes[0].setInfo(info);
+    renderIdle();
+  }).catch(() => { /* not ready / server gone: Play fetches it again */ });
+  renderIdle();
+}
+
+function renderIdle() {
+  if (live()) return;
+  const s = getState();
+  const c = s?.pool_counts ?? {};
+  const ready = c.ready ?? 0, coming = (c.queued ?? 0) + (c.downloading ?? 0) + (c.analyzing ?? 0);
+  const empty = !s?.pool.length;
+  document.body.classList.toggle('empty', empty);
+  const help = $('#side-help');
+  $('#side-idle').hidden = empty || !O.id;
+  help.hidden = !(empty || !O.id);
+  if (empty) {
+    setText('#sign-kicker', 'First launch');
+    setText('#sign-title', "Let's get some music in");
+    setText('#sign-sub', 'Paste a YouTube link, search, or build a mood.');
+    helpButtons([['link', 'Add link', () => openAdd()], ['search', 'Search YouTube', () => focusSearch()],
+      ['sparkles', 'Build a mood', () => { toTab('vibe'); $('#genres .build')?.click(); }]]);
+    return;
+  }
+  if (!O.id) {
+    setText('#sign-kicker', coming ? `${ready} songs ready · more on the way` : 'Nothing ready');
+    setText('#sign-title', coming ? 'Getting songs ready' : 'Nothing to play yet');
+    setText('#sign-sub', `${c.analyzing ?? 0} analyzing · ${(c.queued ?? 0) + (c.downloading ?? 0)} queued · ${c.failed ?? 0} failed`);
+    helpButtons([['link', 'Add link', () => openAdd()], ['sparkles', 'Build a mood', () => { toTab('vibe'); $('#genres .build')?.click(); }]]);
+    return;
+  }
+  const r = O.resume;
+  setText('#sign-kicker', r ? 'Resume where you left off' : coming && ready < 10 ? `${ready} songs ready · more on the way` : 'Ready to start with');
+  setText('#sign-title', O.title);
+  const stopped = r ? new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  setText('#sign-sub', [O.channel, r ? `from ${fmt(O.at ?? 0)}` : 'first in Up next',
+    r ? `stopped at ${stopped}` : null].filter(Boolean).join('  ·  '));
+  const alt = $('#alt-btn');
+  alt.innerHTML = '';
+  if (r) alt.append(icon(O.at != null ? 'rotate-ccw' : 'history'), O.at != null ? 'Start it at 0:00' : `Resume at ${fmt(r.pos)}`);
+  else alt.append(icon('repeat'), 'Pick another opener');
+  // Lane A: the opener, loaded; lane B: what follows it, still empty.
+  setRole(0, r ? 'loaded · resumes here' : 'loaded · starts at 0:00', 'loaded');
+  const startAt = O.at ?? (O.info ? S.firstOffset(O.info) : 0);
+  setText('#deck0 .time', O.info ? `${fmt(startAt)} / ${fmt(O.info.duration_rendered)}` : '');
+  const nxt = s.queue.find((q) => q.id !== O.id);
+  laneText($('#deck1'), null);
+  setRole(1, 'empty', '');
+  setText('#deck1 .time', '');
+  $('#deck1 .title').textContent = nxt?.title ?? '—';
+  $('#deck1 .artist').textContent = nxt ? `${nxt.channel} · loads next` : '';
+  $('#deck1 .metaline').textContent = nxt ? [nxt.genre, nxt.bpm?.toFixed(1), nxt.camelot].filter(Boolean).join('  ') : '';
+  $('#lane-note').hidden = !nxt;
+  $('#lane-note span').textContent = nxt ? `Deck B stays empty until A is on air, then ${nxt.title} loads here` : '';
+  setText('#xf-tag', 'READY');
+}
+
+function helpButtons(items) {
+  const box = $('#side-help');
+  box.replaceChildren(...items.map(([ic, label, fn], i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = i ? 'btn' : 'btn primary';
+    b.append(icon(ic), label);
+    b.onclick = fn;
+    return b;
+  }));
 }
 
 // --- controls ---------------------------------------------------------------
 async function play() {
+  if (live()) return;
   $('#play').disabled = true;
   try {
     // Autoplay policy: the AudioContext must be created inside the click.
@@ -215,29 +345,36 @@ async function play() {
       // fight a scheduled transition's automation (which lives on the deck nodes).
       M.live = liveFx(M.ctx, master);
       M.decks = [0, 1].map((i) => new Deck(M.ctx, master, $(`#deck${i}`)));
-      requestAnimationFrame(frame);
     }
     await M.ctx.resume();
     const s = await api('/api/state');
     setState(s);
-    // Resume the song that was playing before the reload, at its position. The server's
-    // session still holds that song's time map, so /api/deck returns the same render.
-    const res = savedResume();
-    const known = res && s.pool.some((p) => p.id === res.id && p.status === 'ready');
-    const first = known ? { id: res.id, title: res.title } : s.queue[0];
-    if (!first) throw new Error('Nothing ready to play yet — add songs below.');
-    await startSong(first, known ? res.pos - 1 : null);
+    // The opener on the PLAY lamp: the song that was playing before the reload (at its
+    // position: the server's session still holds its time map, so /api/deck returns the
+    // same render), or the first queued song, or one the owner loaded from "Or start with".
+    const first = O.id ? { id: O.id, title: O.title } : s.queue[0];
+    if (!first) throw new Error('Nothing ready to play yet — add songs first.');
+    await startSong(first, O.id ? O.at : null, O.id === first.id ? O.info : null);
+    goLive();
   } catch (e) {
-    status(e.message);
+    status(e.message, true);
     $('#play').disabled = false;
   }
 }
 
+function goLive() {
+  document.body.classList.replace('idle', 'live');
+  $('#lane-note').hidden = true;
+  for (const el of ['#xfader', '#live-filter', '#live-echo']) $(el).disabled = false;
+  O.id = null; O.chosen = false; O.resume = null;
+}
+
 /** Start `song` from scratch on deck 0 (Play, Resume, or recovering from a missed mix).
- * `at` = rendered seconds to start from (resume), null = the song's own start. */
-async function startSong(song, at = null) {
-  status(`Loading ${song.title}…`);
-  const info = await api(`/api/deck/${song.id}`);
+ * `at` = rendered seconds to start from (resume), null = the song's own start.
+ * `info` = its deck payload if already fetched (the opener preview). */
+async function startSong(song, at = null, info = null) {
+  status(`Loading ${song.title}…`, true);
+  info = info ?? await api(`/api/deck/${song.id}`);
   const track = await loadTrack(M.ctx, info);
   M.decks.forEach((d) => d.stop());
   if (M.plan) cancelPlan();
@@ -250,6 +387,7 @@ async function startSong(song, at = null) {
   // Resume a little before the saved spot (the save is up to 1 s old); never past the end.
   const offset = at != null ? Math.min(Math.max(at, 0), info.duration_rendered - 5) : S.firstOffset(info);
   d.start(track, now() + 0.1, Math.max(offset, 0), songEnded);
+  status('');
   onStarted(0);
 }
 
@@ -272,7 +410,7 @@ function takeOver() {
   M.seq++; // and no in-flight response gets scheduled under the owner's hands
   M.next = null;
   M.decks.forEach((d) => { d.unstop(); d.hold(t); }); // the owner decides who stops now
-  status('Manual crossfader — let go and the nearer deck takes over.');
+  status('Manual crossfader — let go and the nearer deck takes over.', true);
 }
 
 function drive() {
@@ -301,6 +439,7 @@ function letGo() {
   M.plan = null;
   M.cur = winner;
   M.manual = false;
+  status('');
   fader.value = winner === 0 ? 0 : 1000;
   if (changed || started[loser]) {
     // Tell the server who is on air. Pushed into the incoming: its start timer may not
@@ -337,27 +476,190 @@ fader.addEventListener('blur', () => { clearTimeout(keyTimer); letGo(); });
 
 // --- render loop ------------------------------------------------------------
 const fmt = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.max(0, s) % 60)).padStart(2, '0')}`;
+// Per-frame text writes only when the string changes: a write invalidates layout, and a few
+// dozen of them per frame would cost the main thread the audio engine also runs on.
+const textCache = new Map();
+function setText(sel, s) {
+  if (textCache.get(sel) === s) return;
+  textCache.set(sel, s);
+  const el = typeof sel === 'string' ? $(sel) : sel;
+  if (el) el.textContent = s;
+}
+const shown = new Map();
+function show(sel, on) {
+  if (shown.get(sel) === on) return;
+  shown.set(sel, on);
+  $(sel).hidden = !on;
+}
+function setRole(i, text, cls) {
+  const el = $(`#deck${i} .role`);
+  const k = `${text}|${cls}`;
+  if (el.dataset.k === k) return;
+  el.dataset.k = k;
+  el.textContent = text;
+  el.className = `role ${cls}`;
+}
 
-function frame() {
-  const t = now();
+const lanes = [0, 1].map((i) => new Lane($(`#deck${i} canvas`), i));
+// Lane view offset (left edge - now), eased toward its target over ~the handover token
+// (600 ms) so the view pans after a mix instead of jumping. Reduced motion: it jumps.
+let viewOff = null, lastTs = 0;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+function frame(ts) {
+  const dt = Math.min(0.1, (ts - (lastTs || ts)) / 1000);
+  lastTs = ts;
+  if (M.ctx && live()) liveFrame(dt); else idleFrame();
+  requestAnimationFrame(frame);
+}
+
+/** Before Play: lane A shows the opener at its start (or resume) point, static. */
+function idleFrame() {
+  const info = O.info;
+  const startAt = O.at ?? (info ? S.firstOffset(info) : 0);
+  const view = { now: 0, left: laneLeft(0) };
+  lanes[0].setInfo(info);
+  lanes[0].draw({ zero: -startAt, startAt: null }, view, null, info ? { end: info.duration_rendered } : {});
+  lanes[1].setInfo(null);
+  lanes[1].draw({ zero: 0, startAt: null }, view, null, {}, true);
+}
+
+function liveFrame(dt) {
+  const t = now(), p = M.plan;
   // ON AIR moves to the incoming halfway through a transition, when it's the louder one
   // (deck roles only swap at the very end, which looked like the old song hung on).
-  const onAir = M.plan && t >= M.plan.T0 + M.plan.length / 2 ? M.plan.inDeck : M.cur;
+  const onAir = p && t >= p.T0 + p.length / 2 ? p.inDeck : M.cur;
+  const anchor = p ?? (M.lastPlan && t < M.lastPlan.end + 2 ? M.lastPlan : null);
+  const target = laneLeft(t, anchor?.T0 ?? null) - t;
+  viewOff = viewOff == null || reduceMotion.matches ? target : viewOff + (target - viewOff) * (1 - Math.exp(-dt / 0.15));
+  const view = { now: t, left: t + viewOff };
+  const mixing = p && t >= p.T0;
+  const label = p ? FX_LABEL[p.kind] ?? p.kind : '';
+  const inc = p ? M.decks[p.inDeck] : null;
   M.decks.forEach((d, i) => {
-    d.draw(t);
-    d.root.classList.toggle('on-air', i === onAir && d.started(t));
-    d.root.querySelector('.time').textContent = d.info ? `${fmt(d.pos(t))} / ${fmt(d.info.duration_rendered)}` : '';
+    const started = d.started(t);
+    let role = ['', ''];
+    if (!d.info) role = ['empty', ''];
+    else if (i === onAir && started) role = ['on air', 'on-air'];
+    else if (p && i === p.inDeck) role = [isBeatmatched(p.kind) ? `cued · matched to ${'AB'[1 - i]}` : 'cued', ''];
+    else if (p && started && mixing) role = ['fading out', ''];
+    else if (!d.busy) role = ['played', ''];
+    setRole(i, ...role);
+    $(`#deck${i}`).classList.toggle('empty', !d.busy);
+    const pos = d.info ? Math.max(0, d.pos(t)) : 0;
+    setText(`#deck${i} .time`, d.info ? `${fmt(pos)} / ${fmt(d.info.duration_rendered)}` : '');
+    if (d.info) $(`#deck${i} .overview .pos`).style.transform = `translateX(${(Math.min(0.995, pos / d.info.duration_rendered) * 100).toFixed(2)}%)`;
+    lanes[i].setInfo(d.info);
+    const mix = p ? { plan: p, inDeck: p.inDeck, bar: p.bar, live: mixing,
+      label: mixTag(p.kind, label, p.length, p.bar, mixing),
+      bassTo: p.kind === 'bass_swap' ? { time: S.bassMid(p.T0, p.length, p.bar), letter: 'AB'[p.inDeck] } : null } : null;
+    const marks = p && i !== p.inDeck ? { end: p.end - d.zero } : p ? { start: p.inOffset } : {};
+    lanes[i].draw({ zero: d.zero, startAt: d.busy ? d.startAt : null, endAt: d.endAt }, view, mix, marks, i === 1);
   });
   // The fader animates from the same progress the gain curves use.
-  if (!M.manual && M.plan) {
-    const p = S.faderAt(M.plan, t);
-    fader.value = Math.round((M.plan.inDeck === 1 ? p : 1 - p) * 1000);
-    if (t < M.plan.T0) status(`Next: ${M.plan.res.in_deck.title} in ${fmt(M.plan.T0 - t)}`);
-    else status(`Mixing into ${M.plan.res.in_deck.title} (${FX_LABEL[M.plan.kind] ?? M.plan.kind})`);
+  if (!M.manual && p) {
+    const f = S.faderAt(p, t);
+    fader.value = Math.round((p.inDeck === 1 ? f : 1 - f) * 1000);
   }
+  setText('#xf-tag', M.manual ? 'MANUAL' : 'AUTO');
+  $('#xf-tag').classList.toggle('manual', M.manual);
+  show('#xf-manual', M.manual);
+  updateSign(t, p, mixing, inc, onAir, label);
   updateFx(t);
   saveResume(t);
-  requestAnimationFrame(frame);
+}
+
+/** The ON AIR sign: what's next and when, the running mix, or the end of the queue. */
+function updateSign(t, p, mixing, inc, onAir, label) {
+  const s = getState(), cur = M.decks[M.cur].info, airInfo = M.decks[onAir]?.info ?? cur;
+  const rating = M.rate && Date.now() < M.rate.until && !(p && t >= p.T0 - 12);
+  if (M.rate && !rating && Date.now() >= M.rate.until) M.rate = null;
+  const pairs = s?.pairs ?? {};
+  let side = null;
+  if (M.manual) {
+    setText('#sign-kicker', "You're mixing");
+    setText('#sign-title', airInfo?.title ?? '—');
+    setText('#sign-sub', 'Auto paused for this mix · let go and the nearer deck takes over');
+  } else if (p && !mixing) {
+    const loved = pairs[`${cur?.id}>${p.res.in_deck.id}`] === 'loved';
+    setKicker(loved ? 'loved' : 'next');
+    setText('#sign-title', p.res.in_deck.title);
+    setText('#sign-sub', `${p.res.in_deck.channel}  ·  ${label.toLowerCase()} out of ${cur?.title ?? ''}`);
+    setText('#countdown', fmt(p.T0 - t));
+    side = rating && p.T0 - t > 12 ? 'rate' : 'next';
+  } else if (p && mixing) {
+    setKicker('mixing');
+    setText('#sign-title', p.res.in_deck.title);
+    const after = s?.queue.find((q) => q.id !== p.res.in_deck.id && q.id !== cur?.id);
+    const outro = p.res.in_deck.sections_rendered?.at(-1);
+    setText('#sign-sub', [p.res.in_deck.channel, after ? `then ${after.title}${outro ? ` in ~${fmt(outro.start - p.inOffset)}` : ''}` : null]
+      .filter(Boolean).join('  ·  '));
+    const g = mixProgress(t, p.T0, p.length, p.bar);
+    setText('#mix-name', label);
+    setText('#mix-progress', g.bars ? `bar ${g.bar} of ${g.bars}  ·  ${fmt(g.left)} left` : `${fmt(g.left)} left`);
+    const bars = $('#mix-bars');
+    if (bars.childElementCount !== Math.min(g.bars, 16)) bars.replaceChildren(...Array.from({ length: Math.min(g.bars, 16) }, () => document.createElement('i')));
+    [...bars.children].forEach((b, k) => { b.className = k < g.bar - 1 ? 'done' : k === g.bar - 1 ? 'now' : ''; });
+    $('#mix-icon').setAttribute('href', `#i-${FX_ICON[p.kind] ?? 'blend'}`);
+    side = 'mix';
+  } else {
+    const rest = s?.queue.filter((q) => q.id !== cur?.id) ?? [];
+    if (!rest.length && !M.req?.loading && cur) {
+      setKicker('end');
+      setText('#sign-title', `${cur.title} is the last song`);
+      setText('#sign-sub', `${cur.channel}  ·  ${fmt(cur.duration_rendered - M.decks[M.cur].pos(t))} left  ·  then silence`);
+      if (shown.get('#side-help') !== true) {
+        const flavor = s?.flavors?.[0];
+        helpButtons([
+          ...(s?.lastfm && !s.party && flavor ? [['sparkles', `Turn on Party: ${flavor[0].toUpperCase()}${flavor.slice(1)}`, () => api('/api/party', 'POST', { flavor }).then(setState, report)]] : []),
+          ['sparkles', 'Build a mood', () => { toTab('vibe'); $('#genres .build')?.click(); }],
+          ['link', 'Add link', () => openAdd()]]);
+      }
+      side = rating ? 'rate' : 'help';
+    } else {
+      setKicker('now');
+      setText('#sign-title', cur?.title ?? '—');
+      setText('#sign-sub', cur?.channel ?? '');
+      side = rating ? 'rate' : null;
+    }
+  }
+  $('#sign').classList.toggle('mixing', side === 'mix');
+  show('#side-idle', false);
+  show('#side-next', side === 'next');
+  show('#side-mix', side === 'mix');
+  show('#side-rate', side === 'rate');
+  show('#side-help', side === 'help');
+  show('.sign-side', side !== null);
+  if (side === 'rate') {
+    setText('#rate-pair', M.rate.title);
+    $('#rate-timer').style.setProperty('--left', String(Math.max(0, (M.rate.until - Date.now()) / RATE_MS)));
+  }
+  // Phone: the THEN line and the now bar on the other tabs.
+  const nextIn = p?.res.in_deck;
+  const then = nextIn && s?.queue.find((q) => q.id !== nextIn.id && q.id !== cur?.id);
+  show('#then', !!then);
+  if (then) {
+    setText('#then b', `${then.title} — ${then.channel}`);
+    show('#then .badge', mixesWith(nextIn.bpm_playing, then.bpm));
+  }
+  setText('#nb-title', airInfo?.title ?? '—');
+  setText('#nb-sub', p ? (mixing ? `Mixing into ${p.res.in_deck.title}` : `${p.res.in_deck.title} in ${fmt(p.T0 - t)}`) : '');
+  const canMix = !!M.decks[M.cur]?.started(t) && !M.manual && !(p && t >= p.T0 - S.REPLAN_MARGIN);
+  if ($('#mixnow').disabled === canMix) { $('#mixnow').disabled = !canMix; $('#nb-mix').disabled = !canMix; }
+}
+
+function setKicker(kind) {
+  if (textCache.get('kicker') === kind) return;
+  textCache.set('kicker', kind);
+  const k = $('#sign-kicker');
+  textCache.delete('#sign-kicker');
+  k.className = `kicker${kind === 'mixing' ? ' live' : ''}`;
+  if (kind === 'loved') {
+    const l = document.createElement('span');
+    l.className = 'loved';
+    l.append(icon('flame'), 'a pair you loved');
+    k.replaceChildren('Next mix ', l);
+  } else k.textContent = { next: 'Next mix', mixing: 'Mixing into', end: 'End of queue', now: 'Now playing' }[kind];
 }
 
 // --- live FX: filter knob + echo throw ----------------------------------------
@@ -374,9 +676,11 @@ function liveFx(ctx, input) {
 }
 const filterKnob = $('#live-filter');
 filterKnob.addEventListener('input', () => {
+  const x = filterKnob.valueAsNumber / 100;
+  filterKnob.setAttribute('aria-valuetext', x === 0 ? 'off' : x < 0 ? `lowpass ${Math.round(-x * 100)}%` : `highpass ${Math.round(x * 100)}%`);
   if (!M.live) return;
   // One knob, DJ-mixer style: left of centre = lowpass closing, right = highpass opening.
-  const x = filterKnob.valueAsNumber / 100, t = now();
+  const t = now();
   const lp = x < 0 ? S.LP_IDLE * (200 / S.LP_IDLE) ** -x : S.LP_IDLE;
   const hp = x > 0 ? S.HP_IDLE * (4000 / S.HP_IDLE) ** x : S.HP_IDLE;
   M.live.lp.frequency.setTargetAtTime(lp, t, 0.02);
@@ -396,36 +700,115 @@ throwBtn.addEventListener('pointerdown', () => echoOn(true));
 for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) throwBtn.addEventListener(ev, () => echoOn(false));
 throwBtn.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); echoOn(true); } });
 throwBtn.addEventListener('keyup', () => echoOn(false));
+throwBtn.addEventListener('contextmenu', (e) => e.preventDefault()); // long-press on a phone
 
-// --- effect dropdown --------------------------------------------------------
-const fx = $('#fx');
-/** Show the next mix's effect; rebuilt only when the plan changes (not every frame). */
+// --- effect picker --------------------------------------------------------------
+// A listbox, not a <select>: it lists only the effects the server says work for this pair
+// (res.options), with icons. Server-held choice (/api/next_effect), shared with the MCP DJ.
+const fxBtn = $('#fx-btn'), fxList = $('#fx-list');
+let fxActive = 0;
+/** Rebuilt only when the plan changes (not every frame) and never while open. */
 function updateFx(t) {
   const p = M.plan;
-  $('#fx-wrap').hidden = !p || M.manual || t >= p.T0 - S.REPLAN_MARGIN; // too late to change it
-  if (!p || p === M.fxPlan || document.activeElement === fx) return;
+  const locked = p && t >= p.T0 - S.REPLAN_MARGIN; // too late to change it
+  show('#fx-btn', !!p && !locked && !M.manual);
+  show('#fx-locked', !!p && locked && t < p.T0);
+  if (p && locked) setText('#fx-locked span', `${FX_LABEL[p.kind] ?? p.kind} · locked`);
+  if (locked && !fxList.hidden) closeFx(false);
+  if (!p || p === M.fxPlan || !fxList.hidden) return;
   M.fxPlan = p;
   const opts = p.res.options ?? [];
-  fx.replaceChildren(
-    new Option(`Auto (${FX_LABEL[p.kind] ?? p.kind})`, ''),
-    ...opts.map((k) => new Option(FX_LABEL[k], k)));
-  fx.value = M.force && opts.includes(M.force) ? M.force : '';
+  const cur = M.force && opts.includes(M.force) ? M.force : '';
+  const auto = `Auto · ${FX_LABEL[p.kind] ?? p.kind}`;
+  setText('#fx-label', cur ? FX_LABEL[cur] : auto);
+  $('#fx-icon').setAttribute('href', `#i-${cur ? FX_ICON[cur] : 'sparkles'}`);
+  fxList.replaceChildren(...[['', auto], ...opts.map((k) => [k, FX_LABEL[k] ?? k])].map(([k, text], i) => {
+    const li = document.createElement('li');
+    li.id = `fx-opt-${i}`;
+    li.setAttribute('role', 'option');
+    li.dataset.k = k;
+    li.setAttribute('aria-selected', String(k === cur));
+    li.append(icon(k ? FX_ICON[k] ?? 'blend' : 'sparkles'), text);
+    if (k === cur) li.append(icon('check', 'check'));
+    li.onclick = () => chooseFx(k);
+    return li;
+  }));
 }
-fx.addEventListener('change', () => {
+function openFx() {
+  fxList.hidden = false;
+  fxBtn.setAttribute('aria-expanded', 'true');
+  fxActive = Math.max(0, [...fxList.children].findIndex((li) => li.getAttribute('aria-selected') === 'true'));
+  markFx();
+  fxList.focus({ preventScroll: true });
+}
+function closeFx(refocus = true) {
+  fxList.hidden = true;
+  fxBtn.setAttribute('aria-expanded', 'false');
+  M.fxPlan = null; // rebuild with the latest options now it's closed
+  if (refocus) fxBtn.focus();
+}
+function markFx() {
+  [...fxList.children].forEach((li, i) => li.classList.toggle('active', i === fxActive));
+  fxList.setAttribute('aria-activedescendant', `fx-opt-${fxActive}`);
+}
+function chooseFx(k) {
+  closeFx();
   if (!M.plan || !S.canReplan(now(), M.plan.T0)) { status('Too late to change this mix.'); return; }
   // Stored on the server (shared with the MCP DJ); onState sees the change and replans.
-  api('/api/next_effect', 'POST', { effect: fx.value || null }).then(setState).catch((e) => status(e.message));
+  api('/api/next_effect', 'POST', { effect: k || null }).then(setState).catch((e) => status(e.message));
+}
+fxBtn.addEventListener('click', () => (fxList.hidden ? openFx() : closeFx()));
+fxList.addEventListener('keydown', (e) => {
+  const n = fxList.children.length;
+  if (e.key === 'ArrowDown') fxActive = (fxActive + 1) % n;
+  else if (e.key === 'ArrowUp') fxActive = (fxActive - 1 + n) % n;
+  else if (e.key === 'Home') fxActive = 0;
+  else if (e.key === 'End') fxActive = n - 1;
+  else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseFx(fxList.children[fxActive].dataset.k); return; }
+  else if (e.key === 'Escape' || e.key === 'Tab') { closeFx(e.key === 'Escape'); return; }
+  else return;
+  e.preventDefault();
+  markFx();
 });
+document.addEventListener('pointerdown', (e) => { if (!fxList.hidden && !e.target.closest('.fx-wrap')) closeFx(false); });
 
+// --- rating the last hand-over ---------------------------------------------------
+async function rate(verdict) {
+  const r = M.rate;
+  M.rate = null;
+  if (!r) return;
+  try { setState(await api('/api/pair', 'POST', { from: r.from, to: r.to, verdict })); } catch (e) { report(e); }
+}
+$('#rate-love').addEventListener('click', () => rate('loved'));
+$('#rate-avoid').addEventListener('click', () => rate('avoided'));
+
+// --- wiring -------------------------------------------------------------------------
+function openAdd() { $('#add-btn').click(); }
+function focusSearch() { toTab('search'); $('#q').focus(); }
 $('#play').addEventListener('click', play);
 $('#mixnow').addEventListener('click', mixNow);
+$('#nb-mix').addEventListener('click', mixNow);
 $('#b2b').addEventListener('click', async () => {
-  const on = $('#b2b').getAttribute('aria-pressed') !== 'true';
-  try { setState(await api('/api/mode', 'POST', { beat_to_beat: on })); } catch (e) { $('#msg').textContent = e.message; }
+  const on = $('#b2b').getAttribute('aria-checked') !== 'true';
+  try { setState(await api('/api/mode', 'POST', { beat_to_beat: on })); } catch (e) { report(e); }
 });
-initUi(onState);
-{
-  const r = savedResume();
-  if (r) $('#play').textContent = `▶ Resume ${r.title.length > 28 ? `${r.title.slice(0, 27)}…` : r.title} at ${fmt(r.pos)}`;
-}
+$('#choose-btn').addEventListener('click', () => { const f = $('#op-find'); f.scrollIntoView({ block: 'center' }); f.focus(); });
+$('#alt-btn').addEventListener('click', () => {
+  if (O.resume) { O.at = O.at != null ? null : Math.max(0, O.resume.pos - 1); renderIdle(); return; }
+  // Next song in Up next after the current opener (wraps around).
+  const q = getState()?.queue ?? [];
+  const i = q.findIndex((x) => x.id === O.id);
+  if (q.length > 1) loadOpener(q[(i + 1) % q.length], null, true);
+});
+document.addEventListener('keydown', (e) => {
+  const typing = e.target.closest?.('input, select, textarea, button, [role="listbox"], [contenteditable]');
+  // Space plays (before the first song), "/" jumps to search: the design's keyboard hints.
+  if (e.key === ' ' && !typing && document.body.classList.contains('idle') && O.id) { e.preventDefault(); play(); }
+  if (e.key === '/' && !e.target.closest?.('input, textarea, select')) { e.preventDefault(); focusSearch(); }
+});
+initUi(onState, {
+  loadOpener: (song) => { if (!live()) loadOpener(song, null, true); },
+  isLive: live,
+});
+requestAnimationFrame(frame);
 poll();

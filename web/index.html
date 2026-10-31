@@ -2,124 +2,340 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0D0C10">
   <title>autodeck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&family=IBM+Plex+Mono:wght@400;500;700&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:,">
 </head>
-<body>
-  <header>
-    <h1>autodeck</h1>
-    <button id="play" type="button">▶ Play</button>
-    <button id="mixnow" type="button">Mix now</button>
+<!-- body classes (set by app.js / ui.js): idle = nothing has played yet (PLAY lamp, "Or start
+     with"); live = the mixer runs; offline = the server is unreachable. data-tab = the phone tab. -->
+<body class="idle" data-tab="now">
+  <!-- Icons: Lucide (ISC licence), the set the design uses. One inline sprite, <use href="#i-name">. -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-arrow-down-to-line" viewBox="0 0 24 24"><path d="M12 17V3"/> <path d="m6 11 6 6 6-6"/> <path d="M19 21H5"/></symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14"/> <path d="m19 12-7 7-7-7"/></symbol>
+    <symbol id="i-arrow-left-right" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4"/> <path d="M4 7h16"/> <path d="m16 21 4-4-4-4"/> <path d="M20 17H4"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/> <path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/> <path d="M12 19V5"/></symbol>
+    <symbol id="i-audio-lines" viewBox="0 0 24 24"><path d="M2 10v3"/> <path d="M6 6v11"/> <path d="M10 3v18"/> <path d="M14 8v7"/> <path d="M18 5v13"/> <path d="M22 10v3"/></symbol>
+    <symbol id="i-audio-waveform" viewBox="0 0 24 24"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <path d="m4.9 4.9 14.2 14.2"/></symbol>
+    <symbol id="i-blend" viewBox="0 0 24 24"><circle cx="9" cy="9" r="7"/> <circle cx="15" cy="15" r="7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <line x1="12" x2="12" y1="8" y2="12"/> <line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
+    <symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-circle-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <path d="m15 9-6 6"/> <path d="m9 9 6 6"/></symbol>
+    <symbol id="i-clock-3" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <polyline points="12 6 12 12 16.5 12"/></symbol>
+    <symbol id="i-disc-3" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <path d="M6 12c0-1.7.7-3.2 1.8-4.2"/> <circle cx="12" cy="12" r="2"/> <path d="M18 12c0 1.7-.7 3.2-1.8 4.2"/></symbol>
+    <symbol id="i-ellipsis" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/> <circle cx="19" cy="12" r="1"/> <circle cx="5" cy="12" r="1"/></symbol>
+    <symbol id="i-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+    <symbol id="i-grip-vertical" viewBox="0 0 24 24"><circle cx="9" cy="12" r="1"/> <circle cx="9" cy="5" r="1"/> <circle cx="9" cy="19" r="1"/> <circle cx="15" cy="12" r="1"/> <circle cx="15" cy="5" r="1"/> <circle cx="15" cy="19" r="1"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/> <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/> <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/> <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/> <path d="M3 3v5h5"/> <path d="M12 7v5l4 2"/></symbol>
+    <symbol id="i-hourglass" viewBox="0 0 24 24"><path d="M5 22h14"/> <path d="M5 2h14"/> <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/> <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <path d="M12 16v-4"/> <path d="M12 8h.01"/></symbol>
+    <symbol id="i-key-round" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/> <circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/> <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+    <symbol id="i-list-music" viewBox="0 0 24 24"><path d="M21 15V6"/> <path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/> <path d="M12 12H3"/> <path d="M16 6H3"/> <path d="M12 18H3"/></symbol>
+    <symbol id="i-list-start" viewBox="0 0 24 24"><path d="M16 12H3"/> <path d="M16 18H3"/> <path d="M10 6H3"/> <path d="M21 18V8a2 2 0 0 0-2-2h-5"/> <path d="m16 8-2-2 2-2"/></symbol>
+    <symbol id="i-loader" viewBox="0 0 24 24"><path d="M12 2v4"/> <path d="m16.2 7.8 2.9-2.9"/> <path d="M18 12h4"/> <path d="m16.2 16.2 2.9 2.9"/> <path d="M12 18v4"/> <path d="m4.9 19.1 2.9-2.9"/> <path d="M2 12h4"/> <path d="m4.9 4.9 2.9 2.9"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/> <path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5"/> <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/> <path d="M12 5v14"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/> <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/> <circle cx="12" cy="12" r="2"/> <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/> <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></symbol>
+    <symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/> <path d="M21 3v5h-5"/> <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/> <path d="M8 16H3v5"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/> <path d="M3 11v-1a4 4 0 0 1 4-4h14"/> <path d="m7 22-4-4 4-4"/> <path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+    <symbol id="i-rotate-ccw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/> <path d="M3 3v5h5"/></symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/> <path d="M8.12 8.12 12 12"/> <path d="M20 4 8.12 15.88"/> <circle cx="6" cy="18" r="3"/> <path d="M14.8 14.8 20 20"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/> <path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-skip-forward" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/> <line x1="19" x2="19" y1="5" y2="19"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/> <path d="M20 3v4"/> <path d="M22 5h-4"/> <path d="M4 17v2"/> <path d="M5 18H3"/></symbol>
+    <symbol id="i-thumbs-down" viewBox="0 0 24 24"><path d="M17 14V2"/> <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></symbol>
+    <symbol id="i-trending-up" viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/> <polyline points="16 7 22 7 22 13"/></symbol>
+    <symbol id="i-waves" viewBox="0 0 24 24"><path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/> <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/> <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/></symbol>
+    <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M12 20h.01"/> <path d="M8.5 16.429a5 5 0 0 1 7 0"/> <path d="M5 12.859a10 10 0 0 1 5.17-2.69"/> <path d="M19 12.859a10 10 0 0 0-2.007-1.523"/> <path d="M2 8.82a15 15 0 0 1 4.177-2.643"/> <path d="M22 8.82a15 15 0 0 0-11.288-3.764"/> <path d="m2 2 20 20"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/> <path d="m6 6 12 12"/></symbol>
+  </svg>
+  <div class="app">
+  <!-- Transport. On a phone this header is display:contents and its controls are laid out
+       inside the Now tab (style.css), so desktop and phone share one set of controls. -->
+  <header class="transport">
+    <h1 class="logo">AUTODECK</h1>
+    <span id="offline" class="chip-status working" hidden><svg class="i"><use href="#i-wifi-off"/></svg>Reconnecting…</span>
+    <button id="mixnow" type="button" class="btn primary needs-server" disabled
+            title="Mix into the next song at the next phrase"><svg class="i"><use href="#i-skip-forward"/></svg>Mix now</button>
     <!-- Beat to beat: blends skip the outgoing outro and the incoming intro (main part into main part). -->
-    <button id="b2b" type="button" class="genre" aria-pressed="false"
-            title="Skip outros and intros: blend from the main beat of one song straight into the next">Beat to beat</button>
-    <p id="status" role="status" aria-live="polite">Press Play to start.</p>
-    <!-- The upcoming transition's effect: shows the app's pick, lets the owner force another.
-         Only effects that work for this pair are listed (server "options"). -->
-    <span class="live" role="group" aria-label="Live effects">
+    <button id="b2b" type="button" class="btn raised switch-btn" role="switch" aria-checked="false"
+            title="Skip outros and intros: blend from the main beat of one song straight into the next">
+      <svg class="i"><use href="#i-audio-lines"/></svg>Beat to beat<span class="switch" aria-hidden="true"></span></button>
+    <!-- Search: library matches first (instant, local), then YouTube. "Play next" preps the song
+         ahead of everything and queues it next once it's ready (POST /api/request). -->
+    <form id="search-form" class="search" role="search">
+      <svg class="i"><use href="#i-search"/></svg>
+      <label for="q" class="sr-only">Search your library or YouTube</label>
+      <input id="q" type="search" placeholder="Search your library or YouTube" autocomplete="off" enterkeyhint="search">
+      <kbd aria-hidden="true">/</kbd>
+      <button id="search-cancel" type="button" class="link-btn phone-only">Cancel</button>
+    </form>
+    <div class="live-fx" role="group" aria-label="Live effects">
       <label for="live-filter" title="Left: lowpass, right: highpass. Double-click to reset.">Filter</label>
-      <input id="live-filter" type="range" min="-100" max="100" value="0">
-      <button id="live-echo" type="button" class="genre" aria-pressed="false" title="Hold for an echo throw">Echo</button>
-    </span>
-    <label id="fx-wrap" class="fx" hidden>Effect
-      <select id="fx" title="Transition effect for the next mix"></select>
-    </label>
-    <p id="msg" role="alert"></p>
+      <input id="live-filter" type="range" min="-100" max="100" value="0" disabled
+             aria-valuetext="off" title="Left: lowpass, right: highpass. Double-click to reset.">
+    </div>
+    <button id="live-echo" type="button" class="btn" aria-pressed="false" disabled title="Hold for an echo throw">
+      <svg class="i"><use href="#i-radio"/></svg><span class="desk-only">Hold for echo</span><span class="phone-only">Hold: echo</span></button>
+    <button id="add-btn" type="button" class="btn needs-server desk-only" aria-expanded="false" aria-controls="add-pop">
+      <svg class="i"><use href="#i-link"/></svg>Add link</button>
+    <button id="menu-btn" type="button" class="icon-btn phone-only" aria-expanded="false" aria-controls="add-pop"
+            aria-label="Add a link"><svg class="i"><use href="#i-ellipsis"/></svg></button>
+    <!-- Add by URL. Dropping or pasting a link anywhere on the page adds it too. -->
+    <div id="add-pop" class="pop" hidden>
+      <form id="add-form">
+        <label for="url">Paste a YouTube song or playlist link</label>
+        <div class="row-fields">
+          <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+          <button type="submit" class="btn primary needs-server">Add</button>
+        </div>
+        <label for="import-genre" class="inline-label">Import as
+          <select id="import-genre"><option value="">auto-detect</option></select></label>
+      </form>
+      <p id="add-msg" class="msg" role="status" aria-live="polite"></p>
+      <p class="tip">Tip: your Liked Music is music.youtube.com/playlist?list=LM · or drop a link anywhere</p>
+    </div>
   </header>
 
-  <p id="notice" class="notice" role="status" hidden></p>
+  <!-- Phone: what's on air while another tab is open. -->
+  <div id="nowbar" class="nowbar">
+    <span class="lamp-mini" aria-hidden="true">ON</span>
+    <p class="nb-text"><b id="nb-title">—</b><span id="nb-sub"></span></p>
+    <button id="nb-mix" type="button" class="icon-btn primary needs-server" aria-label="Mix now" disabled>
+      <svg class="i"><use href="#i-skip-forward"/></svg></button>
+  </div>
 
-  <!-- Layout B: Deck A | crossfader | Deck B -->
-  <section class="mixer" aria-label="Decks">
-    <article class="deck" id="deck0" aria-label="Deck A">
-      <h2>A <span class="time"></span></h2>
-      <p class="title">—</p><p class="artist"></p>
-      <p class="meta"><span class="genre"></span> <span class="bpm"></span> <span class="key"></span></p>
-      <canvas aria-hidden="true"></canvas>
+  <div class="notices">
+    <p id="notice" class="banner notice" role="status" hidden><svg class="i"><use href="#i-info"/></svg><span></span></p>
+    <p id="msg" class="banner failed" role="alert" hidden><svg class="i"><use href="#i-circle-alert"/></svg><span></span></p>
+  </div>
+
+  <!-- The ON AIR sign: the one red thing on screen. Before anything plays the lamp is the PLAY
+       button; while playing it names the next mix, counts down, and holds the effect picker. -->
+  <section id="sign" class="sign" aria-label="On air">
+    <button id="play" type="button" class="lamp" aria-describedby="sign-title">
+      <span class="lamp-play"><svg class="tri" viewBox="0 0 40 46" aria-hidden="true"><path d="M0 0 40 23 0 46Z"/></svg>
+        <b>PLAY</b><small>GOES ON AIR</small></span>
+      <span class="lamp-on" aria-hidden="true"><b>ON</b><b>AIR</b></span>
+    </button>
+    <div class="sign-text">
+      <p id="sign-kicker" class="kicker"></p>
+      <h2 id="sign-title" class="sign-title">—</h2>
+      <p id="sign-sub" class="sign-sub"></p>
+      <p id="status" class="sign-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="sign-side">
+      <!-- idle -->
+      <div id="side-idle" class="side-idle">
+        <button id="choose-btn" type="button" class="btn"><svg class="i"><use href="#i-list-music"/></svg>Choose another song</button>
+        <button id="alt-btn" type="button" class="btn"></button>
+        <small class="hint">Space plays</small>
+      </div>
+      <!-- empty library / end of queue -->
+      <div id="side-help" class="side-help" hidden></div>
+      <!-- planned: countdown + effect picker -->
+      <div id="side-next" class="side-next" hidden>
+        <p class="countdown"><span>in</span><b id="countdown">0:00</b></p>
+        <div class="fx-wrap">
+          <button id="fx-btn" type="button" class="btn raised" aria-haspopup="listbox" aria-expanded="false"
+                  aria-controls="fx-list" title="Transition effect for the next mix">
+            <svg class="i"><use id="fx-icon" href="#i-sparkles"/></svg><span id="fx-label">Auto</span>
+            <svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+          <p id="fx-locked" class="fx-locked" hidden><svg class="i"><use href="#i-lock"/></svg><span></span></p>
+          <ul id="fx-list" class="pop listbox" role="listbox" aria-label="Transition effect" tabindex="-1" hidden></ul>
+        </div>
+      </div>
+      <!-- mixing: effect + bar progress -->
+      <div id="side-mix" class="side-mix" hidden>
+        <p class="mix-name"><svg class="i"><use id="mix-icon" href="#i-blend"/></svg><span id="mix-name"></span></p>
+        <div id="mix-bars" class="mix-bars" aria-hidden="true"></div>
+        <p id="mix-progress" class="mono dim"></p>
+      </div>
+      <!-- right after a mix: one optional question -->
+      <div id="side-rate" class="side-rate" hidden>
+        <p class="rate-q">How was that mix?</p>
+        <p id="rate-pair" class="dim small"></p>
+        <div class="rate-btns">
+          <button id="rate-love" type="button" class="btn loved"><svg class="i"><use href="#i-flame"/></svg>Nailed it</button>
+          <button id="rate-avoid" type="button" class="btn raised"><svg class="i"><use href="#i-thumbs-down"/></svg>Didn't work</button>
+        </div>
+        <span id="rate-timer" class="rate-timer" aria-hidden="true"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Two lanes on one time axis (lanes.js draws the canvases) + the vertical crossfader. -->
+  <section class="timeline" aria-label="Decks">
+    <article class="lane" id="deck0" aria-label="Deck A">
+      <div class="lane-meta">
+        <p class="meta-top"><span class="letter a" aria-hidden="true">A</span><span class="role"></span><span class="time mono"></span></p>
+        <p class="title">—</p>
+        <p class="artist"></p>
+        <p class="metaline mono"></p>
+        <div class="overview" aria-hidden="true"><i class="pos"></i></div>
+      </div>
+      <div class="lane-wave"><canvas aria-hidden="true"></canvas></div>
+    </article>
+    <article class="lane" id="deck1" aria-label="Deck B">
+      <div class="lane-meta">
+        <p class="meta-top"><span class="letter b" aria-hidden="true">B</span><span class="role"></span><span class="time mono"></span></p>
+        <p class="title">—</p>
+        <p class="artist"></p>
+        <p class="metaline mono"></p>
+        <div class="overview" aria-hidden="true"><i class="pos"></i></div>
+      </div>
+      <div class="lane-wave"><canvas aria-hidden="true"></canvas>
+        <p id="lane-note" class="lane-note" hidden><svg class="i"><use href="#i-clock-3"/></svg><span></span></p></div>
     </article>
     <div class="xf">
-      <label for="xfader">Crossfader</label>
-      <input id="xfader" type="range" min="0" max="1000" value="0">
-      <span class="xf-ends" aria-hidden="true"><span>A</span><span>B</span></span>
-    </div>
-    <article class="deck" id="deck1" aria-label="Deck B">
-      <h2>B <span class="time"></span></h2>
-      <p class="title">—</p><p class="artist"></p>
-      <p class="meta"><span class="genre"></span> <span class="bpm"></span> <span class="key"></span></p>
-      <canvas aria-hidden="true"></canvas>
-    </article>
-  </section>
-
-  <nav id="genres" class="genres" aria-label="Genre"></nav>
-
-  <!-- Moods: defined here by the owner. A theme ("Balkan party") is turned into a song set from
-       the songs that appear across popular public playlists; its button then sits with the genres. -->
-  <section class="moods" aria-labelledby="mood-h">
-    <form id="mood-form" class="genres">
-      <h2 id="mood-h" class="inline">Mood</h2>
-      <label for="mood-theme" class="sr-only">New mood</label>
-      <input id="mood-theme" placeholder="Balkan party, Greek taverna, 90s eurodance…" autocomplete="off">
-      <button type="submit">Build</button>
-      <span id="mood-list"></span>
-    </form>
-    <p id="mood-msg" class="dim" role="status" aria-live="polite"></p>
-  </section>
-
-  <!-- Party mode: a flavor replaces the genre filter (library songs that fit, crowd-pleasers
-       first, energy building); suggestions are songs you don't have, accept or reject. -->
-  <section class="party" aria-labelledby="party-h">
-    <div class="genres" role="group" aria-labelledby="party-h">
-      <h2 id="party-h" class="inline">Party</h2>
-      <span id="party-btns"></span>
-    </div>
-    <div id="sugg-wrap" hidden>
-      <h3>Suggestions <button id="sugg-refresh" type="button" title="Refresh suggestions" aria-label="Refresh suggestions">↻</button></h3>
-      <p id="sugg-msg" class="dim" role="status" aria-live="polite"></p>
-      <ul id="sugg" class="list"></ul>
+      <p id="xf-manual" class="xf-manual" hidden><svg class="i"><use href="#i-hand"/></svg>You're mixing · auto paused for this mix</p>
+      <span class="end a" aria-hidden="true">A</span>
+      <label for="xfader" class="sr-only">Crossfader, A to B</label>
+      <input id="xfader" type="range" min="0" max="1000" value="0" disabled>
+      <span class="end b" aria-hidden="true">B</span>
+      <span id="xf-tag" class="tag">READY</span>
     </div>
   </section>
 
-  <!-- Search: library matches first (instant, local), then YouTube. "Play next" preps the song
-       ahead of everything and queues it next once it's ready (POST /api/request). -->
-  <section aria-labelledby="search-h" class="search">
-    <h2 id="search-h">Search</h2>
-    <form id="search-form" role="search">
-      <label for="q" class="sr-only">Song or artist</label>
-      <input id="q" type="search" placeholder="Song or artist…" autocomplete="off">
-      <button type="submit">Search</button>
-    </form>
-    <p id="search-msg" class="dim" role="status" aria-live="polite"></p>
-    <ul id="results" class="list"></ul>
-  </section>
+  <!-- Phone Now tab: what comes after the incoming song. -->
+  <p id="then" class="then phone-only" hidden><span class="label">Then</span><b></b><span class="badge mixes" hidden><svg class="i"><use href="#i-check"/></svg>mixes</span></p>
 
-  <section aria-labelledby="queue-h">
-    <h2 id="queue-h">Up next</h2>
-    <ol id="queue" class="list"></ol>
-    <p id="queue-empty" class="dim">Nothing queued yet.</p>
-    <details id="history-box">
-      <summary>Played</summary>
-      <ol id="history" class="list"></ol>
-      <p id="history-empty" class="dim">Nothing played yet.</p>
-    </details>
-    <details>
-      <summary id="pool-summary">Library</summary>
-      <ul id="pool" class="list"></ul>
-    </details>
-  </section>
+  <div class="lower">
+    <!-- Before the first song: other openers. "Load in A" puts a song on the PLAY button. -->
+    <section id="openers" class="panel openers" aria-labelledby="openers-h">
+      <div class="panel-head">
+        <h2 id="openers-h" class="label">Or start with</h2>
+        <p class="hint desk-only">Load in A puts the song on the PLAY button</p>
+      </div>
+      <div class="filters">
+        <div class="seg-chips" role="group" aria-label="Show">
+          <button type="button" class="chip" data-op="good" aria-pressed="true">Good openers</button>
+          <button type="button" class="chip" data-op="loved" aria-pressed="false"><svg class="i"><use href="#i-flame"/></svg>Loved pairs</button>
+          <button type="button" class="chip" data-op="recent" aria-pressed="false">Recently added</button>
+        </div>
+        <label class="field small-field"><svg class="i"><use href="#i-search"/></svg><span class="sr-only">Find any song</span>
+          <input id="op-find" type="search" placeholder="Find any song" autocomplete="off"></label>
+      </div>
+      <ul id="op-list" class="list"></ul>
+      <p id="op-foot" class="foot"><svg class="i"><use href="#i-list-music"/></svg><span></span></p>
+    </section>
 
-  <section id="drop" class="drop" tabindex="0" aria-label="Add songs: drop or paste a YouTube link here">
-    <p>Drop or paste a YouTube song or playlist link here</p>
-    <form id="add-form">
-      <label for="url">URL</label>
-      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
-      <label for="import-genre">import as</label>
-      <select id="import-genre"><option value="">auto-detect</option></select>
-      <button type="submit">Add</button>
-    </form>
-    <p id="add-msg" role="status" aria-live="polite"></p>
-  </section>
+    <section id="upnext" class="panel upnext" aria-labelledby="queue-h">
+      <div class="panel-head">
+        <h2 id="queue-h" class="label">Up next</h2>
+        <p id="queue-count" class="mono dim2"></p>
+        <p class="hint desk-only">Auto-ordered by tempo, key and energy</p>
+      </div>
+      <div id="queue-progress" class="progress phone-only" aria-hidden="true"><i class="r"></i><i class="w"></i></div>
+      <ol id="requested" class="list"></ol>
+      <ol id="queue" class="list"></ol>
+      <p id="queue-empty" class="empty-note" hidden>Nothing queued yet.</p>
+      <p class="legend"><span><svg class="i"><use href="#i-lock"/></svg>Locked in: already planned</span>
+        <span><svg class="i"><use href="#i-pin"/></svg>Pinned: you moved it, auto-order leaves it</span>
+        <span><svg class="i"><use href="#i-grip-vertical"/></svg>Drag, or use ↑ ↓</span></p>
+    </section>
+
+    <div class="right">
+      <!-- Vibe: genres + moods (a theme turned into a song set from public playlists) + party. -->
+      <section id="vibe" class="panel vibe" aria-labelledby="vibe-h">
+        <h2 id="vibe-h" class="label">Vibe</h2>
+        <p class="label phone-only sub-label">Genre</p>
+        <div id="genres" class="chips" role="group" aria-label="Genre"></div>
+        <form id="mood-form" class="composer" hidden>
+          <div class="row-fields">
+            <label class="field"><svg class="i"><use href="#i-sparkles"/></svg>
+              <span class="sr-only">New mood</span>
+              <input id="mood-theme" placeholder="Balkan party, 90s eurodance…" autocomplete="off" enterkeyhint="go"
+                     aria-describedby="mood-err"></label>
+            <button id="mood-build" type="submit" class="btn primary" disabled><svg class="i"><use href="#i-sparkles"/></svg><span>Build</span></button>
+            <button id="mood-close" type="button" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+          </div>
+          <p id="mood-err" class="field-msg" role="alert"></p>
+          <p class="ideas"><span class="dim">Try</span>
+            <button type="button" class="chip tiny">Greek taverna</button>
+            <button type="button" class="chip tiny">90s eurodance</button>
+            <button type="button" class="chip tiny">Wedding slow dance</button></p>
+          <p class="label tiny-label">Enter builds · Esc closes · ~10 s</p>
+        </form>
+        <p class="label phone-only sub-label">Moods</p>
+        <div id="mood-list" class="chips" role="group" aria-label="Moods"></div>
+        <p id="mood-msg" class="report" role="status" aria-live="polite" hidden></p>
+        <div class="party-row">
+          <h3 id="party-h" class="label">Party</h3>
+          <div id="party-btns" class="segmented" role="group" aria-labelledby="party-h"></div>
+          <p id="party-hint" class="hint"></p>
+        </div>
+        <!-- Party mode: suggestions are songs you don't have, accept or reject. -->
+        <div id="sugg-wrap" hidden>
+          <div class="panel-head">
+            <h3 class="label">Suggestions</h3>
+            <button id="sugg-refresh" type="button" class="icon-btn" title="Refresh suggestions" aria-label="Refresh suggestions">
+              <svg class="i"><use href="#i-refresh-cw"/></svg></button>
+          </div>
+          <p id="sugg-msg" class="dim small" role="status" aria-live="polite"></p>
+          <ul id="sugg" class="list"></ul>
+        </div>
+      </section>
+
+      <section id="logs" class="panel logs" aria-label="Played, pairs and library">
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" id="tab-played" aria-controls="pane-played" aria-selected="true">Played</button>
+          <button type="button" role="tab" id="tab-pairs" aria-controls="pane-pairs" aria-selected="false" tabindex="-1">Pairs <span class="n"></span></button>
+          <button type="button" role="tab" id="tab-library" aria-controls="pane-library" aria-selected="false" tabindex="-1">Library <span class="n"></span></button>
+        </div>
+        <div id="pane-played" role="tabpanel" aria-labelledby="tab-played">
+          <ol id="history" class="list"></ol>
+          <div id="history-empty" class="empty-state" hidden>
+            <svg class="i"><use href="#i-history"/></svg>
+            <p class="t">Nothing played yet this session</p>
+            <p>Songs land here as they play. Rate each mix <svg class="i"><use href="#i-flame"/></svg> or
+              <svg class="i"><use href="#i-thumbs-down"/></svg> and autodeck remembers.</p>
+          </div>
+        </div>
+        <div id="pane-pairs" role="tabpanel" aria-labelledby="tab-pairs" hidden>
+          <div id="pair-filter" class="seg-chips" role="group" aria-label="Show"></div>
+          <ol id="pairs" class="list"></ol>
+          <p id="pairs-empty" class="empty-note" hidden>No rated mixes yet. Rate a hand-over in Played with 🔥 or 👎.</p>
+        </div>
+        <div id="pane-library" role="tabpanel" aria-labelledby="tab-library" hidden>
+          <div id="lib-filter" class="seg-chips" role="group" aria-label="Show"></div>
+          <ul id="pool" class="list"></ul>
+        </div>
+      </section>
+    </div>
+
+    <!-- Search results: a popover under the field on desktop, the Search tab on a phone. -->
+    <section id="search-panel" class="panel search-panel" aria-label="Search results" hidden>
+      <p id="search-msg" class="dim small" role="status" aria-live="polite"></p>
+      <h3 id="res-lib-h" class="label" hidden></h3>
+      <ul id="res-lib" class="list"></ul>
+      <h3 id="res-yt-h" class="label" hidden></h3>
+      <ul id="res-yt" class="list"></ul>
+    </section>
+  </div>
+  </div>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button type="button" data-tab="now" aria-current="page"><svg class="i"><use href="#i-disc-3"/></svg>Now</button>
+    <button type="button" data-tab="vibe"><svg class="i"><use href="#i-sparkles"/></svg>Vibe</button>
+    <button type="button" data-tab="queue"><svg class="i"><use href="#i-list-music"/></svg>Queue</button>
+    <button type="button" data-tab="search"><svg class="i"><use href="#i-search"/></svg>Search</button>
+  </nav>
+
+  <div id="drop-overlay" class="drop-overlay" hidden><p><svg class="i"><use href="#i-link"/></svg>Drop to add this link</p></div>
 
   <script type="module" src="app.js"></script>
 </body>
