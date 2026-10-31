@@ -79,8 +79,10 @@ Pick **Hits**, **Oldies** or **Latino** under *Party* (*Off* returns to the genr
 - Each suggestion shows its **BPM** (from Deezer's free API; `?` when Deezer doesn't know it) and
   a ✓ when it beat-matches the current song; those are listed first. Library songs also get a
   **danceability** score measured from the audio (shown in the queue), which party mode favors.
-- Needs a free Last.fm API key in `~/.config/autodeck/lastfm.env` as `LASTFM_API_KEY=...` (or the
-  env var). Without it party mode can't tell flavors apart and shows no suggestions.
+- Needs a free Last.fm API key (https://www.last.fm/api/account/create): paste it in **Settings**
+  (the gear in the header, or "…" on a phone), which checks it with Last.fm and stores it in the app's
+  data folder. The `LASTFM_API_KEY` env var and the old `~/.config/autodeck/lastfm.env` still work.
+  Without a key party mode can't tell flavors apart and shows no suggestions.
 
 ## Played log
 
