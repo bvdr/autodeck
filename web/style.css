@@ -563,3 +563,31 @@ body.live .openers, body:not(.live) .upnext { display: none; }
 }
 
 body.offline .needs-server { opacity: .45; pointer-events: none; }
+
+/* --- onboarding (web/onboard.js): the only screen while the library is empty --- */
+.onboard { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center;
+  padding: var(--s5); box-sizing: border-box; }
+body.onboarding .tabbar { display: none !important; }  /* nothing to switch to yet */
+.ob-card { width: min(620px, 100%); min-width: 0; display: grid; gap: var(--s4); padding: var(--s5); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r-lg); box-sizing: border-box; }
+.ob-h { margin: 0; font: 700 44px/1 var(--display); }
+.ob-lead { margin: 0; color: var(--text-2); }
+.ob-form { display: grid; gap: var(--s2); }
+.ob-form > label { font-weight: 600; }
+.ob-form .row-fields .field { flex: 1; }
+.ob-form .field input[type="url"] { border: 0; background: none; padding: 0; }  /* the .field draws the box */
+.ob-liked { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); margin-top: var(--s2); }
+.ob-progress { display: grid; gap: var(--s2); border-top: 1px solid var(--line); padding-top: var(--s4); }
+.ob-found { margin: 0; font-weight: 600; }
+.ob-progress .mono { margin: 0; }
+#ob-start { justify-self: start; max-width: 100%; }
+#ob-start span { overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 600px) {
+  .onboard { padding: var(--s3); place-items: start stretch; }
+  .ob-card { padding: var(--s4); }
+  .ob-h { font-size: 34px; }
+  .ob-form .row-fields { flex-direction: column; align-items: stretch; }
+  .ob-form .row-fields .btn, #ob-start { justify-content: center; }
+  .inline-label { flex-wrap: wrap; }
+  #ob-start { justify-self: stretch; }
+}

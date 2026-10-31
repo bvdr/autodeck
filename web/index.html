@@ -65,6 +65,41 @@
     <symbol id="i-external-link" viewBox="0 0 24 24"><path d="M15 3h6v6"/> <path d="M10 14 21 3"/> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
   </svg>
+  <!-- Onboarding (web/onboard.js): the only screen while the library is empty. -->
+  <main id="onboard" class="onboard" hidden aria-labelledby="ob-h">
+    <div class="ob-card">
+      <p class="label">AUTODECK</p>
+      <h1 id="ob-h" class="ob-h">Start from a playlist</h1>
+      <p class="ob-lead">autodeck mixes the songs you give it. Add a YouTube or YouTube Music playlist and it gets the first ones ready to play.</p>
+      <form id="ob-form" class="ob-form" novalidate>
+        <label for="ob-url">Paste a YouTube or YouTube Music playlist link</label>
+        <div class="row-fields">
+          <div class="field"><svg class="i"><use href="#i-link"/></svg>
+            <input id="ob-url" type="url" autocomplete="off" spellcheck="false"
+                   placeholder="https://www.youtube.com/playlist?list=…" aria-describedby="ob-err"></div>
+          <button type="submit" class="btn primary needs-server">Add</button>
+        </div>
+        <p id="ob-err" class="field-msg bad" role="alert"></p>
+        <div class="ob-liked">
+          <button id="ob-liked" type="button" class="btn raised">Use my Liked Music</button>
+          <label for="ob-browser" class="inline-label">YouTube login from
+            <select id="ob-browser" class="needs-server" aria-describedby="ob-login">
+              <option value="chrome">Chrome</option><option value="safari">Safari</option>
+              <option value="firefox">Firefox</option><option value="brave">Brave</option>
+              <option value="edge">Edge</option><option value="none">none</option>
+            </select></label>
+        </div>
+        <p id="ob-login" class="hint"></p>
+        <label for="ob-genre" class="inline-label">Import as
+          <select id="ob-genre"><option value="">auto-detect</option></select></label>
+      </form>
+      <div id="ob-progress" class="ob-progress" hidden>
+        <p id="ob-found" class="ob-found" aria-live="polite"></p>
+        <p id="ob-line" class="mono dim" aria-live="polite"></p>
+        <button id="ob-start" type="button" class="btn primary" hidden><svg class="i"><use href="#i-play"/></svg><span id="ob-start-label">Start</span></button>
+      </div>
+    </div>
+  </main>
   <div class="app">
   <!-- Transport. On a phone this header is display:contents and its controls are laid out
        inside the Now tab (style.css), so desktop and phone share one set of controls. -->
