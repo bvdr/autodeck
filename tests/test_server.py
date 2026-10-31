@@ -63,8 +63,8 @@ def test_state_shape(client):
     assert not any(q["kept"] for q in s["queue"])
     assert s["pool_counts"] == {"ready": 4}
     assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot", "danceability",
-                                  "kept", "kept_from"}
-    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept", "kept_from"} == set(s["queue"][0])
+                                  "kept", "kept_from", "in_playlist"}
+    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept", "kept_from", "in_playlist"} == set(s["queue"][0])
 
 
 def test_pool_shows_failed_song_with_error(client):

@@ -335,7 +335,10 @@ class Engine:
     def _queued(self, s: Song) -> dict:
         """An Up next row: the song, whether the owner kept it (else it's an auto pick that keeps
         the music going), and where it was kept from (None = no note, e.g. dragged into place)."""
-        return {**self.view(s), "kept": s.id in self.requested, "kept_from": self.kept.get(s.id)}
+        pl = self._pl()
+        # in_playlist: an auto pick from the playing playlist (else a library song filling in around it).
+        return {**self.view(s), "kept": s.id in self.requested, "kept_from": self.kept.get(s.id),
+                "in_playlist": pl is not None and s.id in pl["song_ids"]}
 
     # --- API operations ---------------------------------------------------------
     def state(self) -> dict:
@@ -1108,7 +1111,9 @@ class Engine:
                 "fail_reason": _fail_reason(failed), "covers": pl["song_ids"][:4], "genre": pl["genre"],
                 "order": pl["order"], "at_end": pl["at_end"], "excluded": len(pl["excluded"]),
                 "synced_at": pl["synced_at"], "stale": time.time() - pl["synced_at"] > PL_STALE,
-                "left": len(self._pl_left(pl)) if pl is self._pl() else None,
+                # Songs left in this run, the playing one included ("48 songs · 2 left").
+                "left": (len(self._pl_left(pl)) + (self.playing in pl["song_ids"] and self.playing not in pl["excluded"])
+                         if pl is self._pl() else None),
                 "url": f"https://www.youtube.com/playlist?list={pl['list_id']}"}
 
     def _playlist_draft(self, pl: dict) -> list[dict]:
@@ -1139,6 +1144,8 @@ class Engine:
             ids = list(dict.fromkeys(played + now + [s.id for s in seq] + members))
         left_ids = [s.id for s in self._pl_left(pl)]
         last = left_ids[-1] if left_ids and pl["at_end"] != "repeat" else None
+        if last and plan and len(plan) == len(left_ids):  # mix order, all ready: its own last song
+            last = max(plan, key=lambda i: plan[i][0])
         nxt = self.upcoming[0] if self.upcoming else None
         rows = []
         for i in ids:
