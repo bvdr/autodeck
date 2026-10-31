@@ -129,11 +129,19 @@ seconds). Excludes are saved per source in `<library>/rejected.json` (`{"mood:Ba
 "party:Hits": […]}`; the old flat list became a `"party"` bucket every flavor reads). With Vibe Any and
 Party Off there's no draft.
 
-**Up next** is only what you keep: draft picks, search's *Play next*, the assistant's play_next, and
+**Up next** is only what you keep: draft picks, *Play next* picks (search, any list, the assistant's play_next), and
 anything you drag into place, in your order (saved across restarts). When fewer than 3 ready songs
 are lined up, autodeck adds **Auto** picks from the active source (best mix from the end of the
 list; any genre, with a notice, if the source has nothing ready) so the music never stops; ✓ on an
 Auto row keeps it. The first two rows lock once the next mix is planned.
+
+**Play next on deck B**: hover any row in Up next, Played, Library or Search for the deck button
+(a tile in the colour of the deck the song lands on, + *Play next*). One click makes it the very
+next song: it goes on the idle deck, the mix is replanned, and the song that was planned there
+moves back to the top of Up next. A song still downloading or analysing waits at the top and
+swaps in once it's ready (the planned song plays until then). During a mix nothing is
+interrupted: the pick plays right after it, on the deck that frees up. On a phone, long-press a
+row (or tap ⋯) for *Play next on deck …*, *Move to top*, *Pin here* and *Remove from Up next*.
 
 ## Saved playlists
 
@@ -216,8 +224,8 @@ both songs next, ✕ forgets the pair.
 
 Type a song or artist in the search field (press **/** to jump there). Library matches show as you
 type; **Enter** adds YouTube results.
-**Play next** downloads and analyzes that song right away (ahead of everything else, whatever genre
-is active) and plays it next once it's ready.
+The deck button (**B** *Play next*) downloads and analyzes that song right away (ahead of everything
+else, whatever genre is active) and plays it next once it's ready.
 
 ## Mixing modes
 
