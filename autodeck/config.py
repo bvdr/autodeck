@@ -11,6 +11,9 @@ WINDOW_SIZE = 10          # songs analysed/rendered ahead in the rolling window
 # made the worker download the whole pool hunting for matches (140 songs / 9 GB in real use).
 MAX_READY_AHEAD = 20
 FIXED_NEXT = 2            # upcoming songs whose order is locked
+# Up next is the owner's list (kept songs); below this many ready songs the engine tops it up
+# with auto picks from the active source so the music never stops.
+MIN_UPCOMING = 3
 BEATMATCH_MAX_PCT = 0.08  # max tempo stretch to beatmatch (8%)
 EASE_BARS = 16            # bars over which tempo eases back to the song's own
 PHRASE_BARS = 8           # a phrase boundary = any multiple of 8 bars from the first downbeat; prefer 16

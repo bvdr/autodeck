@@ -55,7 +55,6 @@ class Engine:
         self.playing: str | None = None
         self.played: set[str] = set()
         self.upcoming: list[str] = []
-        self.pinned: dict[int, str] = {}  # upcoming index -> song id the owner dragged there
         self.genre = config.ANY_GENRE
         self.notice: str | None = None
         self.version = 0
@@ -71,9 +70,11 @@ class Engine:
         # or too late) must never describe the song that is really playing, or the next
         # transition would be computed on the wrong time map.
         self.plans: dict[str, tuple[str, TimeMap, object]] = {}
-        # Songs the owner picked from search ("play next"), oldest first. Not-ready ones go to
-        # the front of the worker's list (prepped before anything, cap or not); ready ones go to
-        # the front of the queue, whatever the active genre. Dropped once they start playing.
+        # The owner's Up next (decision A, 2026-10-31): songs kept from the draft (✓ / Add all),
+        # "play next" from search or the assistant, and anything dragged into place, in the
+        # owner's order. Not-ready ones go to the front of the worker's list (prepped before
+        # anything, cap or not); ready ones play after the locked-in rows, whatever the source.
+        # Dropped once they start playing. Saved in session.json with their `kept` notes.
         self.requested: list[str] = []
         # Moods built from public playlists (moods.py): name -> song ids. A mood is selected like
         # a genre (its name is in the genres list), but membership is this list, so a song keeps
@@ -130,7 +131,8 @@ class Engine:
             "playing": self.playing, "played": sorted(self.played),
             "maps": {k: tm.points for k, tm in self.maps.items()},
             "entered": {k: asdict(t) for k, t in self.entered.items()},
-            "beat_to_beat": self.beat_to_beat, "party": self.party, "kept": self.kept})
+            "beat_to_beat": self.beat_to_beat, "party": self.party, "kept": self.kept,
+            "requested": self.requested})
 
     def _load_session(self) -> None:
         try:
@@ -149,6 +151,8 @@ class Engine:
         self.party = d.get("party") if d.get("party") in party.FLAVORS else None
         kept = d.get("kept")
         self.kept = {k: str(v) for k, v in kept.items() if k in ids} if isinstance(kept, dict) else {}
+        req = d.get("requested")
+        self.requested = [i for i in dict.fromkeys(req) if i in ids and i != playing] if isinstance(req, list) else []
 
     def by_id(self, sid: str) -> Song | None:
         return next((s for s in self.pool if s.id == sid), None)
@@ -167,55 +171,54 @@ class Engine:
         return s.status == "ready" and s.analysis is not None and s.id not in self.played and s.id != self.playing
 
     def _recompute(self, keep: list[str] | None = None) -> None:
-        """Rebuild `upcoming`. The first FIXED_NEXT of the old queue stay put (the owner
-        may already be looking at them / the next render is planned), unless `keep`
-        overrides them (genre switch)."""
+        """Rebuild `upcoming` = the locked-in rows, then the owner's kept songs (self.requested,
+        their order), then auto picks from the active source only while fewer than MIN_UPCOMING
+        ready songs are lined up. The first FIXED_NEXT of the old list stay put (the next
+        transition may be planned already), unless `keep` overrides them (source switch)."""
         g, anyg = self.genre, config.ANY_GENRE
         cands = [s for s in self.pool if self._eligible(s)]
         if self.party:
             # Party flavor replaces the genre filter; songs not looked up on Last.fm yet don't fit.
-            in_genre = [s for s in cands if party.fits(s, self.party)]
+            in_src = [s for s in cands if party.fits(s, self.party)]
             what = f"{self.party} party"
         elif g in self.moods:
             members = set(self.moods[g])
-            in_genre = [s for s in cands if s.id in members or s.effective_genre() == g]
+            in_src = [s for s in cands if s.id in members or s.effective_genre() == g]
             what = g
         else:
-            in_genre = [s for s in cands if g == anyg or s.effective_genre() == g]
+            in_src = [s for s in cands if g == anyg or s.effective_genre() == g]
             what = g
-        # Review Focus 3: the genre ran dry -> play from any genre (with a notice), never go silent.
-        fell_back = bool(cands) and not in_genre
+        # Review Focus 3: the source ran dry -> auto picks come from any genre (with a notice),
+        # never go silent.
+        fell_back = bool(cands) and not in_src
         self.notice = f"No ready {what} songs yet — playing from any genre" if fell_back else None
-        # order() filters by genre itself; for a party the candidates arrive pre-filtered.
+        # order() filters by genre itself; for a party or mood the candidates arrive pre-filtered.
         prefiltered = bool(self.party) or g in self.moods
         use_genre = anyg if (fell_back or prefiltered) else g
-        group = {s.id for s in (cands if fell_back else in_genre)}
+        src = cands if fell_back else in_src
         cur = self.by_id(self.playing) if self.playing else None
         ok = {s.id for s in cands}
-        asked = [i for i in self.requested if i in ok]  # owner's picks play next, any genre
-        if cur is None:
-            # Nothing playing yet: no "previous song" to score against, so pool order.
-            self.upcoming = asked + [s.id for s in (cands if fell_back else in_genre) if s.id not in asked]
-            return
         if keep is None:
-            keep = self.upcoming[: config.FIXED_NEXT]
-        keep = asked + [i for i in keep if i in ok and i not in asked]
-        # A kept song whose hand-over the owner marked avoided loses its fixed slot (and so does
-        # everything after it), so a fresh 👎 takes effect right away; order() still puts it
-        # back if nothing else is left. The owner's own "play next" picks always stay.
-        for j in range(len(asked), len(keep)):
-            before = keep[j - 1] if j else cur.id
-            if self.pairs.get(pair_key(before, keep[j])) == "avoided":
-                keep = keep[:j]
+            keep = self.upcoming[: config.FIXED_NEXT] if cur else []
+        locked = [i for i in dict.fromkeys(keep) if i in ok]
+        # A locked auto pick whose hand-over the owner marked avoided loses its slot (and so does
+        # everything after it), so a fresh 👎 takes effect right away. Kept songs always stay.
+        for j, sid in enumerate(locked):
+            before = locked[j - 1] if j else (cur.id if cur else None)
+            if before and sid not in self.requested and self.pairs.get(pair_key(before, sid)) == "avoided":
+                locked = locked[:j]
                 break
-        # Pins are absolute upcoming indices; order() sees the list after the kept prefix.
-        n = len(keep)
-        pins = {i - n: sid for i, sid in self.pinned.items() if i >= n and sid not in keep}
-        prev = self.by_id(keep[-1]) if keep else cur
-        pin_ids = set(pins.values())  # pinned songs are the owner's choice: they stay whatever the filter
-        pool = [s for s in cands if s.id not in keep and (s.id in group or s.id in pin_ids or not prefiltered)]
-        rest = order(prev, pool, pins, use_genre, bonus=party.bonus if self.party else None, pairs=self.pairs)
-        self.upcoming = keep + [s.id for s in rest]
+        head = locked + [i for i in self.requested if i in ok and i not in locked]
+        auto: list[str] = []
+        need = config.MIN_UPCOMING - len(head)
+        if need > 0:
+            prev = self.by_id(head[-1]) if head else cur
+            rest = [s for s in src if s.id not in head]
+            # Nothing playing and nothing kept: no "previous song" to score against, pool order.
+            ranked = order(prev, rest, {}, use_genre, bonus=party.bonus if self.party else None,
+                           pairs=self.pairs) if prev else rest
+            auto = [s.id for s in ranked[:need]]
+        self.upcoming = head + auto
 
     def view(self, s: Song) -> dict:
         an = s.analysis
@@ -224,8 +227,9 @@ class Engine:
                 "danceability": (s.meta or {}).get("danceability")}
 
     def _queued(self, s: Song) -> dict:
-        """An Up next row: the song plus where the owner kept it from (None = the source's own pick)."""
-        return {**self.view(s), "kept_from": self.kept.get(s.id)}
+        """An Up next row: the song, whether the owner kept it (else it's an auto pick that keeps
+        the music going), and where it was kept from (None = no note, e.g. dragged into place)."""
+        return {**self.view(s), "kept": s.id in self.requested, "kept_from": self.kept.get(s.id)}
 
     # --- API operations ---------------------------------------------------------
     def state(self) -> dict:
@@ -242,10 +246,9 @@ class Engine:
                     "source": self._source(),
                     "queue": [self._queued(by[i]) for i in self.upcoming if i in by],
                     # What the queue panel marks: the first `queue_locked` songs keep their order
-                    # (_recompute's FIXED_NEXT, only while something plays), `pinned` = songs the
-                    # owner dragged, `requested` = "play next" picks still downloading/analysing.
+                    # (_recompute's FIXED_NEXT, only while something plays); `requested` = kept
+                    # songs still downloading/analysing (they join `queue` once ready).
                     "queue_locked": config.FIXED_NEXT if self.playing else 0,
-                    "pinned": sorted(set(self.pinned.values())),
                     "requested": [self._queued(by[i]) for i in self.requested if i in by and i not in self.upcoming],
                     "pairs": dict(self.pairs),
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
@@ -299,12 +302,6 @@ class Engine:
                 self.maps[sid], self.entered[sid] = plan[1], plan[2]
             # No / unknown plan_id (first song, or a plan pruned long ago): maps stay as they
             # are, i.e. identity via deck() for a fresh song.
-            pos = self.upcoming.index(sid) if sid in self.upcoming else None
-            # Everything after the song that just started moves up one slot; pins follow.
-            # ponytail: pins only track the common case (playing a queued song); jumping to
-            # a song outside the queue leaves pin indices as they were.
-            self.pinned = {i - (1 if pos is not None and pos < i else 0): p
-                           for i, p in self.pinned.items() if p != sid}
             if sid in self.requested:
                 self.requested.remove(sid)
             self.kept.pop(sid, None)  # "kept from …" is an Up next note; it has played now
@@ -337,8 +334,10 @@ class Engine:
             return [{"id": h.id, "title": h.title, "channel": h.channel, "duration": h.duration,
                      "status": by[h.id].status if h.id in by else None} for h in hits]
 
-    def request(self, sid: str, title: str, channel: str, duration: float) -> None:
-        """Owner picked a song (search): add it if new, prep it first, play it next."""
+    def request(self, sid: str, title: str, channel: str, duration: float, kept_from: str | None = None) -> None:
+        """Owner kept a song (search "play next", the draft, the assistant): add it if new, prep it
+        first, and put it in Up next after the songs already kept. `kept_from` is the note
+        ("Balkan party", "search", "assistant")."""
         with LOCK:
             s = self.by_id(sid)
             if s is None:
@@ -351,10 +350,13 @@ class Engine:
             library.save_song(s)
             if sid not in self.requested:
                 self.requested.append(sid)
+            if kept_from:
+                self.kept[sid] = kept_from
             # Asking for a song that already played tonight means "play it again": without this
             # it isn't eligible, so it sat in the requested list forever ("plays next once ready").
             self.played = self.played - {sid}  # new set: get_state copies never see a resize
             self._recompute()
+            self._save_session()
             self._changed()
 
     # --- played log ------------------------------------------------------------------
@@ -586,7 +588,8 @@ class Engine:
         """Draft for a mood or genre (call with LOCK held): library songs of that source that
         aren't in Up next (queued, requested or playing) or excluded for it. A mood's are its
         members ranked by playlist votes; a genre's are its ready songs."""
-        skip = set(self.upcoming) | set(self.requested) | {self.playing}
+        # Up next and tonight's played songs are never drafted (played ones belong in Played).
+        skip = set(self.upcoming) | set(self.requested) | {self.playing} | self.played
         ex = self._excluded(src["key"])
         name = src["name"]
         if src["kind"] == "mood":
@@ -597,7 +600,14 @@ class Engine:
             songs = [by[i] for i in sorted((i for i in self.moods.get(name, []) if i in by),
                                            key=lambda i: -int(votes.get(i) or 0))]
         else:
-            songs = [s for s in self.pool if s.status == "ready" and s.analysis and s.effective_genre() == name]
+            # Ready songs ranked by how well they mix from the end of Up next, then the ones
+            # still being prepared (✓ on those requests them: prepped first, played once ready).
+            mine = [s for s in self.pool if s.status != "failed" and s.effective_genre() == name]
+            last = self.by_id((self.upcoming or [self.playing])[-1]) if (self.upcoming or self.playing) else None
+            ready = [s for s in mine if s.status == "ready" and s.analysis]
+            if last is not None and last.analysis:
+                ready.sort(key=lambda s: -score_pair(last, s))
+            songs = ready + [s for s in mine if not (s.status == "ready" and s.analysis)]
         out = []
         for s in songs:
             if s.id in skip:
@@ -609,7 +619,7 @@ class Engine:
                 v = votes.get(s.id)
                 why = f"in {v} of {of} playlists" if v and of else f"from the {name} playlists"
             else:
-                why = "played tonight" if s.id in self.played else s.effective_genre()
+                why = s.effective_genre() if s.status == "ready" else f"{s.effective_genre()} · preparing"
             out.append({"id": s.id, "artist": a, "title": t, "why": why, "status": s.status,
                         "bpm": s.analysis.bpm if s.analysis else None})
             if len(out) >= DRAFT_MAX:
@@ -660,12 +670,8 @@ class Engine:
             channel, duration = "", 0.0  # request() only uses these for a song not in the pool
         with LOCK:
             src = self._source()
-            if src:
-                self.kept[sid] = src["label"]  # before request(): its version bump shows it
             self._sugg = None
-        self.request(sid, title, channel, duration)
-        with LOCK:
-            self._save_session()
+        self.request(sid, title, channel, duration, src["label"] if src else None)
 
     def accept_all(self, items: list[dict]) -> None:
         """"Add all N": keep each in the order shown. request() appends, so Up next keeps it."""
@@ -839,18 +845,20 @@ class Engine:
             self._changed()
 
     def set_queue(self, ids: list[str], pin: str | None) -> None:
+        """Owner reordered Up next (drag, ↑ ↓; `pin` = the song moved). The moved song and
+        everything above the lowest kept song become kept, in this order: kept songs always
+        come before auto picks, so a song the owner placed among them is theirs now."""
         with LOCK:
             known = {s.id for s in self.pool}
             if len(set(ids)) != len(ids) or not set(ids) <= known:
                 raise EngineError(400, "Queue ids must be unique songs from the pool")
             if pin is not None and pin not in ids:
                 raise EngineError(400, "Pinned song must be in the queue")
-            self.upcoming = list(ids)
-            pins = {i: p for i, p in self.pinned.items() if p in known and p != pin}
-            if pin is not None:
-                pins = {i: p for i, p in pins.items() if i != ids.index(pin)}
-                pins[ids.index(pin)] = pin
-            self.pinned = pins
+            mine = set(self.requested) | ({pin} if pin else set())
+            last = max((n for n, i in enumerate(ids) if i in mine), default=-1)
+            self.requested = ids[: last + 1] + [i for i in self.requested if i not in ids]
+            self._recompute(keep=ids[: config.FIXED_NEXT] if self.playing else [])
+            self._save_session()
             self._changed()
 
     def set_song_genre(self, sid: str, g: str | None) -> None:
@@ -878,7 +886,7 @@ class Engine:
         with LOCK:
             self.pool.remove(self._song(sid))  # list.remove: the worker's identity check sees it gone
             self.upcoming = [i for i in self.upcoming if i != sid]
-            self.pinned = {i: p for i, p in self.pinned.items() if p != sid}
+            self.requested = [i for i in self.requested if i != sid]
             self.kept.pop(sid, None)
             self.maps.pop(sid, None)
             self.entered.pop(sid, None)

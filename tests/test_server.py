@@ -58,11 +58,13 @@ def test_add_unknown_genre_is_400(client):
 def test_state_shape(client):
     s = client.get("/api/state").json()
     assert s["playing"] is None and s["genre"] == "Any" and s["notice"] is None
-    assert [q["id"] for q in s["queue"]] == IDS  # nothing playing: pool order
+    # Nothing kept: auto picks top Up next up to MIN_UPCOMING, pool order while nothing plays.
+    assert [q["id"] for q in s["queue"]] == IDS[: config.MIN_UPCOMING]
+    assert not any(q["kept"] for q in s["queue"])
     assert s["pool_counts"] == {"ready": 4}
     assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot", "danceability",
-                                  "kept_from"}
-    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept_from"} == set(s["queue"][0])
+                                  "kept", "kept_from"}
+    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept", "kept_from"} == set(s["queue"][0])
 
 
 def test_pool_shows_failed_song_with_error(client):
@@ -111,7 +113,9 @@ def test_queue_reorder_bumps_version(client):
     order = [IDS[3], IDS[2], IDS[1]]
     s = client.post("/api/queue", json={"ids": order, "pin": IDS[2]}).json()
     assert s["version"] > v0 and [q["id"] for q in s["queue"]] == order
-    assert client.engine.pinned == {1: IDS[2]}
+    # The moved song and everything above it are the owner's now; the rest stay auto picks.
+    assert client.engine.requested == [IDS[3], IDS[2]]
+    assert [q["kept"] for q in s["queue"]] == [True, True, False]
     assert client.post("/api/queue", json={"ids": [IDS[1], IDS[1]]}).status_code == 400
     assert client.post("/api/queue", json={"ids": ["zzzzzzzzzz9"]}).status_code == 400
 
@@ -128,7 +132,7 @@ def test_delete_removes_from_pool_and_queue(client):
 
 def test_owner_genre_fix(client):
     s = client.post(f"/api/song/{IDS[3]}", json={"genre": "Pop"}).json()
-    assert next(q for q in s["queue"] if q["id"] == IDS[3])["genre"] == "Pop"
+    assert next(q for q in s["pool"] if q["id"] == IDS[3])["genre"] == "Pop"
     assert library.load_song(IDS[3]).genre == "Pop"
 
 
@@ -327,7 +331,9 @@ def test_requested_song_is_prepped_first_and_plays_next(client):
     s = eng.by_id(NEW)
     s.status, s.analysis = "ready", library.load_song(NEW).analysis
     eng._on_worker_change()
-    assert client.get("/api/state").json()["queue"][0]["id"] == NEW  # plays next
+    q = client.get("/api/state").json()["queue"]
+    # Kept songs play right after the locked-in rows (the next mix may be planned already).
+    assert q[config.FIXED_NEXT]["id"] == NEW and q[config.FIXED_NEXT]["kept"]
     client.post("/api/playing", json={"id": NEW})
     assert NEW not in eng.requested
 
@@ -580,32 +586,121 @@ def test_no_source_no_draft(client):
     assert client.post("/api/suggestions/reject", json={"artist": "a", "title": "b"}).status_code == 409
 
 
-def test_mood_draft_ranks_by_votes_and_skips_up_next(client, monkeypatch):
+MORE = ["xxxxxxxxx01", "xxxxxxxxx02", "xxxxxxxxx03", "xxxxxxxxx04", "xxxxxxxxx05", "xxxxxxxxx06"]
+POP = [IDS[0], IDS[1], MORE[0], MORE[1], MORE[4], MORE[5]]
+
+
+@pytest.fixture
+def big(tmp_library):
+    """Ten ready songs: IDS (Pop, Pop, Hip-hop, Hip-hop) + MORE (Pop, Pop, Hip-hop, Hip-hop, Pop, Pop)."""
+    for sid, bpm, g in zip(IDS + MORE, (120, 122, 121, 90, 124, 95, 118, 92, 121, 100),
+                           ["Pop", "Pop", "Hip-hop", "Hip-hop"] * 2 + ["Pop", "Pop"]):
+        _ready(sid, bpm, g)
+    library.save_pool(IDS + MORE)
+    c = TestClient(create_app(Engine()), base_url="http://127.0.0.1")
+    c.engine = c.app.state.engine
+    return c
+
+
+def test_mood_draft_ranks_by_votes_and_skips_up_next_and_played(big, monkeypatch):
     from autodeck import party
-    mood = _mood(client, monkeypatch)
-    eng = client.engine
-    # Nothing playing: every ready member is in Up next, so nothing is drafted.
-    assert client.get("/api/suggestions").json()["suggestions"] == []
-    eng.upcoming = []  # e.g. both members played meanwhile / not ready yet
-    d = client.get("/api/suggestions").json()
+    picks = [(library.load_song(i), v) for i, v in zip(IDS + MORE[:2], (1, 1, 1, 2, 5, 3))]
+    mood = _mood(big, monkeypatch, picks=picks)
+    st = big.get("/api/state").json()
+    upnext = [q["id"] for q in st["queue"]]
+    assert len(upnext) == config.MIN_UPCOMING and set(upnext) <= set(IDS + MORE[:2])  # auto top-up
+    d = big.get("/api/suggestions").json()
     assert d["source"]["key"] == f"mood:{mood}"
-    assert [x["id"] for x in d["suggestions"]] == [IDS[2], IDS[3]]  # 5 votes before 2
+    got = [x["id"] for x in d["suggestions"]]
+    assert set(got) == set(IDS + MORE[:2]) - set(upnext)  # members not in Up next
+    votes = dict(zip(IDS + MORE[:2], (1, 1, 1, 2, 5, 3)))
+    assert [votes[i] for i in got] == sorted((votes[i] for i in got), reverse=True)  # best-voted first
     first = d["suggestions"][0]
-    assert first["why"] == "in 5 of 6 playlists" and first["bpm"] == 121 and first["artist"]
-    client.post("/api/suggestions/reject", json={"artist": first["artist"], "title": first["title"]})
-    assert [x["id"] for x in client.get("/api/suggestions").json()["suggestions"]] == [IDS[3]]
+    assert first["why"] == f"in {votes[first['id']]} of 6 playlists" and first["artist"]
+    # Played songs belong in Played, not the draft.
+    big.post("/api/playing", json={"id": first["id"]})
+    assert first["id"] not in [x["id"] for x in big.get("/api/suggestions").json()["suggestions"]]
+    nxt = big.get("/api/suggestions").json()["suggestions"]
+    assert nxt  # exclude one: only for that source, and Undo puts it back
+    x = nxt[0]
+    big.post("/api/suggestions/reject", json={"artist": x["artist"], "title": x["title"]})
+    assert x["id"] not in [y["id"] for y in big.get("/api/suggestions").json()["suggestions"]]
     rej = json.loads((config.library_root() / "rejected.json").read_text())
-    assert rej == {f"mood:{mood}": [party.key(first["artist"], first["title"])]}
-    # Only for that source: the same song is still drafted for its genre.
-    client.post("/api/genre", json={"genre": "Hip-hop"})
-    eng.upcoming = []
-    assert IDS[2] in [x["id"] for x in client.get("/api/suggestions").json()["suggestions"]]
-    # Undo puts it back.
-    client.post("/api/genre", json={"genre": mood})
-    eng.upcoming = []
-    client.post("/api/suggestions/unreject", json={"artist": first["artist"], "title": first["title"],
-                                                   "source": f"mood:{mood}"})
-    assert [x["id"] for x in client.get("/api/suggestions").json()["suggestions"]] == [IDS[2], IDS[3]]
+    assert rej == {f"mood:{mood}": [party.key(x["artist"], x["title"])]}
+    big.post("/api/suggestions/unreject", json={"artist": x["artist"], "title": x["title"], "source": f"mood:{mood}"})
+    assert x["id"] in [y["id"] for y in big.get("/api/suggestions").json()["suggestions"]]
+
+
+def test_genre_draft_is_unplayed_songs_ranked_by_mix_fit(big):
+    big.post("/api/genre", json={"genre": "Pop"})
+    big.post("/api/playing", json={"id": IDS[0]})  # 120 Pop
+    st = big.get("/api/state").json()
+    upnext = [q["id"] for q in st["queue"]]
+    draft = big.get("/api/suggestions").json()["suggestions"]
+    ids = [x["id"] for x in draft]
+    assert ids and set(ids) == set(POP) - set(upnext) - {IDS[0]}  # not playing/played, not in Up next
+    assert all(x["why"] == "Pop" for x in draft)
+    eng = big.app.state.engine
+    last = eng.by_id(upnext[-1])
+    from autodeck.planner import score_pair
+    scores = [score_pair(last, eng.by_id(i)) for i in ids]
+    assert scores == sorted(scores, reverse=True)  # best mix from the end of Up next first
+    # Preparing songs come after the ready ones and say so.
+    eng.by_id(ids[0]).status = "queued"
+    draft = big.get("/api/suggestions").json()["suggestions"]
+    assert draft[-1]["id"] == ids[0] and draft[-1]["why"] == "Pop · preparing"
+
+
+def test_top_up_comes_from_the_active_source(big):
+    big.post("/api/playing", json={"id": IDS[0]})
+    st = big.post("/api/genre", json={"genre": "Hip-hop"}).json()
+    q = st["queue"]
+    assert len(q) == config.MIN_UPCOMING and all(x["genre"] == "Hip-hop" and not x["kept"] for x in q)
+
+
+def test_kept_songs_keep_their_order_and_auto_picks_yield(big):
+    eng = big.app.state.engine
+    st = big.get("/api/state").json()
+    assert [q["kept"] for q in st["queue"]] == [False] * config.MIN_UPCOMING
+    st = big.post("/api/request", json={"id": MORE[3]}).json()
+    assert [q["id"] for q in st["queue"]][0] == MORE[3] and len(st["queue"]) == config.MIN_UPCOMING
+    for sid in (MORE[1], IDS[3]):
+        st = big.post("/api/request", json={"id": sid}).json()
+    # Three kept: no auto picks left (beyond the minimum they're dropped), owner's order kept.
+    assert [q["id"] for q in st["queue"]] == [MORE[3], MORE[1], IDS[3]] and all(q["kept"] for q in st["queue"])
+    st = big.post("/api/request", json={"id": IDS[0]}).json()
+    assert [q["id"] for q in st["queue"]] == [MORE[3], MORE[1], IDS[3], IDS[0]]
+    assert eng.requested == [MORE[3], MORE[1], IDS[3], IDS[0]]
+
+
+def test_top_up_refills_after_songs_play(big):
+    big.post("/api/request", json={"id": MORE[3]})
+    big.post("/api/playing", json={"id": IDS[0]})
+    st = big.post("/api/playing", json={"id": MORE[3]}).json()
+    assert len(st["queue"]) == config.MIN_UPCOMING and not any(q["kept"] for q in st["queue"])
+
+
+def test_source_running_dry_falls_back_with_the_notice(big):
+    big.post("/api/genre", json={"genre": "Pop"})
+    for sid in POP:  # every Pop song played
+        st = big.post("/api/playing", json={"id": sid}).json()
+    assert "No ready Pop songs" in st["notice"]
+    assert len(st["queue"]) == config.MIN_UPCOMING and all(q["genre"] == "Hip-hop" for q in st["queue"])
+
+
+def test_kept_list_survives_a_restart(big):
+    big.post("/api/request", json={"id": MORE[3], "source": "search"})
+    big.post("/api/request", json={"id": IDS[2]})
+    eng = Engine()
+    assert eng.requested == [MORE[3], IDS[2]] and eng.kept == {MORE[3]: "search"}
+    assert [i for i in eng.upcoming[:2]] == [MORE[3], IDS[2]]
+
+
+def test_worker_prepares_kept_not_ready_songs_first(big):
+    eng = big.app.state.engine
+    big.post("/api/request", json={"id": NEW, "title": "Hit", "channel": "c"})
+    eng.by_id(MORE[0]).status = "queued"  # a not-ready song of the source competes for the worker
+    assert eng.worker.wanted(*eng.get_state())[0] == NEW
 
 
 def test_excludes_survive_a_restart(client, monkeypatch):
@@ -636,10 +731,10 @@ def test_accept_by_id_skips_youtube_and_notes_the_source(client, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("no YouTube search for a library song")
     monkeypatch.setattr(fetch, "search", boom)
-    client.post("/api/playing", json={"id": IDS[0]})
     st = client.post("/api/suggestions/accept", json={"id": IDS[3], "artist": "x", "title": "y"}).json()
-    row = next(q for q in st["queue"] if q["id"] == IDS[3])
-    assert st["queue"][0]["id"] == IDS[3] and row["kept_from"] == mood
+    row = st["queue"][0]  # nothing playing, nothing locked: the kept song is first
+    assert row["id"] == IDS[3] and row["kept"] and row["kept_from"] == mood
+    client.post("/api/playing", json={"id": IDS[0]})
     assert Engine().kept == {IDS[3]: mood}  # survives a restart
     st = client.post("/api/playing", json={"id": IDS[3]}).json()
     assert IDS[3] not in client.engine.kept  # cleared once it played
@@ -648,13 +743,13 @@ def test_accept_by_id_skips_youtube_and_notes_the_source(client, monkeypatch):
 
 def test_accept_all_keeps_the_order_shown(client, monkeypatch):
     from autodeck import fetch
-    client.post("/api/playing", json={"id": IDS[0]})
     client.post("/api/party", json={"flavor": "hits"})
     monkeypatch.setattr(fetch, "search", lambda q, n=10: [Song(NEW, "Toto - Rosanna", "Toto", 330.0, "queued")])
     st = client.post("/api/suggestions/accept_all", json={"items": [
         {"id": IDS[3]}, {"artist": "Toto", "title": "Rosanna"}, {"id": IDS[2]}]}).json()
     assert client.engine.requested == [IDS[3], NEW, IDS[2]]
     assert [q["id"] for q in st["queue"][:2]] == [IDS[3], IDS[2]]  # NEW is still downloading
+    assert [q["kept"] for q in st["queue"]] == [True, True, False]  # one auto pick tops it up
     assert st["requested"][0]["id"] == NEW and st["requested"][0]["kept_from"] == "Hits"
 
 
@@ -662,4 +757,4 @@ def test_requesting_a_played_song_plays_it_again(client):
     client.post("/api/playing", json={"id": IDS[0]})
     client.post("/api/playing", json={"id": IDS[1]})
     st = client.post("/api/request", json={"id": IDS[0]}).json()
-    assert st["queue"][0]["id"] == IDS[0] and st["requested"] == []
+    assert st["queue"][config.FIXED_NEXT]["id"] == IDS[0] and st["requested"] == []

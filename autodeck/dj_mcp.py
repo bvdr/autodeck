@@ -77,7 +77,9 @@ def _summary(s: dict) -> dict:
     pool = {p["id"]: p for p in s.get("pool", [])}
     return {
         "playing": _song(pool[s["playing"]]) if s.get("playing") in pool else None,
-        "up_next": [_song(q) for q in s.get("queue", [])[:10]],
+        # kept = the owner's (or your) pick; otherwise an auto pick that keeps the music going.
+        "up_next": [{**_song(q), "kept": bool(q.get("kept")), **({"kept_from": q["kept_from"]} if q.get("kept_from") else {})}
+                    for q in s.get("queue", [])[:10]],
         "genre": s.get("genre"), "genres": s.get("genres"), "moods": s.get("moods"),
         "party": s.get("party"), "party_flavors": s.get("flavors"),
         "beat_to_beat": s.get("beat_to_beat"),
@@ -89,7 +91,8 @@ def _summary(s: dict) -> dict:
 # --- reading --------------------------------------------------------------------
 @tool("Now playing", read_only=True, destructive=False)
 def now_playing() -> dict:
-    """What's playing, the next 10 songs (BPM, key, genre, danceability), and the active
+    """What's playing, the next 10 songs (BPM, key, genre, danceability; kept = picked by the owner
+    or you, else an auto pick from the active source), and the active
     genre / party flavor / beat-to-beat mode / forced next effect."""
     return _summary(_api("/api/state"))
 
@@ -128,10 +131,11 @@ def get_suggestions() -> list[dict]:
 # --- steering (change state: destructiveHint=True) -------------------------------
 @tool("Play next", open_world=True)
 def play_next(song_id: str, title: str = "", channel: str = "", duration: float = 0.0) -> dict:
-    """Queue a song to play next (adds it to the library if new, downloads and analyses it
-    first). `song_id` is a YouTube video id from search_songs or list_library."""
-    return _summary(_api("/api/request", "POST", {"id": song_id, "title": title,
-                                                  "channel": channel, "duration": duration}))
+    """Keep a song in Up next (adds it to the library if new, downloads and analyses it first;
+    it plays after the songs already kept). `song_id` is a YouTube video id from search_songs or
+    list_library."""
+    return _summary(_api("/api/request", "POST", {"id": song_id, "title": title, "channel": channel,
+                                                  "duration": duration, "source": "assistant"}))
 
 
 @tool("Mix now")

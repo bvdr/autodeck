@@ -37,6 +37,7 @@ class RequestReq(BaseModel):
     title: str = ""
     channel: str = ""
     duration: float = 0.0
+    source: str | None = None  # "kept from" note in Up next: "search", "assistant", …
 
 
 class PartyReq(BaseModel):
@@ -186,7 +187,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     @app.post("/api/request")
     def request_song(req: RequestReq):
-        eng.request(_id(req.id), req.title[:300], req.channel[:300], req.duration)
+        eng.request(_id(req.id), req.title[:300], req.channel[:300], req.duration,
+                    req.source[:80] if req.source else None)
         return eng.state()
 
     @app.post("/api/party")
