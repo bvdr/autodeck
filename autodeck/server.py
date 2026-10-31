@@ -235,6 +235,11 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         eng.set_song_genre(_id(sid), req.genre)
         return eng.state()
 
+    @app.post("/api/song/{sid}/retry")
+    def retry(sid: str):
+        eng.retry(_id(sid))
+        return eng.state()
+
     @app.delete("/api/song/{sid}")
     def delete(sid: str):
         eng.remove(_id(sid))

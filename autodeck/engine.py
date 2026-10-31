@@ -654,6 +654,18 @@ class Engine:
             self._recompute()
             self._changed()
 
+    def retry(self, sid: str) -> None:
+        """Library Retry on a failed song: back to queued, so the worker tries it again (same
+        as re-adding its link, without the network round trip to read the link again)."""
+        with LOCK:
+            s = self._song(sid)
+            if s.status != "failed":
+                raise EngineError(409, f"{s.title} hasn't failed")
+            s.status, s.error = "queued", None  # in place: the worker holds this object
+            library.save_song(s)
+            self._recompute()
+            self._changed()
+
     def remove(self, sid: str) -> None:
         with LOCK:
             self.pool.remove(self._song(sid))  # list.remove: the worker's identity check sees it gone

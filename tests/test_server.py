@@ -504,3 +504,11 @@ def test_history_derives_from_for_old_lines(client, tmp_library):
     client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "avoided"})
     h = client.get("/api/history").json()["history"]
     assert (h[0]["from"], h[0]["verdict"], h[1]["from"]) == (IDS[0], "avoided", None)
+
+
+def test_retry_requeues_a_failed_song(client):
+    client.engine.pool.append(Song("ffffffffff6", "gone", "c", 0, "failed", error="video removed"))
+    s = client.post("/api/song/ffffffffff6/retry").json()
+    f = next(p for p in s["pool"] if p["id"] == "ffffffffff6")
+    assert f["status"] == "queued" and f["error"] is None
+    assert client.post(f"/api/song/{IDS[0]}/retry").status_code == 409  # only failed songs
