@@ -281,17 +281,35 @@ def remove_playlist(playlist_id: str) -> dict:
 
 @tool("Love a pair")
 def love_pair(from_song_id: str, to_song_id: str) -> dict:
-    """Remember that mixing from_song_id into to_song_id worked (🔥). The planner then prefers
-    playing to_song after from_song. Overwrites an earlier 'avoid' for the same pair, so it is
-    marked destructive. Ids are YouTube video ids (now_playing, get_history, list_library)."""
+    """Remember that mixing from_song_id into to_song_id worked (🔥). Each love adds one to the
+    pair's count (it clears an earlier 'avoid'); the planner then prefers playing to_song right
+    after from_song, more with every love. Changes stored memory, so marked destructive.
+    Ids are YouTube video ids (now_playing, get_history, list_library)."""
     return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "loved"}))
 
 
 @tool("Avoid a pair")
-def avoid_pair(from_song_id: str, to_song_id: str) -> dict:
-    """Remember that mixing from_song_id into to_song_id didn't work (👎). The planner never
-    places to_song right after from_song again unless nothing else is ready."""
-    return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "avoided"}))
+def avoid_pair(from_song_id: str, to_song_id: str, why: str = "") -> dict:
+    """Remember that mixing from_song_id into to_song_id didn't work (👎); resets the pair's loves.
+    `why` (optional): "songs" = they don't go together, so to_song is never placed right after
+    from_song again unless nothing else is ready; "effect" = only the effect used that time was
+    wrong, so they can still meet with a different one. Empty = treated like "songs"."""
+    return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id,
+                                               "verdict": "avoided", "why": why or None}))
+
+
+@tool("List remembered pairs", read_only=True, destructive=False)
+def list_pairs() -> list[dict]:
+    """Every rated hand-over, most loved first: from/to ids and titles, the effect, loved (how many
+    🔥), avoided (1 = 👎), why ("songs" | "effect" | null) and last (when it was rated)."""
+    return _api("/api/pairs")["pairs"]
+
+
+@tool("Forget a pair")
+def forget_pair(from_song_id: str, to_song_id: str) -> dict:
+    """Erase what's remembered about mixing from_song_id into to_song_id (loves, avoid, reason).
+    The reverse direction is a separate pair and stays. Can't be undone."""
+    return _summary(_api("/api/pair/forget", "POST", {"from": from_song_id, "to": to_song_id}))
 
 
 def main() -> None:

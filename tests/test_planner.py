@@ -2,7 +2,7 @@ import pytest
 
 from autodeck.library import Analysis, Section, Song
 from autodeck.music import next_boundary, phrase_boundaries
-from autodeck.planner import genre_entry, order, pick_transition, score_pair
+from autodeck.planner import genre_entry, memory_bonus, order, pick_transition, score_pair
 
 
 def make_song(bpm=122, camelot="8A", energy=0.5, duration=240.0, grid=True, genre="Pop", id=None,
@@ -329,27 +329,56 @@ def test_dropswap_is_never_picked_automatically():
     assert pick_transition(a, b, force="dropswap").kind == "dropswap"
 
 
+LOVED = {"effect": "bass_swap", "loved": 1, "avoided": 0, "why": None, "last": None}
+AVOIDED = {"effect": "echo", "loved": 0, "avoided": 1, "why": None, "last": None}
+
+
+def test_memory_bonus_values_cap_and_half_for_the_reverse():
+    a, b = make_song(id="a"), make_song(id="b")
+    loved = lambda n: {"a>b": {**LOVED, "loved": n}}  # noqa: E731
+    assert memory_bonus(a, b, {}) == 0
+    assert memory_bonus(a, b, loved(1)) == pytest.approx(0.6)
+    assert memory_bonus(a, b, loved(3)) == pytest.approx(0.8)  # +0.1 per extra 🔥
+    assert memory_bonus(a, b, loved(4)) == pytest.approx(0.9)
+    assert memory_bonus(a, b, loved(9)) == pytest.approx(0.9)  # capped
+    assert memory_bonus(b, a, loved(1)) == pytest.approx(0.3)  # B -> A: half
+    assert memory_bonus(b, a, loved(9)) == pytest.approx(0.45)
+    assert memory_bonus(a, b, {"a>b": AVOIDED}) == 0
+
+
 def test_order_loved_pair_wins_and_avoided_pair_is_never_adjacent():
     cur = make_song(122, "8A", id="cur")
     near, far = make_song(123, "9A", id="near"), make_song(118, "3B", id="far")
     assert order(cur, [near, far], {}, "Any")[0].id == "near"
     # Loved cur -> far outweighs a better tempo/key match.
-    assert order(cur, [near, far], {}, "Any", pairs={"cur>far": "loved"})[0].id == "far"
+    assert order(cur, [near, far], {}, "Any", pairs={"cur>far": LOVED})[0].id == "far"
     # Loved the other way round counts half: enough between two equal matches.
     twin = make_song(118, "3B", id="twin")
-    assert order(cur, [twin, far], {}, "Any", pairs={"far>cur": "loved"})[0].id == "far"
-    assert order(cur, [far, twin], {}, "Any", pairs={"twin>cur": "loved"})[0].id == "twin"
-    # Avoided cur -> near: near is not next, even though it mixes best.
-    res = order(cur, [near, far], {}, "Any", pairs={"cur>near": "avoided"})
-    assert [s.id for s in res] == ["far", "near"]
+    assert order(cur, [twin, far], {}, "Any", pairs={"far>cur": LOVED})[0].id == "far"
+    assert order(cur, [far, twin], {}, "Any", pairs={"twin>cur": LOVED})[0].id == "twin"
+    # Avoided cur -> near (no reason, or "songs"): near is not next, even though it mixes best.
+    for why in (None, "songs"):
+        moved = {}
+        res = order(cur, [near, far], {}, "Any", pairs={"cur>near": {**AVOIDED, "why": why}}, moved=moved)
+        assert [s.id for s in res] == ["far", "near"]
+        assert moved == {"near": ("cur", 0)}  # for Up next's "moved 1 later" note
+    # Only the effect was wrong: the songs can still meet (the transition skips that effect).
+    assert order(cur, [near, far], {}, "Any", pairs={"cur>near": {**AVOIDED, "why": "effect"}})[0].id == "near"
+
+
+def test_order_avoided_pairs_never_adjacent_anywhere_in_the_set():
+    cur, x, y, z = (make_song(122, id=i) for i in ("cur", "x", "y", "z"))
+    pairs = {"cur>x": AVOIDED, "y>x": AVOIDED, "x>z": AVOIDED}
+    res = [s.id for s in order(cur, [x, y, z], {}, "Any", pairs=pairs)]
+    assert all(f"{a}>{b}" not in pairs for a, b in zip(["cur", *res], res)), res
 
 
 def test_order_avoided_pair_used_only_when_nothing_else_is_left():
     cur, only = make_song(122, id="cur"), make_song(122, id="only")
-    assert [s.id for s in order(cur, [only], {}, "Any", pairs={"cur>only": "avoided"})] == ["only"]
+    assert [s.id for s in order(cur, [only], {}, "Any", pairs={"cur>only": AVOIDED})] == ["only"]
 
 
 def test_order_pins_beat_pair_memory():
     cur, a, b = make_song(122, id="cur"), make_song(122, id="a"), make_song(122, id="b")
-    res = order(cur, [a, b], {0: "a"}, "Any", pairs={"cur>a": "avoided", "cur>b": "loved"})
+    res = order(cur, [a, b], {0: "a"}, "Any", pairs={"cur>a": AVOIDED, "cur>b": LOVED})
     assert res[0].id == "a"

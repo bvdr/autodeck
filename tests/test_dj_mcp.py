@@ -22,13 +22,13 @@ def test_every_tool_declares_all_three_hints_and_a_title():
 
 def test_read_only_tools_are_not_destructive_and_writes_are():
     by = {t.name: t.annotations for t in _tools()}
-    for name in ("now_playing", "list_library", "get_history", "search_songs", "get_suggestions"):
+    for name in ("now_playing", "list_library", "get_history", "search_songs", "get_suggestions", "list_pairs"):
         assert by[name].read_only_hint and not by[name].destructive_hint
     for name in ("play_next", "mix_now", "set_genre", "start_party", "remove_song", "reject_suggestion",
-                 "love_pair", "avoid_pair"):
+                 "love_pair", "avoid_pair", "forget_pair"):
         assert not by[name].read_only_hint and by[name].destructive_hint
     assert by["add_songs"].destructive_hint is False  # purely additive
-    for name in ("love_pair", "avoid_pair"):
+    for name in ("love_pair", "avoid_pair", "forget_pair", "list_pairs"):
         assert by[name].open_world_hint is False  # local pair memory only
     for name in ("search_songs", "get_suggestions", "play_next", "add_songs", "accept_suggestion"):
         assert by[name].open_world_hint  # reach YouTube / Last.fm
@@ -79,3 +79,19 @@ def test_play_next_means_the_very_next_song(monkeypatch):
     out = dj_mcp.play_next("aaaaaaaaaa1", "Hit")
     assert calls[0][0] == "/api/play_next" and calls[0][1]["source"] == "assistant"
     assert out["play_next"] == {"id": "aaaaaaaaaa1", "ready": False, "planned": None}
+
+
+def test_pair_tools_call_one_endpoint_each(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dj_mcp, "_api", lambda path, method="GET", body=None: calls.append((path, method, body)) or {
+        "pairs": []})
+    monkeypatch.setattr(dj_mcp, "_summary", lambda s: s)
+    dj_mcp.avoid_pair("a", "b", why="effect")
+    dj_mcp.avoid_pair("a", "b")
+    dj_mcp.forget_pair("a", "b")
+    assert dj_mcp.list_pairs() == []
+    assert calls == [
+        ("/api/pair", "POST", {"from": "a", "to": "b", "verdict": "avoided", "why": "effect"}),
+        ("/api/pair", "POST", {"from": "a", "to": "b", "verdict": "avoided", "why": None}),
+        ("/api/pair/forget", "POST", {"from": "a", "to": "b"}),
+        ("/api/pairs", "GET", None)]

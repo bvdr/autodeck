@@ -479,49 +479,135 @@ def test_moods_refresh_adds_and_delete_forgets(client, monkeypatch):
     assert client.request("DELETE", "/api/mood/nope").status_code == 404
 
 
-def test_pair_verdicts_are_stored_listed_and_shape_the_queue(client, tmp_library):
-    client.post("/api/playing", json={"id": IDS[0]})
-    # IDS[1] (122 Pop) is the natural next song after IDS[0] (120 Pop); IDS[3] (90) is far off.
-    assert client.get("/api/state").json()["queue"][0]["id"] == IDS[1]
-    s = client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "avoided"}).json()
-    assert s["pairs"] == {f"{IDS[0]}>{IDS[1]}": "avoided"}
-    q = [x["id"] for x in s["queue"]]
-    # Avoided pair never back to back, even when it held a locked slot.
-    assert all((a, b) != (IDS[0], IDS[1]) for a, b in zip([IDS[0], *q], q))
-    client.post("/api/pair", json={"from": IDS[2], "to": IDS[3], "verdict": "loved"})
-    assert json.loads((tmp_library / "pairs.json").read_text()) == {
-        f"{IDS[0]}>{IDS[1]}": "avoided", f"{IDS[2]}>{IDS[3]}": "loved"}
-    pairs = client.get("/api/pairs").json()["pairs"]
-    assert [p["verdict"] for p in pairs] == ["loved", "avoided"]
-    assert pairs[0] == {"from": IDS[2], "to": IDS[3], "from_title": f"title {IDS[2]}",
-                        "to_title": f"title {IDS[3]}", "verdict": "loved"}
-    # null forgets; a fresh engine reads the file back.
-    client.post("/api/pair", json={"from": IDS[2], "to": IDS[3], "verdict": None})
-    assert Engine().pairs == {f"{IDS[0]}>{IDS[1]}": "avoided"}
+def _pair(client, a, b, verdict, **kw):
+    return client.post("/api/pair", json={"from": a, "to": b, "verdict": verdict, **kw})
+
+
+def test_old_pairs_format_is_migrated_without_losing_anything(tmp_library):
+    (tmp_library / "pairs.json").write_text(json.dumps({"a>b": "loved", "b>c": "avoided", "c>d": "meh"}))
+    eng = Engine([])
+    assert eng.pairs == {
+        "a>b": {"effect": None, "loved": 1, "avoided": 0, "why": None, "last": None},
+        "b>c": {"effect": None, "loved": 0, "avoided": 1, "why": None, "last": None}}
+    # A 🔥 on a migrated pair counts on from its old love.
+    eng.rate_pair("a", "b", "loved", "bass_swap")
+    saved = json.loads((tmp_library / "pairs.json").read_text())
+    assert saved["a>b"]["loved"] == 2 and saved["a>b"]["effect"] == "bass_swap" and saved["a>b"]["last"]
+    assert saved["b>c"]["avoided"] == 1
+
+
+def test_rating_semantics_love_adds_avoid_resets_undo_restores(client, tmp_library):
+    a, b, k = IDS[2], IDS[3], f"{IDS[2]}>{IDS[3]}"
+    _pair(client, a, b, "loved", effect="half_double")  # logged kind -> the picker's "blend"
+    s = _pair(client, a, b, "loved", effect="bass_swap").json()
+    assert (s["pairs"][k]["loved"], s["pairs"][k]["effect"], s["pairs"][k]["avoided"]) == (2, "bass_swap", 0)
+    s = _pair(client, a, b, "avoided", effect="echo").json()
+    assert {x: s["pairs"][k][x] for x in ("loved", "avoided", "why", "effect")} == {
+        "loved": 0, "avoided": 1, "why": None, "effect": "echo"}
+    s = client.post("/api/pair/why", json={"from": a, "to": b, "why": "effect"}).json()
+    assert s["pairs"][k]["why"] == "effect"
+    # Tapping 👎 again undoes it: back to two loves (the reason goes with it).
+    s = client.post("/api/pair/undo", json={"from": a, "to": b}).json()
+    assert (s["pairs"][k]["loved"], s["pairs"][k]["avoided"]) == (2, 0)
+    assert json.loads((tmp_library / "pairs.json").read_text())[k]["loved"] == 2  # written each time
+    assert client.post("/api/pair/undo", json={"from": a, "to": b}).status_code == 409  # one level
+    # Undoing a first rating forgets the pair.
+    _pair(client, b, a, "loved")
+    assert f"{b}>{a}" not in client.post("/api/pair/undo", json={"from": b, "to": a}).json()["pairs"]
 
 
 def test_pair_rejects_bad_input(client):
-    assert client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "meh"}).status_code == 400
-    assert client.post("/api/pair", json={"from": IDS[0], "to": IDS[0], "verdict": "loved"}).status_code == 400
-    assert client.post("/api/pair", json={"from": "../x", "to": IDS[0], "verdict": "loved"}).status_code == 404
+    assert _pair(client, IDS[0], IDS[1], "meh").status_code == 400
+    assert _pair(client, IDS[0], IDS[0], "loved").status_code == 400
+    assert _pair(client, "../x", IDS[0], "loved").status_code == 404
+    assert _pair(client, IDS[0], IDS[1], "loved", why="songs").status_code == 400  # a reason is for 👎
+    assert _pair(client, IDS[0], IDS[1], "avoided", why="vibes").status_code == 400
+    _pair(client, IDS[0], IDS[1], "loved")
+    assert client.post("/api/pair/why", json={"from": IDS[0], "to": IDS[1], "why": "songs"}).status_code == 409
 
 
-def test_history_rows_carry_from_and_verdict(client, tmp_library):
+def test_avoided_pair_never_adjacent_in_up_next_and_the_move_is_explained(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    # IDS[1] (122 Pop) is the natural next song after IDS[0] (120 Pop); IDS[3] (90) is far off.
+    assert client.get("/api/state").json()["queue"][0]["id"] == IDS[1]
+    s = _pair(client, IDS[0], IDS[1], "avoided", why="songs").json()
+    q = [x["id"] for x in s["queue"]]
+    # Avoided pair never back to back, even when it held a locked slot.
+    assert all((a, b) != (IDS[0], IDS[1]) for a, b in zip([IDS[0], *q], q))
+    assert s["moved"] == [{"id": IDS[1], "title": f"title {IDS[1]}", "after": IDS[0],
+                           "after_title": f"title {IDS[0]}", "by": q.index(IDS[1])}]
+    # "Wrong effect" only: the songs may meet again (the locked-in rows keep their order, so it's
+    # the planner's memory that changes: no more avoid to explain).
+    assert client.post("/api/pair/why", json={"from": IDS[0], "to": IDS[1], "why": "effect"}).json()["moved"] == []
+
+
+def test_auto_effect_uses_the_loved_one_and_skips_the_avoided_one(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    r = client.get("/api/transition", params={"from": IDS[0]}).json()
+    b, auto, opts = r["transition"]["in_id"], r["transition"]["kind"], r["options"]
+    assert r["loved_effect"] is None and r["avoid_effect"] is None
+    other = next(k for k in opts if k not in ("blend", auto))
+    _pair(client, IDS[0], b, "loved", effect=other)
+    r = client.get("/api/transition", params={"from": IDS[0]}).json()
+    assert (r["transition"]["kind"], r["loved_effect"]) == (other, other)
+    # The owner's own pick still wins over the memory.
+    client.post("/api/next_effect", json={"effect": "cut"})
+    r = client.get("/api/transition", params={"from": IDS[0]}).json()
+    assert (r["transition"]["kind"], r["loved_effect"]) == ("cut", None)
+    client.post("/api/next_effect", json={"effect": None})
+    # 👎 "wrong effect" on Auto's own pick: Auto plays something else; the effect stays listed.
+    _pair(client, IDS[0], b, "avoided", effect=auto, why="effect")
+    r = client.get("/api/transition", params={"from": IDS[0]}).json()
+    assert r["avoid_effect"] == auto and r["transition"]["kind"] not in (auto, "half_double" if auto == "blend" else auto)
+    assert auto in [("blend" if k == "half_double" else k) for k in r["options"]]
+
+
+def test_play_pair_puts_both_songs_next_in_order(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    q = [x["id"] for x in client.post("/api/pair/play", json={"from": IDS[3], "to": IDS[2]}).json()["queue"]]
+    assert q[:2] == [IDS[3], IDS[2]]
+    # The playing song's pair: just its partner next.
+    q = [x["id"] for x in client.post("/api/pair/play", json={"from": IDS[0], "to": IDS[1]}).json()["queue"]]
+    assert q[0] == IDS[1]
+
+
+def test_forget_pair_and_pairs_outlive_their_songs(client, tmp_library):
+    _pair(client, IDS[2], IDS[3], "loved", effect="bass_swap")
+    _pair(client, IDS[2], IDS[3], "loved")
+    _pair(client, IDS[0], IDS[1], "avoided", why="songs")
+    _pair(client, IDS[1], IDS[0], "loved")
+    client.request("DELETE", f"/api/song/{IDS[3]}")  # dropped from the library: memory stays
+    pairs = client.get("/api/pairs").json()["pairs"]
+    assert [(p["from"], p["to"]) for p in pairs] == [(IDS[2], IDS[3]), (IDS[1], IDS[0]), (IDS[0], IDS[1])]
+    assert pairs[0]["to_title"] == f"title {IDS[3]}" and pairs[0]["loved"] == 2 and pairs[0]["effect"] == "bass_swap"
+    assert pairs[2]["why"] == "songs"
+    s = client.post("/api/pair/forget", json={"from": IDS[2], "to": IDS[3]}).json()
+    assert f"{IDS[2]}>{IDS[3]}" not in s["pairs"]
+    assert client.post("/api/pair/forget", json={"from": IDS[2], "to": IDS[3]}).status_code == 404
+    assert set(Engine().pairs) == {f"{IDS[0]}>{IDS[1]}", f"{IDS[1]}>{IDS[0]}"}  # read back from disk
+
+
+def test_history_rows_carry_from_and_this_sessions_rating(client, tmp_library):
     client.post("/api/playing", json={"id": IDS[0]})  # started fresh: no hand-over
     tr = client.get("/api/transition", params={"from": IDS[0]}).json()
     client.post("/api/playing", json={"id": tr["transition"]["in_id"], "plan_id": tr["plan_id"]})
     b = tr["transition"]["in_id"]
-    client.post("/api/pair", json={"from": IDS[0], "to": b, "verdict": "loved"})
+    _pair(client, IDS[0], b, "avoided")
     h = client.get("/api/history").json()["history"]
-    assert (h[0]["id"], h[0]["from"], h[0]["verdict"]) == (b, IDS[0], "loved")
+    assert (h[0]["id"], h[0]["from"], h[0]["verdict"], h[0]["why"]) == (b, IDS[0], "avoided", None)
     assert (h[1]["id"], h[1]["from"], h[1]["verdict"]) == (IDS[0], None, None)
+    client.post("/api/pair/why", json={"from": IDS[0], "to": b, "why": "songs"})
+    assert client.get("/api/history").json()["history"][0]["why"] == "songs"
+    # After a restart the memory stays but nothing looks pressed (a tap adds, it can't undo).
+    client.engine.pair_undo.clear()
+    assert client.get("/api/history").json()["history"][0]["verdict"] is None
 
 
 def test_history_derives_from_for_old_lines(client, tmp_library):
     # Lines written before "from" existed: the previous line is the song it came in from.
     lines = [{"id": IDS[0], "title": "a", "effect": None}, {"id": IDS[1], "title": "b", "effect": "blend"}]
     (tmp_library / "history.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
-    client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "avoided"})
+    _pair(client, IDS[0], IDS[1], "avoided")
     h = client.get("/api/history").json()["history"]
     assert (h[0]["from"], h[0]["verdict"], h[1]["from"]) == (IDS[0], "avoided", None)
 

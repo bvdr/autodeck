@@ -68,7 +68,16 @@ class PairReq(BaseModel):
     # `from` is a Python keyword, hence the alias.
     from_: str = Field(alias="from")
     to: str
-    verdict: str | None = None  # "loved" | "avoided"; None forgets the pair
+
+
+class RateReq(PairReq):
+    verdict: str                # "loved" (🔥) | "avoided" (👎)
+    effect: str | None = None   # the effect that hand-over used, when known
+    why: str | None = None      # with "avoided": "songs" | "effect"
+
+
+class WhyReq(PairReq):
+    why: str
 
 
 class LastfmKeyReq(BaseModel):
@@ -321,9 +330,30 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         eng.mix_now()
         return eng.state()
 
+    # Pair memory (design xWVJy). One endpoint per operation, like the MCP tools.
     @app.post("/api/pair")
-    def pair(req: PairReq):
-        eng.set_pair(_id(req.from_), _id(req.to), req.verdict)
+    def pair(req: RateReq):
+        eng.rate_pair(_id(req.from_), _id(req.to), req.verdict, req.effect, req.why)
+        return eng.state()
+
+    @app.post("/api/pair/why")
+    def pair_why(req: WhyReq):
+        eng.pair_why(_id(req.from_), _id(req.to), req.why)
+        return eng.state()
+
+    @app.post("/api/pair/undo")
+    def pair_undo(req: PairReq):
+        eng.undo_pair(_id(req.from_), _id(req.to))
+        return eng.state()
+
+    @app.post("/api/pair/forget")
+    def pair_forget(req: PairReq):
+        eng.forget_pair(_id(req.from_), _id(req.to))
+        return eng.state()
+
+    @app.post("/api/pair/play")
+    def pair_play(req: PairReq):
+        eng.play_pair(_id(req.from_), _id(req.to))
         return eng.state()
 
     @app.get("/api/pairs")

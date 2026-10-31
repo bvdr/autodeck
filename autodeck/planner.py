@@ -45,36 +45,52 @@ def score_pair(a: Song, b: Song) -> float:
             + 0.2 * (1 - abs(_energy(a) - _energy(b))))
 
 
-# Pair memory (owner's 🔥/👎 on a hand-over, <library>/pairs.json): a loved a->b adds this to the
-# mix score, b->a half of it (songs that blend one way usually blend the other way too). The
-# score_pair range is 0..1, so a loved pair wins against all but a much better tempo/key match.
-LOVED_BONUS = 0.6
+# Pair memory (owner's 🔥/👎 on a hand-over, <library>/pairs.json, design xWVJy): pair_key(a, b) ->
+# {effect, loved: n, avoided: 0/1, why: None | "songs" | "effect", last}. A loved a->b adds
+# LOVED_BONUS to the mix score, LOVED_STEP more per extra 🔥 up to LOVED_MAX; b->a gets half of it
+# (songs that blend one way usually blend the other way too). score_pair's range is 0..1, so a
+# loved pair wins against all but a much better tempo/key match.
+LOVED_BONUS, LOVED_STEP, LOVED_MAX = 0.6, 0.1, 0.9
 
 
 def pair_key(a: str, b: str) -> str:
-    """Directional key of a hand-over a -> b in pairs.json."""
+    """Directional key of a hand-over a -> b in pairs.json. Kept as "a>b" (the file's format since
+    the first pair memory) so existing files and every client lookup stay valid."""
     return f"{a}>{b}"
 
 
+def _credit(entry: dict | None) -> float:
+    n = (entry or {}).get("loved", 0)
+    return min(LOVED_BONUS + LOVED_STEP * (n - 1), LOVED_MAX) if n > 0 else 0.0
+
+
+def memory_bonus(prev: Song, s: Song, pairs: dict[str, dict]) -> float:
+    """What the owner's pair memory adds to playing s right after prev."""
+    return _credit(pairs.get(pair_key(prev.id, s.id))) or _credit(pairs.get(pair_key(s.id, prev.id))) / 2
+
+
+def avoids(pairs: dict[str, dict], a: str, b: str) -> bool:
+    """True when b must not follow a. A pair 👎'd for its effect only (why="effect") can still
+    meet with another effect, so it isn't banned here (the transition just skips that effect)."""
+    p = pairs.get(pair_key(a, b))
+    return bool(p and p.get("avoided") and p.get("why") != "effect")
+
+
 def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: str,
-          bonus=None, pairs: dict[str, str] | None = None) -> list[Song]:
+          bonus=None, pairs: dict[str, dict] | None = None, moved: dict | None = None) -> list[Song]:
     """Greedy set order: each next song is the best mix from the previous one.
 
     `bonus(prev, s) -> float` is added to the mix score (party mode: popularity and rising
     energy), so it only reorders songs that mix about equally well.
-    `pairs` (pair_key -> "loved" | "avoided") is the owner's pair memory: a loved pair gets
-    LOVED_BONUS, and an avoided pair is never placed back to back unless nothing else is left.
-    Pins still win over both.
+    `pairs` is the owner's pair memory: memory_bonus is added, and an avoided pair is never
+    placed back to back unless nothing else is left. Pins still win over both.
+    `moved`, when given, collects songs an avoid pushed back: id -> (the song it would have
+    followed, the index it would have had), for Up next's "moved 3 later" note.
     """
     pairs = pairs or {}
 
     def score(prev: Song, s: Song) -> float:
-        v = score_pair(prev, s) + (bonus(prev, s) if bonus else 0.0)
-        if pairs.get(pair_key(prev.id, s.id)) == "loved":
-            v += LOVED_BONUS
-        elif pairs.get(pair_key(s.id, prev.id)) == "loved":
-            v += LOVED_BONUS / 2
-        return v
+        return score_pair(prev, s) + (bonus(prev, s) if bonus else 0.0) + memory_bonus(prev, s, pairs)
 
     ready = [s for s in candidates if s.status == "ready" and s.analysis and s.id != current.id]
     pool = [s for s in ready if genre == ANY_GENRE or s.effective_genre() == genre]
@@ -94,8 +110,12 @@ def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: 
             nxt = pins[i]
         else:
             # Avoided successors only when every remaining song is one (never go silent).
-            ok = [s for s in rest if pairs.get(pair_key(prev.id, s.id)) != "avoided"] or rest
+            ok = [s for s in rest if not avoids(pairs, prev.id, s.id)] or rest
             nxt = max(ok, key=lambda s: score(prev, s))
+            if moved is not None and len(ok) < len(rest):
+                best = max(rest, key=lambda s: score(prev, s))
+                if best is not nxt:
+                    moved.setdefault(best.id, (prev.id, i))
             rest.remove(nxt)
         out.append(nxt)
         prev = nxt

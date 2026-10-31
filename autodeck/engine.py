@@ -19,7 +19,7 @@ import soundfile as sf
 
 from . import config, fetch, jobs, lastfm, library, moods, party, standalone
 from .library import Song
-from .planner import FORCEABLE, Transition, genre_entry, order, pair_key, pick_transition, score_pair
+from .planner import FORCEABLE, Transition, avoids, genre_entry, order, pair_key, pick_transition, score_pair
 from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
@@ -62,6 +62,42 @@ def _fit_reason(prev: Song | None, s: Song, rest: list[Song]) -> str | None:
         return "same key"
     gap = lambda x: abs(x.analysis.bpm - prev.analysis.bpm) if x.analysis else 1e9  # noqa: E731
     return "closest tempo" if len(rest) > 1 and gap(s) <= min(gap(x) for x in rest) else None
+
+
+PAIR_WHY = ("songs", "effect")  # the 👎 question: "These songs don't go together" / "Wrong effect for them"
+
+
+def pair_effect(kind: str | None) -> str | None:
+    """A logged transition kind as the effect picker knows it: half_double is the picker's "blend"
+    (forcing "blend" plays it); anything the picker can't force is None."""
+    kind = "blend" if kind == "half_double" else kind
+    return kind if kind in FORCEABLE else None
+
+
+def migrate_pair(v) -> dict | None:
+    """One pairs.json value in the current shape. The first pair memory stored just "loved" /
+    "avoided"; those become one 🔥 / a 👎 with no effect, reason or time (nothing is lost: that
+    was all it knew). Anything unreadable is dropped rather than crash the load."""
+    if v in ("loved", "avoided"):
+        return {"effect": None, "loved": int(v == "loved"), "avoided": int(v == "avoided"), "why": None, "last": None}
+    if not isinstance(v, dict):
+        return None
+    try:
+        loved, avoided = max(int(v.get("loved") or 0), 0), int(bool(v.get("avoided")))
+    except (TypeError, ValueError):
+        return None
+    return {"effect": pair_effect(v.get("effect")), "loved": loved, "avoided": avoided,
+            "why": v.get("why") if v.get("why") in PAIR_WHY else None, "last": v.get("last")}
+
+
+def rate_entry(entry: dict | None, verdict: str, effect: str | None, when: str) -> dict:
+    """The pair after one rating: 🔥 adds one (and clears an old 👎), 👎 resets the pair to avoided.
+    effect/last describe this latest hand-over; a 🔥 without a known effect keeps the old one."""
+    old = entry if entry and not entry.get("avoided") else None
+    if verdict == "loved":
+        return {"effect": effect or (old or {}).get("effect"), "loved": (old or {}).get("loved", 0) + 1,
+                "avoided": 0, "why": None, "last": when}
+    return {"effect": effect, "loved": 0, "avoided": 1, "why": None, "last": when}
 
 
 class EngineError(Exception):
@@ -129,9 +165,17 @@ class Engine:
         # Songs kept (✓ / Add all) from a draft -> the source's label, shown in Up next as
         # "kept from Balkan party". Saved in session.json; dropped once the song plays.
         self.kept: dict[str, str] = {}
-        # Pair memory: the owner's verdict on a hand-over, pair_key(a, b) -> "loved" | "avoided".
-        # Directional and kept for removed songs too (re-adding the link brings the memory back).
-        self.pairs: dict[str, str] = self._load_pairs()
+        # Pair memory (design xWVJy): the owner's ratings of a hand-over, pair_key(a, b) -> {effect,
+        # loved, avoided, why, last} (migrate_pair). Directional and kept for removed songs too
+        # (re-adding the link brings the memory back).
+        self.pairs: dict[str, dict] = self._load_pairs()
+        # This session's last rating per pair and the entry before it, so tapping it again undoes
+        # it (Played rows show it pressed). ponytail: memory only, a restart forgets what can be
+        # undone (the ratings themselves are in pairs.json); persist in session.json if missed.
+        self.pair_undo: dict[str, tuple[str, dict | None]] = {}
+        # Songs an avoid pushed back in the last _recompute: id -> (song it would have followed,
+        # index it would have had in the auto order, index it got). Up next's "moved 3 later" note.
+        self.moved: dict[str, tuple[str, int, int]] = {}
         # Saved playlists: list id -> entry (_load_playlists has the fields). Dict order = save order.
         self.playlists: dict[str, dict] = self._load_playlists()
         # The active playlist source (a list id) or None. One source at a time, like genre / party.
@@ -296,11 +340,12 @@ class Engine:
         # everything after it), so a fresh 👎 takes effect right away. Kept songs always stay.
         for j, sid in enumerate(locked):
             before = locked[j - 1] if j else (cur.id if cur else None)
-            if before and sid not in self.requested and self.pairs.get(pair_key(before, sid)) == "avoided":
+            if before and sid not in self.requested and avoids(self.pairs, before, sid):
                 locked = locked[:j]
                 break
         head = locked + [i for i in self.requested if i in ok and i not in locked]
         auto: list[str] = []
+        self.moved = {}
         need = config.MIN_UPCOMING - len(head)
         if need > 0:
             prev = self.by_id(head[-1]) if head else cur
@@ -308,10 +353,13 @@ class Engine:
                 auto = self._pl_auto(pl, prev, head, pl_ready, pl_waiting, cands, need)
             else:
                 rest = [s for s in src if s.id not in head]
+                moved: dict = {}
                 # Nothing playing and nothing kept: no "previous song" to score against, pool order.
                 ranked = order(prev, rest, {}, use_genre, bonus=party.bonus if self.party else None,
-                               pairs=self.pairs) if prev else rest
+                               pairs=self.pairs, moved=moved) if prev else rest
                 auto = [s.id for s in ranked[:need]]
+                ids = [s.id for s in ranked]
+                self.moved = {sid: (after, i, ids.index(sid)) for sid, (after, i) in moved.items() if sid in ids}
         self.upcoming = head + auto
 
     def _pl_auto(self, pl: dict, prev: Song | None, head: list[str], pl_ready: list[Song], waiting: bool,
@@ -376,6 +424,7 @@ class Engine:
                     "queue_locked": config.FIXED_NEXT if self.playing else 0,
                     "requested": [self._queued(by[i]) for i in self.requested if i in by and i not in self.upcoming],
                     "pairs": dict(self.pairs),
+                    "moved": self._moved_notes(by),
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
                     "pool": [self.view(s) for s in self.pool],
@@ -536,8 +585,10 @@ class Engine:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def history(self, limit: int = 200) -> list[dict]:
-        """Most recent first. Each entry carries `from` (the song it was mixed in from, or None)
-        and `verdict` (the owner's pair rating of that hand-over, or None)."""
+        """Most recent first. Each entry carries `from` (the song it was mixed in from, or None),
+        `verdict` (this session's 🔥/👎 on that hand-over, which a second tap undoes; None when not
+        rated since the app started, so an old 🔥 never looks pressed and a tap adds one more) and
+        `why` (the 👎's answer to "What was off?", None until answered)."""
         try:
             lines = self._history_file().read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -549,46 +600,112 @@ class Engine:
             except ValueError:
                 continue  # a half-written last line after a crash
         with LOCK:
-            pairs = dict(self.pairs)
+            pairs, undo = dict(self.pairs), dict(self.pair_undo)
         for prev, h in zip([None, *rows], rows):
             if "from" not in h:
                 # Lines written before "from" existed: a song that came in via an effect was
                 # mixed in from the line before it (the log is in play order).
                 h["from"] = prev["id"] if prev and h.get("effect") else None
-            h["verdict"] = pairs.get(pair_key(h["from"], h["id"])) if h["from"] else None
+            k = pair_key(h["from"], h["id"]) if h["from"] else None
+            h["verdict"] = undo[k][0] if k in undo else None
+            h["why"] = (pairs.get(k) or {}).get("why") if h["verdict"] == "avoided" else None
         return list(reversed(rows[-limit:]))
 
     # --- pair memory --------------------------------------------------------------------
     def _pairs_file(self):
         return config.library_root() / "pairs.json"
 
-    def _load_pairs(self) -> dict[str, str]:
+    def _load_pairs(self) -> dict[str, dict]:
         try:
             d = json.loads(self._pairs_file().read_text(encoding="utf-8"))
-            return {str(k): v for k, v in d.items() if v in ("loved", "avoided")} if isinstance(d, dict) else {}
-        except (OSError, ValueError, TypeError, AttributeError):
+        except (OSError, ValueError):
             return {}
+        if not isinstance(d, dict):
+            return {}
+        out = {str(k): migrate_pair(v) for k, v in d.items()}
+        return {k: v for k, v in out.items() if v is not None}
 
-    def set_pair(self, a: str, b: str, verdict: str | None) -> None:
-        """Owner's 🔥 (loved) / 👎 (avoided) on the hand-over a -> b; None forgets it.
-        Saved on every rating (atomic), then the queue is re-ordered with it."""
-        if verdict not in ("loved", "avoided", None):
+    def _pairs_saved(self) -> None:
+        """Every change is written at once (atomic): a crash or restart loses no rating. Then the
+        queue is re-ordered with it."""
+        config.write_json_atomic(self._pairs_file(), self.pairs)
+        self._recompute()
+        self._changed()
+
+    def rate_pair(self, a: str, b: str, verdict: str, effect: str | None = None, why: str | None = None) -> None:
+        """Owner's 🔥 (loved) / 👎 (avoided) on the hand-over a -> b, mixed with `effect` (the
+        Played row's / the sign's; None = unknown). `why` answers "What was off?" right away
+        (the MCP's avoid_pair); see rate_entry for what a rating does."""
+        if verdict not in ("loved", "avoided"):
             raise EngineError(400, f"Unknown verdict: {verdict}")
+        if why is not None and (verdict != "avoided" or why not in PAIR_WHY):
+            raise EngineError(400, f"Unknown reason: {why}")
         if a == b:
             raise EngineError(400, "A pair needs two different songs")
+        k = pair_key(a, b)
         with LOCK:
-            if verdict is None:
-                self.pairs.pop(pair_key(a, b), None)
+            prev = self.pairs.get(k)
+            self.pairs[k] = {**rate_entry(prev, verdict, pair_effect(effect),
+                                          time.strftime("%Y-%m-%dT%H:%M:%S%z")), "why": why}
+            # Undo restores the entry from before THIS rating ("tapping again undoes your last").
+            self.pair_undo[k] = (verdict, prev)
+            self._pairs_saved()
+
+    def pair_why(self, a: str, b: str, why: str) -> None:
+        """The optional "What was off?" after a 👎: "songs" bans the pair, "effect" only its effect."""
+        if why not in PAIR_WHY:
+            raise EngineError(400, f"Unknown reason: {why}")
+        with LOCK:
+            p = self.pairs.get(pair_key(a, b))
+            if not p or not p["avoided"]:
+                raise EngineError(409, "Only a pair you 👎 has a reason")
+            p["why"] = why
+            self._pairs_saved()
+
+    def undo_pair(self, a: str, b: str) -> None:
+        """Tapping the pressed 🔥/👎 again: the pair goes back to what it was before that rating."""
+        k = pair_key(a, b)
+        with LOCK:
+            if k not in self.pair_undo:
+                raise EngineError(409, "Nothing to undo for that pair")
+            _, prev = self.pair_undo.pop(k)
+            if prev is None:
+                self.pairs.pop(k, None)
             else:
-                self.pairs[pair_key(a, b)] = verdict
-            config.write_json_atomic(self._pairs_file(), self.pairs)
-            self._recompute()
-            self._changed()
+                self.pairs[k] = prev
+            self._pairs_saved()
+
+    def forget_pair(self, a: str, b: str) -> None:
+        """Pairs tab ✕ / MCP forget_pair: drop the memory of a -> b (b -> a is its own pair)."""
+        k = pair_key(a, b)
+        with LOCK:
+            if self.pairs.pop(k, None) is None:
+                raise EngineError(404, "No memory of that pair")
+            self.pair_undo.pop(k, None)
+            self._pairs_saved()
+
+    def play_pair(self, a: str, b: str) -> None:
+        """Pairs tab "Play pair": a then b are the very next songs, in that order. Reuses
+        play_next (b first, then a in front of it); a song that's playing now is skipped, so
+        "Play pair" on the playing song's pair just puts its partner next."""
+        with LOCK:
+            sa, sb = self.by_id(a) or library.load_song(a), self.by_id(b) or library.load_song(b)
+            if sa is None or sb is None:
+                raise EngineError(404, "That pair's songs aren't in the library any more")
+            for s in (sb, sa):
+                if s.id != self.playing:
+                    self.play_next(s.id, s.title, s.channel, s.duration, kept_from="a pair you loved")
+
+    def _moved_notes(self, by: dict[str, Song]) -> list[dict]:
+        """Up next's "X moved 3 later: you 👎 it right after Y" (after = Y's id, by = places)."""
+        return [{"id": sid, "title": by[sid].title, "after": after, "after_title": by[after].title if after in by else after,
+                 "by": got - want} for sid, (after, want, got) in self.moved.items() if got > want and sid in by]
 
     def pairs_list(self) -> list[dict]:
-        """Every rated pair with titles (songs no longer in the pool: from their cache)."""
+        """Every rated pair with titles (songs no longer in the pool: from their cache), most
+        loved first, then avoided ones; most recently rated first within each."""
         with LOCK:
-            items = list(self.pairs.items())
+            items = [(k, dict(v)) for k, v in self.pairs.items()]
             by = {s.id: s for s in self.pool}
 
         def title(sid: str) -> str:
@@ -598,9 +715,9 @@ class Engine:
         out = []
         for k, v in items:
             a, _, b = k.partition(">")
-            out.append({"from": a, "to": b, "from_title": title(a), "to_title": title(b), "verdict": v})
-        # Loved first, then avoided; most recently rated first within each (dict order = insertion).
-        return sorted(reversed(out), key=lambda p: p["verdict"] != "loved")
+            out.append({"from": a, "to": b, "from_title": title(a), "to_title": title(b), **v})
+        out.sort(key=lambda p: p["last"] or "", reverse=True)
+        return sorted(out, key=lambda p: (p["avoided"], -p["loved"]))
 
     # --- moods ----------------------------------------------------------------------
     def _moods_file(self):
@@ -1414,11 +1531,21 @@ class Engine:
             plan = lambda force: pick_transition(  # noqa: E731
                 a, b, after=after_orig, entered=self.entered.get(a.id),
                 beat_to_beat=self.beat_to_beat, force=force)
-            tr = plan(kind)
             # The dropdown lists only effects that actually work for this pair (pure, cheap:
             # the planner is a handful of list scans). "blend" covers half_double too.
             options = [k for k in FORCEABLE
                        if plan(k).kind in (("blend", "half_double") if k == "blend" else (k,))]
+            # Pair memory (design xWVJy) only steers Auto; an effect the owner picked always wins.
+            # A loved pair replays the effect it was loved with (when it still works here); an
+            # effect 👎'd as wrong for this pair is never Auto's pick (it stays forceable, dimmed).
+            mem = self.pairs.get(pair_key(a.id, b.id)) or {}
+            loved_fx = mem["effect"] if mem.get("loved") and mem.get("effect") in options else None
+            avoid_fx = mem["effect"] if mem.get("avoided") and mem.get("why") == "effect" else None
+            tr = plan(kind or loved_fx)
+            if not kind and avoid_fx and pair_effect(tr.kind) == avoid_fx:
+                alt = next((k for k in options if k != avoid_fx), None)
+                tr = plan(alt) if alt else tr
+            loved_fx = None if kind else loved_fx
             # ponytail: outgoing=None, b's own exit isn't planned yet; the planner keeps
             # exits after the ease when it can, so the ease is rarely cut short.
             tm_b = time_map_for(b, tr)
@@ -1433,6 +1560,9 @@ class Engine:
                 del self.plans[k]
             return {"transition": asdict(tr), "plan_id": plan_id, "in_deck": self._deck(b, tm_b, path),
                     "options": options, "forced": kind,
+                    # Why Auto sounds the way it does: "Auto · Bass swap (you loved it)", and the
+                    # effect the picker dims as "you 👎 it here".
+                    "loved_effect": loved_fx, "avoid_effect": avoid_fx,
                     "out_at_rendered": tm_a.to_rendered(tr.out_at),
                     "in_at_rendered": tm_b.to_rendered(tr.in_at)}
 
