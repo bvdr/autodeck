@@ -108,7 +108,7 @@ def test_age_gate_with_cookies_hint_is_not_cookie_error(tmp_library, monkeypatch
     with pytest.raises(fetch.FetchError) as e:
         fetch.download(_song())
     assert "Cool Song" in str(e.value) and "confirm your age" in str(e.value)
-    assert str(e.value) != fetch.COOKIE_ERROR
+    assert str(e.value) != fetch._cookie_error()
 
 
 def test_cookie_load_error_type_maps(tmp_library, monkeypatch):
@@ -147,7 +147,7 @@ def test_successful_download_renames_and_cleans(tmp_library, monkeypatch):
     assert [x.name for x in song_dir("abc123").iterdir()] == ["audio.opus"]
 
 
-def test_browser_none_disables_cookies(monkeypatch):
+def test_browser_none_disables_cookies(tmp_library, monkeypatch):
     from autodeck import fetch
     monkeypatch.setenv("AUTODECK_BROWSER", "none")
     assert fetch._cookie_opts() == {}
@@ -155,6 +155,23 @@ def test_browser_none_disables_cookies(monkeypatch):
     assert fetch._cookie_opts() == {"cookiesfrombrowser": ("firefox",)}
     monkeypatch.delenv("AUTODECK_BROWSER")
     assert fetch._cookie_opts() == {"cookiesfrombrowser": ("chrome",)}
+
+
+def test_settings_browser_is_used_unless_the_env_var_overrides(tmp_library, monkeypatch):
+    from autodeck import config, fetch
+    monkeypatch.delenv("AUTODECK_BROWSER", raising=False)
+    config.save_setting("youtube_browser", "safari")
+    assert fetch._cookie_opts() == {"cookiesfrombrowser": ("safari",)}
+    assert "from Safari" in fetch._cookie_error()
+    config.save_setting("youtube_browser", "none")
+    assert fetch._cookie_opts() == {}
+    monkeypatch.setenv("AUTODECK_BROWSER", "firefox")
+    assert fetch._cookie_opts() == {"cookiesfrombrowser": ("firefox",)}
+    monkeypatch.delenv("AUTODECK_BROWSER")
+    config.save_setting("youtube_browser", "netscape")  # unknown (hand-edited file): default
+    assert config.youtube_browser() == "chrome"
+    (tmp_library / "settings.json").write_text("{broken")
+    assert config.youtube_browser() == "chrome"
 
 
 def test_download_asks_ffmpeg_for_opus(tmp_library, monkeypatch):

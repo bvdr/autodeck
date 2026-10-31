@@ -6,6 +6,7 @@ calls get_state() while already holding it, so any second lock here could
 deadlock; reusing the same RLock can't.
 """
 import json
+import os
 import re
 import logging
 import threading
@@ -614,7 +615,15 @@ class Engine:
         # Where the library lives, for the Settings note; home shortened to ~ (it's shown, not used).
         lib = str(config.library_root()).replace(str(Path.home()), "~", 1)
         return {"lastfm": {"set": bool(key), "hint": key[-4:] if key else None, "source": lastfm.key_source()},
-                "library": lib}
+                "library": lib,
+                # from_env: AUTODECK_BROWSER overrides the saved choice, so the page says so.
+                "youtube": {"browser": config.youtube_browser(), "from_env": bool(os.environ.get("AUTODECK_BROWSER"))}}
+
+    def set_youtube_browser(self, browser: str) -> dict:
+        if browser not in config.BROWSERS:
+            raise EngineError(400, "Pick one of: " + ", ".join(config.BROWSERS.values()))
+        config.save_setting("youtube_browser", browser)  # fetch reads it on every call: no restart
+        return self.settings()
 
     def set_lastfm_key(self, key: str | None) -> dict:
         key = (key or "").strip()

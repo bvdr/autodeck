@@ -9,9 +9,9 @@ import yt_dlp
 from yt_dlp.cookies import CookieLoadError
 from yt_dlp.utils import DownloadError
 
+from . import config
 from .library import Song, audio_path, song_dir
 
-COOKIE_ERROR = "Couldn't read YouTube login from Chrome. Is Chrome logged in to YouTube?"
 # Cookie-READ failures. Markers are deliberately narrow: yt-dlp's sign-in / age-gate /
 # bot-check errors end with "Use --cookies-from-browser or --cookies ...", so bare
 # "cookie"/"browser" would mislabel them and hide the real reason. The primary signal is
@@ -49,7 +49,13 @@ def classify_url(url: str) -> tuple[str, str]:
 
 
 def _browser() -> str:
-    return os.environ.get("AUTODECK_BROWSER") or "chrome"
+    # Settings > "YouTube login from"; the AUTODECK_BROWSER env var still overrides it.
+    return config.youtube_browser()
+
+
+def _cookie_error() -> str:
+    b = config.BROWSERS.get(_browser(), _browser())
+    return f"Couldn't read YouTube login from {b}. Is {b} logged in to YouTube?"
 
 
 def _cookie_opts() -> dict:
@@ -95,7 +101,7 @@ def expand(url: str) -> list[Song]:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as exc:
-        raise FetchError(COOKIE_ERROR if _is_cookie_error(exc) else f"Couldn't read {url}: {_short_reason(exc)}") from exc
+        raise FetchError(_cookie_error() if _is_cookie_error(exc) else f"Couldn't read {url}: {_short_reason(exc)}") from exc
     entries = info.get("entries") if kind == "playlist" else [info]
     return [s for s in (_song_from_entry(e) for e in entries or [] if e) if s]
 
@@ -107,7 +113,7 @@ def search(query: str, n: int = 10) -> list[Song]:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(f"ytsearch{n}:{query}", download=False)
     except Exception as exc:
-        raise FetchError(COOKIE_ERROR if _is_cookie_error(exc) else f"Search failed: {_short_reason(exc)}") from exc
+        raise FetchError(_cookie_error() if _is_cookie_error(exc) else f"Search failed: {_short_reason(exc)}") from exc
     return [s for s in (_song_from_entry(e) for e in (info or {}).get("entries") or [] if e) if s]
 
 
@@ -143,7 +149,7 @@ def download(song: Song) -> Path:
         raise
     except Exception as exc:
         if _is_cookie_error(exc):
-            raise FetchError(COOKIE_ERROR) from exc
+            raise FetchError(_cookie_error()) from exc
         if isinstance(exc, DownloadError):
             raise FetchError(f"Couldn't download '{song.title}': {_short_reason(exc)}") from exc
         raise

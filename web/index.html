@@ -123,6 +123,20 @@
           <button id="lastfm-remove" type="button" class="link-btn" hidden>Remove key</button>
         </p>
       </form>
+      <!-- Where yt-dlp reads the YouTube login (cookies) from; saved in settings.json. -->
+      <div class="settings-block">
+        <label for="yt-browser">YouTube login from</label>
+        <select id="yt-browser" class="needs-server" aria-describedby="yt-state yt-err">
+          <option value="chrome">Chrome</option>
+          <option value="safari">Safari</option>
+          <option value="firefox">Firefox</option>
+          <option value="brave">Brave</option>
+          <option value="edge">Edge</option>
+          <option value="none">none (public videos only)</option>
+        </select>
+        <p id="yt-state" class="key-state"></p>
+        <p id="yt-err" class="field-msg bad" role="alert"></p>
+      </div>
       <p class="settings-block storage"><svg class="i"><use href="#i-folder"/></svg>
         <span>Your library (songs, moods, pairs, history) is stored in <code id="lib-path">~/Library/Application Support/autodeck</code></span></p>
     </div>

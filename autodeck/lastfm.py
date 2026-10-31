@@ -29,8 +29,7 @@ LEGACY_KEY_FILE = Path.home() / ".config" / "autodeck" / "lastfm.env"
 def key_file() -> Path:
     """Where Settings saves the key: the app's data folder (beside a test library when
     AUTODECK_LIBRARY is set, so tests never touch the real one)."""
-    base = config.library_root() if os.environ.get("AUTODECK_LIBRARY") else config.APP_SUPPORT
-    return base / "lastfm.env"
+    return config.data_dir() / "lastfm.env"
 
 
 def key_source() -> str | None:

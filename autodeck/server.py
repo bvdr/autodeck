@@ -68,6 +68,10 @@ class LastfmKeyReq(BaseModel):
     key: str | None = None  # empty/None = remove
 
 
+class BrowserReq(BaseModel):
+    browser: str
+
+
 class ModeReq(BaseModel):
     beat_to_beat: bool
 
@@ -221,6 +225,10 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.put("/api/settings/lastfm")
     def put_lastfm(req: LastfmKeyReq):
         return eng.set_lastfm_key(req.key)
+
+    @app.put("/api/settings/youtube")
+    def put_youtube(req: BrowserReq):
+        return eng.set_youtube_browser(req.browser)
 
     @app.post("/api/mode")
     def mode(req: ModeReq):
