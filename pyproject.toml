@@ -45,5 +45,5 @@ markers = [
 [dependency-groups]
 dev = ["pytest>=9.2.0"]
 # Installed first by the standalone app's setup (autodeck/standalone.py): just enough to
-# open the "Setting up autodeck" window before the ~1 GB of the rest.
+# open the "Setting up autodeck" window before the rest (~600 MB download).
 ui = ["pywebview>=6.2.1"]
