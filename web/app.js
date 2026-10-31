@@ -5,7 +5,7 @@
 import * as S from './schedule.js';
 import { Deck, loadTrack, laneText } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
-import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick } from './ui.js';
+import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -167,10 +167,12 @@ async function onStarted(deck) {
 function swap() {
   const old = M.cur;
   M.timers = [];
-  // The sign asks once about this hand-over (unless it's rated already).
-  const a = M.decks[old].info, b = M.decks[1 - old].info;
-  if (a && b && !getState()?.pairs?.[`${a.id}>${b.id}`]) {
-    M.rate = { from: a.id, to: b.id, title: `${a.title} → ${b.title} · ${FX_LABEL[M.plan?.kind] ?? ''}`, until: Date.now() + RATE_MS };
+  // The sign asks once about every hand-over (design xWVJy): a 🔥 counts again even for a pair
+  // that's loved already, so it asks even then. It goes by itself after RATE_MS.
+  const a = M.decks[old].info, b = M.decks[1 - old].info, kind = M.plan?.kind;
+  if (a && b) {
+    M.rate = { from: a.id, to: b.id, effect: kind, until: Date.now() + RATE_MS,
+      title: [`${a.title} → ${b.title}`, FX_LABEL[kind]].filter(Boolean).join(' · ') };
   }
   M.lastPlan = M.plan;
   M.plan = null;
@@ -653,7 +655,7 @@ function updateSign(t, p, mixing, inc, onAir, label) {
     setText('#sign-title', airInfo?.title ?? '—');
     setText('#sign-sub', 'Auto paused for this mix');
   } else if (p && !mixing) {
-    const loved = pairs[`${cur?.id}>${p.res.in_deck.id}`] === 'loved';
+    const loved = isLoved(pairOf(pairs, cur?.id, p.res.in_deck.id));
     setKicker(loved ? 'loved' : 'next');
     setText('#sign-title', p.res.in_deck.title);
     setText('#sign-sub', `${p.res.in_deck.channel}  ·  ${label.toLowerCase()} out of ${cur?.title ?? ''}`);
@@ -796,16 +798,23 @@ function updateFx(t) {
   M.fxPlan = p;
   const opts = p.res.options ?? [];
   const cur = M.force && opts.includes(M.force) ? M.force : '';
-  const auto = `Auto · ${FX_LABEL[p.kind] ?? p.kind}`;
-  setText('#fx-label', cur ? FX_LABEL[cur] : auto);
-  $('#fx-icon').setAttribute('href', `#i-${cur ? FX_ICON[cur] : 'sparkles'}`);
-  fxList.replaceChildren(...[['', auto], ...opts.map((k) => [k, FX_LABEL[k] ?? k])].map(([k, text], i) => {
+  // Pair memory: Auto names the effect the owner loved for this pair; one they 👎'd here stays
+  // pickable but dimmed and labelled, so it's clear why Auto didn't choose it.
+  const auto = autoLabel(p.kind, p.res.loved_effect), bad = p.res.avoid_effect;
+  // The button is short ("🔥 Auto · Bass swap"); the list says why.
+  setText('#fx-label', cur ? FX_LABEL[cur] : autoLabel(p.kind, p.res.loved_effect, true));
+  $('#fx-icon').setAttribute('href', `#i-${cur ? FX_ICON[cur] : p.res.loved_effect ? 'flame' : 'sparkles'}`);
+  fxList.replaceChildren(...[['', auto], ...opts.map((k) => [k, fxOptionLabel(k, bad)])].map(([k, text], i) => {
     const li = document.createElement('li');
     li.id = `fx-opt-${i}`;
+    if (k && k === bad) li.className = 'avoided';
+    // One text node group: the li is a flex row, so a bare inline icon would get the row's gap.
+    const span = document.createElement('span');
+    span.append(...withThumbs(text));
     li.setAttribute('role', 'option');
     li.dataset.k = k;
     li.setAttribute('aria-selected', String(k === cur));
-    li.append(icon(k ? FX_ICON[k] ?? 'blend' : 'sparkles'), text);
+    li.append(icon(k === bad && k ? 'thumbs-down' : k ? FX_ICON[k] ?? 'blend' : p.res.loved_effect ? 'flame' : 'sparkles'), span);
     if (k === cur) li.append(icon('check', 'check'));
     li.onclick = () => chooseFx(k);
     return li;
@@ -854,8 +863,10 @@ async function rate(verdict) {
   const r = M.rate;
   M.rate = null;
   if (!r) return;
-  try { setState(await api('/api/pair', 'POST', { from: r.from, to: r.to, verdict })); } catch (e) { report(e); }
+  try { setState(await api('/api/pair', 'POST', { from: r.from, to: r.to, verdict, effect: r.effect })); } catch (e) { report(e); }
 }
+// Phone ✕: dismiss without rating (Played still has the rating later).
+$('#rate-close').addEventListener('click', () => { M.rate = null; });
 $('#rate-love').addEventListener('click', () => rate('loved'));
 $('#rate-avoid').addEventListener('click', () => rate('avoided'));
 

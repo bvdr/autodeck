@@ -236,7 +236,7 @@ body.idle.empty .sign-title, .sign-title.long { font-size: clamp(32px, 4vw, 56px
 .fx-locked { display: inline-flex; gap: 8px; align-items: center; height: var(--target); padding: 0 var(--s3);
   border: 1px solid var(--line); border-radius: var(--r-md); color: var(--text-2); font-weight: 600; }
 #fx-btn .caret { color: var(--text-2); }
-.listbox { z-index: 35; list-style: none; margin: 0; padding: 6px; right: 0; top: calc(100% + 6px); min-width: 260px; max-height: 360px; overflow: auto; }
+.listbox { z-index: 35; list-style: none; margin: 0; padding: 6px; right: 0; top: calc(100% + 6px); min-width: 290px; max-height: 360px; overflow: auto; }
 .listbox li { display: flex; align-items: center; gap: 10px; min-height: var(--target); padding: 0 10px; border-radius: var(--r-sm);
   cursor: pointer; color: var(--text-2); }
 .listbox li[aria-selected="true"] { color: var(--text); background: var(--raised); font-weight: 600; }
@@ -254,6 +254,7 @@ body.idle.empty .sign-title, .sign-title.long { font-size: clamp(32px, 4vw, 56px
 .rate-btns { display: flex; gap: var(--s2); }
 .rate-btns .btn { flex: 1; justify-content: center; }
 .rate-timer { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--line); overflow: hidden; }
+.rate-close { position: absolute; top: -6px; right: -6px; }
 .rate-timer::after { content: ""; position: absolute; inset: 0; background: var(--text-2); transform-origin: left;
   transform: scaleX(var(--left, 1)); }
 
@@ -537,6 +538,22 @@ body.live .openers, body:not(.live) .upnext { display: none; }
 .rate[aria-pressed="true"].love { color: var(--loved); background: #FF7AB81f; }
 .rate[aria-pressed="true"].avoid { color: var(--text); background: var(--raised); }
 .pair-t { display: inline-flex; gap: 8px; align-items: center; min-width: 0; }
+/* Mix memory (design xWVJy) */
+/* Played: the title and "from X" share the row 2:1 (the title's basis is 0, so an auto-sized
+   "from" would otherwise squeeze it to nothing on a row with Play next). */
+.logrow .t:has(+ .from) { flex: 2 1 0; }
+.logrow .from { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; min-width: 0; text-align: right; }
+.logrow .from + .fx, .logrow .t + .fx { flex: none; }
+.logrow .s .i { width: 12px; height: 12px; vertical-align: -1px; margin-right: 4px; }
+.why-ask { padding: 8px 4px 12px 84px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.why-ask .label { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text-2); }
+.why-ask .chip:first-child { background: var(--text); color: var(--bg); }
+#pair-filter { align-items: center; }
+#pair-filter .sort { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.moved-note { display: flex; gap: 8px; align-items: center; padding: 4px 4px 8px 52px; font-size: 12px; color: var(--text-3); }
+.moved-note .i { width: 13px; height: 13px; flex: none; }
+.listbox li.avoided { opacity: .45; }
+.thumb-i { width: 13px; height: 13px; vertical-align: -2px; margin: 0 2px; }
 .pair-t .i { color: var(--text-3); }
 .empty-state { display: grid; justify-items: center; gap: 6px; padding: 28px 12px; text-align: center; color: var(--text-2); font-size: 13px; }
 .empty-state > .i { width: 22px; height: 22px; }
@@ -611,6 +628,11 @@ body.live .openers, body:not(.live) .upnext { display: none; }
 /* --- phone ----------------------------------------------------------------------- */
 @media (max-width: 600px) {
   :root { --target: 44px; }
+  /* "How was that mix?" on the Now screen: thumb-sized buttons for the dance floor (design xWVJy). */
+  .rate-btns .btn { height: 52px; font-size: 16px; }
+  .rate-close { top: -10px; right: -8px; }
+  .why-ask { padding-left: 4px; }
+  .logrow .from { display: none; }
   body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   .desk-only { display: none !important; }
   /* One grid; the header's controls become grid items of the Now tab (display: contents). */

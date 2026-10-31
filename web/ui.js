@@ -104,6 +104,46 @@ function nudge(id, delta) {
 }
 const titleOf = (id) => last?.pool.find((p) => p.id === id)?.title ?? id;
 
+// --- mix memory (design xWVJy): pure helpers for the copy ---------------------------------
+/** The memory of the hand-over a -> b (pairs.json entry) or undefined. Key format "a>b". */
+export const pairOf = (pairs, a, b) => (a && b ? pairs?.[`${a}>${b}`] : undefined);
+export const isLoved = (p) => (p?.loved ?? 0) > 0;
+/** Avoided as a pair (not just its effect): never placed back to back. */
+export const isAvoided = (p) => !!p?.avoided && p.why !== 'effect';
+const fx = (k) => FX_LABEL[k] ?? k;
+/** Up next, under a loved partner: "You loved it after Despacito · Bass swap · 3×". */
+export function lovedLine(prevTitle, p) {
+  return [`You loved it after ${prevTitle}`, p.effect ? fx(p.effect) : null, p.loved > 1 ? `${p.loved}×` : null]
+    .filter(Boolean).join(' · ');
+}
+/** Up next, after the song an avoid kept it away from. */
+export const movedNote = (m) => `${m.title} moved ${m.by} later: you 👎 it right after ${m.after_title}.`;
+/** Pairs tab: why an avoided pair is avoided. */
+export const pairReason = (p) => (p.why === 'effect' && p.effect ? `${fx(p.effect)} was wrong for them` : "songs don't go together");
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/** When a pair was last rated, the board's way: "tonight", "last Sat, 22:14", "2 weeks ago",
+ * "last month". `now` is a Date (tests pass one). Same calendar day = tonight: it's a DJ app. */
+export function pairWhen(iso, now = new Date()) {
+  const t = iso ? new Date(iso) : null;
+  if (!t || Number.isNaN(t.getTime())) return '';
+  const day = (d) => Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 86400000);
+  const days = day(now) - day(t);
+  if (days <= 0) return 'tonight';
+  if (days === 1) return 'last night';
+  const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  if (days < 7) return `last ${DAYS[t.getDay()]}, ${hm}`;
+  if (days < 30) return days < 14 ? 'last week' : `${Math.floor(days / 7)} weeks ago`;
+  return days < 60 ? 'last month' : `${Math.floor(days / 30)} months ago`;
+}
+/** Pairs tab sub-line: "Bass swap · last Sat, 22:14" / "songs don't go together · tonight". */
+export const pairSub = (p, now) => [p.avoided ? pairReason(p) : p.effect ? fx(p.effect) : null, pairWhen(p.last, now)]
+  .filter(Boolean).join(' · ');
+/** Effect picker: Auto's label, and an effect the owner 👎'd for this pair. */
+export const autoLabel = (kind, lovedFx, short = false) => `Auto · ${fx(lovedFx || kind)}${lovedFx && !short ? ' (you loved it)' : ''}`;
+export const fxOptionLabel = (k, avoidFx) => (k === avoidFx ? `${fx(k)} · you 👎 it here` : fx(k));
+/** Copy with 👎 in it, as DOM nodes: the emoji drawn as the outline icon the design uses. */
+export const withThumbs = (text) => text.split('👎').flatMap((part, i) => (i ? [icon('thumbs-down', 'thumb-i'), part] : [part]));
+
 // --- Up next --------------------------------------------------------------------
 /** Up next row kind: the owner's (kept) or an auto pick, with the note under the title. Pure. */
 export function upNextNote(song, s) {
@@ -117,8 +157,8 @@ export function upNextNote(song, s) {
 function queueRow(song, i, s, ids, prevId) {
   const locked = i < (s.queue_locked ?? 0);
   const note = upNextNote(song, s);
-  const pair = prevId ? s.pairs?.[`${prevId}>${song.id}`] : null;
-  const loved = pair === 'loved';
+  const pair = pairOf(s.pairs, prevId, song.id);
+  const loved = isLoved(pair);
   const li = el('li', { className: `row${locked ? ' locked' : ''}${loved ? ' loved' : ''}${note.auto ? ' auto' : ''}` },
     // Locked rows (already planned) have a lock instead of a grip: sortable.js only lifts grips.
     locked ? el('span', { className: 'lead', title: 'Locked in: already planned' }, icon('lock'), el('span', { className: 'sr-only', textContent: 'Locked in.' }))
@@ -126,11 +166,11 @@ function queueRow(song, i, s, ids, prevId) {
     thumb(song),
     el('span', { className: 'text' },
       el('span', { className: 't' }, song.title, loved ? ' ' : null, loved ? icon('flame') : null),
-      loved ? el('span', { className: 's why', textContent: `You loved it after ${titleOf(prevId)}` })
+      loved ? el('span', { className: 's why', textContent: lovedLine(titleOf(prevId), pair) })
         // A locked auto pick shows the Locked badge, so its "Auto · …" note moves under the title.
         : el('span', { className: 's', textContent: [note.sub, note.auto && locked ? note.badge : null].filter(Boolean).join(' · ') })),
     el('span', { className: 'meta', textContent: songMeta(song), title: 'BPM  key  danceability' }),
-    loved ? badge('loved', 'Loved after this') : pair === 'avoided' ? badge('avoided', 'Avoided pair')
+    loved ? badge('loved', 'Loved after this') : isAvoided(pair) ? badge('avoided', 'Avoided pair')
       : locked ? badge('locked', 'Locked in') : note.auto ? badge('auto', note.badge, 'Fills in so the music never stops') : badge(song.status, cap(song.status), song.error),
     genreSelect(song, s.genres, `Genre for ${song.title}`),
     i ? deckBtn(song) : null, // the first row is already next
@@ -151,7 +191,14 @@ function queueRow(song, i, s, ids, prevId) {
 
 function renderQueue(s) {
   const ids = s.queue.map((q) => q.id);
-  $('#queue').replaceChildren(...s.queue.map((q, i) => queueRow(q, i, s, ids, i ? s.queue[i - 1].id : s.playing)));
+  const rows = s.queue.map((q, i) => queueRow(q, i, s, ids, i ? s.queue[i - 1].id : s.playing));
+  // "X moved 3 later: you 👎 it right after Y" goes under Y's row (at the top when Y is playing).
+  // No data-id, so sortable.js doesn't count it as a row.
+  for (const m of s.moved ?? []) {
+    const at = m.after === s.playing ? 0 : rows.findIndex((r) => r.dataset.id === m.after) + 1;
+    if (at > 0 || m.after === s.playing) rows.splice(at, 0, el('li', { className: 'moved-note' }, icon('thumbs-down'), el('span', {}, withThumbs(movedNote(m)))));
+  }
+  $('#queue').replaceChildren(...rows);
   // "Play next" picks still downloading / analysing: shown first, not draggable yet.
   $('#requested').replaceChildren(...(s.requested ?? []).map((q) => el('li', { className: 'row' },
     el('span', { className: 'lead' }, icon('list-start')),
@@ -442,17 +489,23 @@ function showTab(name) {
 }
 
 const FLAME = 'flame', THUMB = 'thumbs-down';
-async function ratePair(from, to, verdict) {
-  try { setState(await api('/api/pair', 'POST', { from, to, verdict })); loadHistory(); } catch (e) { report(e); }
+/** POST a pair action, render the new state, then refresh the open list. */
+async function pairAct(path, body) {
+  try {
+    setState(await api(path, 'POST', body));
+    if (logTab === 'played') loadHistory();
+  } catch (e) { report(e); }
 }
 
 async function loadHistory() {
   try {
     const { history } = await api('/api/history?limit=300');
-    $('#history').replaceChildren(...history.map((h) => {
-      const v = h.verdict;
+    $('#history').replaceChildren(...history.flatMap((h) => {
+      const v = h.verdict, pair = { from: h.from, to: h.id };
+      // Tapping the pressed one undoes it (the server keeps what the pair was before).
       const rateBtn = (kind, ic, label) => {
-        const b = iconBtn(ic, label, () => ratePair(h.from, h.id, v === kind ? null : kind), `rate ${kind === 'loved' ? 'love' : 'avoid'}`);
+        const b = iconBtn(ic, label, () => (v === kind ? pairAct('/api/pair/undo', pair)
+          : pairAct('/api/pair', { ...pair, verdict: kind, effect: h.effect })), `rate ${kind === 'loved' ? 'love' : 'avoid'}`);
         b.setAttribute('aria-pressed', String(v === kind));
         return b;
       };
@@ -460,7 +513,7 @@ async function loadHistory() {
         el('span', { className: 'at', textContent: (h.at || '').slice(11, 16) }),
         thumb(h),
         el('span', { className: 't', textContent: h.title }),
-        el('span', { className: 'meta', textContent: [h.bpm ? h.bpm.toFixed(1) : null, h.genre].filter(Boolean).join(' · ') }),
+        h.from ? el('span', { className: 'from mono', textContent: `from ${titleOf(h.from)}` }) : null,
         el('span', { className: 'fx' }, h.effect ? [icon(FX_ICON[h.effect] ?? 'blend'), FX_LABEL[h.effect] ?? h.effect] : 'Started'),
         // A row rates the hand-over INTO this song; a song started from scratch has none.
         h.from ? rateBtn('loved', FLAME, `Nailed it: the mix from ${titleOf(h.from)} into ${h.title}`) : el('span', { className: 'rate' }),
@@ -468,7 +521,16 @@ async function loadHistory() {
         // Not for the playing song (always the newest row): it can't be next as well.
         h.id === last?.playing ? null : [deckBtn(h), moreBtn(h)]);
       if (h.id !== last?.playing) li.pick = { song: h, list: 'played', ctx: {} };
-      return li;
+      // 👎 asks one optional question inline, so the right thing gets avoided. Unanswered it
+      // counts as "songs" (the planner treats no reason like that).
+      const ask = v === 'avoided' && !h.why ? el('li', { className: 'why-ask' },
+        el('p', { className: 'label', textContent: 'What was off?' }),
+        el('div', { className: 'seg-chips' },
+          el('button', { type: 'button', className: 'chip', onclick: () => pairAct('/api/pair/why', { ...pair, why: 'songs' }) },
+            "These songs don't go together"),
+          el('button', { type: 'button', className: 'chip', onclick: () => pairAct('/api/pair/why', { ...pair, why: 'effect' }) },
+            'Wrong effect for them'))) : null;
+      return ask ? [li, ask] : [li];
     }));
     $('#history-empty').hidden = history.length > 0;
   } catch (e) { report(e); }
@@ -476,24 +538,27 @@ async function loadHistory() {
 
 async function loadPairs() {
   try {
-    const { pairs } = await api('/api/pairs');
-    const n = { all: pairs.length, loved: pairs.filter((p) => p.verdict === 'loved').length };
+    const { pairs } = await api('/api/pairs'); // most loved first (server), avoided last
+    const n = { all: pairs.length, loved: pairs.filter((p) => !p.avoided).length };
     n.avoided = n.all - n.loved;
     $('#pair-filter').replaceChildren(...['all', 'loved', 'avoided'].map((k) => el('button', { type: 'button', className: 'chip',
       'aria-pressed': String(pairFilter === k), onclick: () => { pairFilter = k; pairsFor = undefined; renderLogs(last); } },
-    `${cap(k)} ${n[k]}`)));
-    const shown = pairs.filter((p) => pairFilter === 'all' || p.verdict === pairFilter);
-    $('#pairs').replaceChildren(...shown.map((p) => el('li', { className: 'logrow' },
-      el('span', { className: 'text' },
-        el('span', { className: 't pair-t' }, p.from_title, icon('arrow-right'), p.to_title),
-        el('span', { className: 's', textContent: p.verdict === 'loved' ? 'You loved this hand-over' : "Songs don't go together" })),
-      p.verdict === 'loved' ? badge('loved', 'Loved') : badge('avoided', 'Avoid'),
-      // Play pair: both songs next, in this order (the owner's "play next" list keeps order).
-      p.verdict === 'loved' ? el('button', { type: 'button', className: 'btn', onclick: async () => {
-        await act('/api/request', 'POST', { id: p.from, title: p.from_title });
-        await act('/api/request', 'POST', { id: p.to, title: p.to_title });
-      } }, icon('list-start'), 'Play pair') : null,
-      iconBtn('x', `Forget ${p.from_title} → ${p.to_title}`, () => ratePair(p.from, p.to, null), 'remove'))));
+    `${cap(k)} ${n[k]}`)), el('span', { className: 'hint sort', textContent: 'Most loved first' }));
+    const shown = pairs.filter((p) => pairFilter === 'all' || (pairFilter === 'avoided') === !!p.avoided);
+    const now = new Date();
+    $('#pairs').replaceChildren(...shown.map((p) => {
+      const pair = { from: p.from, to: p.to }, name = `${p.from_title} → ${p.to_title}`;
+      return el('li', { className: 'logrow pair' },
+        el('span', { className: 'text' },
+          el('span', { className: 't pair-t' }, p.from_title, icon('arrow-right'), p.to_title),
+          // A pair migrated from the first pair memory has no effect or time: no sub-line.
+          pairSub(p, now) ? el('span', { className: 's' }, icon(p.avoided && p.why !== 'effect' ? 'ban' : FX_ICON[p.effect] ?? 'sparkles'), pairSub(p, now)) : null),
+        p.avoided ? badge('avoided', 'avoid') : el('span', { className: 'badge loved', title: `${p.loved} × nailed it` }, icon(FLAME), `×${p.loved}`),
+        // Play pair: both songs are the very next ones, in this order (play_next machinery).
+        p.avoided ? null : el('button', { type: 'button', className: 'btn', onclick: () => pairAct('/api/pair/play', pair) },
+          icon('list-start'), 'Play pair'),
+        iconBtn('x', `Forget ${name}`, () => pairAct('/api/pair/forget', pair), 'remove'));
+    }));
     $('#pairs-empty').hidden = pairs.length > 0;
   } catch (e) { report(e); }
 }
