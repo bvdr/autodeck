@@ -24,9 +24,12 @@ def test_read_only_tools_are_not_destructive_and_writes_are():
     by = {t.name: t.annotations for t in _tools()}
     for name in ("now_playing", "list_library", "get_history", "search_songs", "get_suggestions"):
         assert by[name].read_only_hint and not by[name].destructive_hint
-    for name in ("play_next", "mix_now", "set_genre", "start_party", "remove_song", "reject_suggestion"):
+    for name in ("play_next", "mix_now", "set_genre", "start_party", "remove_song", "reject_suggestion",
+                 "love_pair", "avoid_pair"):
         assert not by[name].read_only_hint and by[name].destructive_hint
     assert by["add_songs"].destructive_hint is False  # purely additive
+    for name in ("love_pair", "avoid_pair"):
+        assert by[name].open_world_hint is False  # local pair memory only
     for name in ("search_songs", "get_suggestions", "play_next", "add_songs", "accept_suggestion"):
         assert by[name].open_world_hint  # reach YouTube / Last.fm
 

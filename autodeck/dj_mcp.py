@@ -218,6 +218,21 @@ def add_songs(url: str, genre: str = "") -> dict:
     return _api("/api/add", "POST", {"url": url, "genre": genre or None})
 
 
+@tool("Love a pair")
+def love_pair(from_song_id: str, to_song_id: str) -> dict:
+    """Remember that mixing from_song_id into to_song_id worked (🔥). The planner then prefers
+    playing to_song after from_song. Overwrites an earlier 'avoid' for the same pair, so it is
+    marked destructive. Ids are YouTube video ids (now_playing, get_history, list_library)."""
+    return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "loved"}))
+
+
+@tool("Avoid a pair")
+def avoid_pair(from_song_id: str, to_song_id: str) -> dict:
+    """Remember that mixing from_song_id into to_song_id didn't work (👎). The planner never
+    places to_song right after from_song again unless nothing else is ready."""
+    return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "avoided"}))
+
+
 def main() -> None:
     server.run("stdio")
 
