@@ -96,7 +96,7 @@ export function plan(res, outZero, now, beat = 0.5) {
   } else if (kind === 'bass_swap') {
     // Both songs at full level; only one has bass. The bass jumps across on the bar line
     // halfway through, so two basslines never play together (the classic club blend).
-    const mid = T0 + Math.max(1, Math.round(L / 2 / bar)) * bar;
+    const mid = bassMid(T0, L, bar);
     out.push(set('hp', HP_IDLE, now), set('hp', BASS_CUT, mid), set('gain', 1, mid), lin('gain', 0, T0 + L));
     inn.push(set('gain', 0, now), set('gain', 0, T0), lin('gain', 1, mid),
       set('hp', BASS_CUT, T0), set('hp', HP_IDLE, mid));
@@ -149,6 +149,12 @@ export function plan(res, outZero, now, beat = 0.5) {
     inn.push(set('gain', 1, now));
   }
   return { ...t, out, in: inn };
+}
+
+/** ctx time a bass swap hands the bass to the incoming: the bar line nearest halfway (at
+ * least one bar in). Exported so the lanes draw the "BASS → B" marker where it really happens. */
+export function bassMid(T0, length, bar) {
+  return T0 + Math.max(1, Math.round(length / 2 / bar)) * bar;
 }
 
 /** Every deck effect control at its idle value ("no effect"), gain at 0. */
