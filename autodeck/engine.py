@@ -29,6 +29,39 @@ PLANS_PER_SONG = 4
 PARTY_BUCKET = "party"
 # ponytail: a mood/genre draft lists at most this many songs; paging if moods grow past it.
 DRAFT_MAX = 60
+# Saved playlists (playlists.json, design HJGfo): how each one plays and when it re-reads YouTube.
+PL_ORDERS = ("playlist", "mix")
+PL_AT_END = ("keep_going", "repeat", "stop")
+PL_STALE = 24 * 3600  # picking a playlist re-reads it when the last sync is older than this
+LIST_RE = re.compile(r"[A-Za-z0-9_-]{2,64}")  # a YouTube list id (PL…, LM, OLAK5uy_…, RD…)
+ONE_SONG = ("That’s one song playing inside a playlist. Add just the song, or open the playlist "
+            "and copy the link from its page.")
+
+
+def sync_diff(old: list[str], new: list[str]) -> tuple[list[int], list[str]]:
+    """(indexes in `new` of ids that weren't in `old`, ids of `old` gone from `new`)."""
+    o, n = set(old), set(new)
+    return [k for k, i in enumerate(new) if i not in o], [i for i in old if i not in n]
+
+
+def _fail_reason(failed: list[Song]) -> str | None:
+    """One short reason shared by a playlist's songs that can't play, for "can't play (…)"."""
+    kinds = set()
+    for s in failed:
+        e = (s.error or "").lower()
+        kinds.add("unavailable in your country" if "country" in e else "private" if "private" in e
+                  else "unavailable" if ("unavailable" in e or "removed" in e or "deleted" in e) else None)
+    return kinds.pop() if len(kinds) == 1 else None
+
+
+def _fit_reason(prev: Song | None, s: Song, rest: list[Song]) -> str | None:
+    """Why the mix order put s after prev: same key, or the closest tempo of what was left."""
+    if prev is None or not prev.analysis or not s.analysis:
+        return None
+    if prev.analysis.camelot and prev.analysis.camelot == s.analysis.camelot:
+        return "same key"
+    gap = lambda x: abs(x.analysis.bpm - prev.analysis.bpm) if x.analysis else 1e9  # noqa: E731
+    return "closest tempo" if len(rest) > 1 and gap(s) <= min(gap(x) for x in rest) else None
 
 
 class EngineError(Exception):
@@ -94,6 +127,14 @@ class Engine:
         # Pair memory: the owner's verdict on a hand-over, pair_key(a, b) -> "loved" | "avoided".
         # Directional and kept for removed songs too (re-adding the link brings the memory back).
         self.pairs: dict[str, str] = self._load_pairs()
+        # Saved playlists: list id -> entry (_load_playlists has the fields). Dict order = save order.
+        self.playlists: dict[str, dict] = self._load_playlists()
+        # The active playlist source (a list id) or None. One source at a time, like genre / party.
+        self.playlist: str | None = None
+        # This run through the active playlist: song id -> "HH:MM" it started. Separate from
+        # `played` (the whole session) so picking a playlist plays all of it, even songs heard
+        # earlier tonight, and "Repeat" can start over without touching the Played log.
+        self.pl_run: dict[str, str] = {}
         self._sugg: tuple[tuple, float, list] | None = None  # ((playing, source key), time, list)
         self._enrich_stop = threading.Event()
         # Effect forced for the playing song's exit (dropdown, MCP). Server-side so every
@@ -113,7 +154,17 @@ class Engine:
     def get_state(self):
         with LOCK:  # reentrant: the worker calls this while holding LOCK in _set
             first = [i for i in self.requested if i not in self.upcoming]  # requested, not ready yet
-            return list(self.pool), first + list(self.upcoming), self.genre, set(self.played)
+            # Playlist songs are prepared from the top: the active playlist's, then the newest
+            # saved one's (so a playlist saved a minute ago is playable soon, the rest keep coming).
+            # They ride in the worker's "upcoming" slot, which is prepped before anything else.
+            by = {s.id: s for s in self.pool}
+            newest = max(self.playlists.values(), key=lambda p: p["saved_at"], default=None)
+            prep = []
+            for pl in dict.fromkeys(x["list_id"] for x in (self._pl(), newest) if x):
+                prep += [i for i in self.playlists[pl]["song_ids"]
+                         if i in by and by[i].status not in ("ready", "failed")]
+            ids = list(dict.fromkeys(first + list(self.upcoming) + prep))
+            return list(self.pool), ids, self.genre, set(self.played)
 
     def _on_worker_change(self) -> None:
         # A song changed status (e.g. became ready): it may belong in the queue now.
@@ -132,8 +183,9 @@ class Engine:
             "maps": {k: tm.points for k, tm in self.maps.items()},
             "entered": {k: asdict(t) for k, t in self.entered.items()},
             "beat_to_beat": self.beat_to_beat, "party": self.party, "kept": self.kept,
-            # The active source (genre / mood; party above), so a restart doesn't reset it to Any.
-            "genre": self.genre,
+            # The active source (genre / mood / playlist; party above), so a restart doesn't reset
+            # it to Any. pl_run: how far the playlist got.
+            "genre": self.genre, "playlist": self.playlist, "pl_run": self.pl_run,
             "requested": self.requested})
 
     def _load_session(self) -> None:
@@ -155,6 +207,11 @@ class Engine:
         # (one source at a time; older session files had no genre at all).
         g = d.get("genre")
         self.genre = g if g in config.genres() and not self.party else config.ANY_GENRE
+        pl = d.get("playlist")
+        if pl in self.playlists and not self.party:
+            self.playlist, self.genre = pl, config.ANY_GENRE
+            run = d.get("pl_run")
+            self.pl_run = {str(k): str(v) for k, v in run.items()} if isinstance(run, dict) else {}
         kept = d.get("kept")
         self.kept = {k: str(v) for k, v in kept.items() if k in ids} if isinstance(kept, dict) else {}
         req = d.get("requested")
@@ -183,7 +240,21 @@ class Engine:
         transition may be planned already), unless `keep` overrides them (source switch)."""
         g, anyg = self.genre, config.ANY_GENRE
         cands = [s for s in self.pool if self._eligible(s)]
-        if self.party:
+        pl = self._pl()
+        pl_ready: list[Song] = []
+        pl_waiting = False
+        end_note = None
+        if pl is not None:
+            left = self._pl_left(pl)
+            if not left and pl["at_end"] == "repeat" and self._pl_songs(pl):
+                self.pl_run = {}  # Repeat: start again from #1 (the playing song plays on)
+                left = self._pl_left(pl)
+            pl_ready = [s for s in left if s.status == "ready" and s.analysis]
+            # Not ready yet = skipped for now, never waited for (they join once ready).
+            pl_waiting = len(pl_ready) < len(left)
+            in_src, what = pl_ready, pl["name"]
+            end_note = self._pl_end_note(pl, left)
+        elif self.party:
             # Party flavor replaces the genre filter; songs not looked up on Last.fm yet don't fit.
             in_src = [s for s in cands if party.fits(s, self.party)]
             what = f"{self.party} party"
@@ -195,15 +266,16 @@ class Engine:
             in_src = [s for s in cands if g == anyg or s.effective_genre() == g]
             what = g
         # Review Focus 3: the source ran dry -> auto picks come from any genre (with a notice),
-        # never go silent.
-        fell_back = bool(cands) and not in_src
-        self.notice = f"No ready {what} songs yet — playing from any genre" if fell_back else None
+        # never go silent. A playlist that simply ended is handled by its at_end, not here.
+        fell_back = bool(cands) and not in_src and (pl is None or pl_waiting)
+        self.notice = end_note or (f"No ready {what} songs yet — playing from any genre" if fell_back else None)
         # order() filters by genre itself; for a party or mood the candidates arrive pre-filtered.
         prefiltered = bool(self.party) or g in self.moods
         use_genre = anyg if (fell_back or prefiltered) else g
         src = cands if fell_back else in_src
         cur = self.by_id(self.playing) if self.playing else None
-        ok = {s.id for s in cands}
+        # A playlist song played earlier tonight is still playable in the playlist.
+        ok = {s.id for s in cands} | {s.id for s in pl_ready}
         if keep is None:
             keep = self.upcoming[: config.FIXED_NEXT] if cur else []
         locked = [i for i in dict.fromkeys(keep) if i in ok]
@@ -219,12 +291,40 @@ class Engine:
         need = config.MIN_UPCOMING - len(head)
         if need > 0:
             prev = self.by_id(head[-1]) if head else cur
-            rest = [s for s in src if s.id not in head]
-            # Nothing playing and nothing kept: no "previous song" to score against, pool order.
-            ranked = order(prev, rest, {}, use_genre, bonus=party.bonus if self.party else None,
-                           pairs=self.pairs) if prev else rest
-            auto = [s.id for s in ranked[:need]]
+            if pl is not None:
+                auto = self._pl_auto(pl, prev, head, pl_ready, pl_waiting, cands, need)
+            else:
+                rest = [s for s in src if s.id not in head]
+                # Nothing playing and nothing kept: no "previous song" to score against, pool order.
+                ranked = order(prev, rest, {}, use_genre, bonus=party.bonus if self.party else None,
+                               pairs=self.pairs) if prev else rest
+                auto = [s.id for s in ranked[:need]]
         self.upcoming = head + auto
+
+    def _pl_auto(self, pl: dict, prev: Song | None, head: list[str], pl_ready: list[Song], waiting: bool,
+                 cands: list[Song], need: int) -> list[str]:
+        """Auto picks while a playlist plays: its next ready songs in playlist order (or the
+        planner's mix order), then, when it runs short, whatever its at_end says."""
+        rest = [s for s in pl_ready if s.id not in head]
+        if pl["order"] == "mix" and prev is not None:
+            rest = order(prev, rest, {}, config.ANY_GENRE, pairs=self.pairs)
+        auto = [s.id for s in rest[:need]]
+        more = need - len(auto)
+        if more <= 0:
+            return auto
+        taken = set(head) | set(auto) | {self.playing}
+        if pl["at_end"] == "repeat" and not waiting:
+            # Round again from #1 (played songs included: that's the point of Repeat).
+            wrap = [s for s in self._pl_songs(pl) if s.id not in taken and s.status == "ready" and s.analysis]
+            return auto + [s.id for s in wrap[:more]]
+        if waiting or pl["at_end"] == "keep_going":
+            # Songs still downloading (never waited for), or the end with "Keep going": similar
+            # library songs, seeded by the last playlist song so the hand-over stays smooth.
+            tail = self.by_id(auto[-1]) if auto else prev
+            lib = [s for s in cands if s.id not in taken]
+            ranked = order(tail, lib, {}, config.ANY_GENRE, pairs=self.pairs) if tail else lib
+            return auto + [s.id for s in ranked[:more]]
+        return auto  # "stop": Up next simply ends after the last song
 
     def view(self, s: Song) -> dict:
         an = s.analysis
@@ -250,6 +350,9 @@ class Engine:
                     "next_effect": self.next_effect, "effects": list(FORCEABLE), "mix_now_seq": self.mix_now_seq,
                     "moods": {k: len(v) for k, v in self.moods.items()},
                     "source": self._source(),
+                    # Saved playlists, newest first, and the active one (or None).
+                    "playlists": [self._pl_summary(p, by) for p in reversed(self.playlists.values())],
+                    "playlist": self._pl_summary(self._pl(), by) if self._pl() else None,
                     "queue": [self._queued(by[i]) for i in self.upcoming if i in by],
                     # What the queue panel marks: the first `queue_locked` songs keep their order
                     # (_recompute's FIXED_NEXT, only while something plays); `requested` = kept
@@ -269,36 +372,41 @@ class Engine:
             songs = fetch.expand(url)
         except (ValueError, fetch.FetchError) as e:
             raise EngineError(400, str(e)) from e
-        added = retried = 0
         with LOCK:
-            have = {s.id: s for s in self.pool}
-            for new in songs:
-                if new.id in have:
-                    # Re-adding is the owner's only retry: the worker never touches a failed
-                    # song, so put it back in the queue (in place: the worker holds it).
-                    old = have[new.id]
-                    if old.status == "failed":
-                        old.status, old.error = "queued", None
-                        library.save_song(old)
-                        retried += 1
-                    continue
-                # A song removed earlier keeps its cache on disk; reuse it, because saving
-                # the fresh (analysis-less) record would delete analysis.json and the
-                # owner's genre fix. A reused failed song gets a fresh try, same as above.
-                s = library.load_song(new.id) or new
-                if s.status == "failed":
-                    s.status, s.error = "queued", None
-                if genre:
-                    s.genre_hint = genre
-                library.save_song(s)
-                self.pool.append(s)
-                have[s.id] = s
-                added += 1
-            if added or retried:  # a retried song changed status: wake the worker
-                library.save_pool([s.id for s in self.pool])
-                self._recompute()
-                self._changed()
+            added, retried = self._import_songs(songs, genre)
         return added + retried  # the UI's "Added N songs": a retry is (re)queued too
+
+    def _import_songs(self, songs: list[Song], genre: str | None) -> tuple[int, int]:
+        """Put fetched songs in the library pool (call with LOCK held). (new, retried)."""
+        added = retried = 0
+        have = {s.id: s for s in self.pool}
+        for new in songs:
+            if new.id in have:
+                # Re-adding is the owner's only retry: the worker never touches a failed
+                # song, so put it back in the queue (in place: the worker holds it).
+                old = have[new.id]
+                if old.status == "failed":
+                    old.status, old.error = "queued", None
+                    library.save_song(old)
+                    retried += 1
+                continue
+            # A song removed earlier keeps its cache on disk; reuse it, because saving
+            # the fresh (analysis-less) record would delete analysis.json and the
+            # owner's genre fix. A reused failed song gets a fresh try, same as above.
+            s = library.load_song(new.id) or new
+            if s.status == "failed":
+                s.status, s.error = "queued", None
+            if genre:
+                s.genre_hint = genre
+            library.save_song(s)
+            self.pool.append(s)
+            have[s.id] = s
+            added += 1
+        if added or retried:  # a retried song changed status: wake the worker
+            library.save_pool([s.id for s in self.pool])
+            self._recompute()
+            self._changed()
+        return added, retried
 
     def set_playing(self, sid: str, plan_id: str | None = None) -> None:
         with LOCK:
@@ -316,6 +424,14 @@ class Engine:
                 self._log_played(sid, plan[2] if plan and plan[0] == sid else None)
             prev, self.playing = self.playing, sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
+            pl = self._pl()
+            if pl is not None and sid != prev:
+                if sid in pl["song_ids"]:
+                    self.pl_run[sid] = time.strftime("%H:%M")
+                elif pl["at_end"] == "keep_going" and not self._pl_left(pl):
+                    # The playlist is over and a library song took over ("Keep going"): the
+                    # source hands over to Vibe: Any, seeded by what's playing.
+                    self.playlist, self.pl_run = None, {}
             self._save_session()
         if prev and prev != sid:
             # The song that just handed over is decoded in the browser already, and its renders
@@ -554,7 +670,12 @@ class Engine:
 
     def _source(self) -> dict | None:
         """Where the next songs come from: one of party / mood / genre, or None (Any, party off).
-        `key` names its exclusions in rejected.json; `label` is what the owner reads."""
+        `key` names its exclusions in rejected.json; `label` is what the owner reads. A playlist's
+        exclusions live in its own playlists.json entry instead."""
+        pl = self._pl()
+        if pl is not None:
+            return {"kind": "playlist", "name": pl["name"], "key": f"playlist:{pl['list_id']}",
+                    "label": pl["name"], "id": pl["list_id"]}
         if self.party:
             name = self.party.title()
             return {"kind": "party", "name": self.party, "key": f"party:{name}", "label": name}
@@ -575,9 +696,10 @@ class Engine:
         with LOCK:
             self.party = flavor
             if flavor:
-                # One source at a time: a party flavor resets the vibe to Any. Off doesn't bring
-                # the old vibe back (owner's rule).
+                # One source at a time: a party flavor resets the vibe to Any and the playlist to
+                # None. Off doesn't bring the old vibe back (owner's rule).
                 self.genre = config.ANY_GENRE
+                self.playlist, self.pl_run = None, {}
             self._sugg = None
             cur = self.by_id(self.playing) if self.playing else None
             keep = None
@@ -640,6 +762,10 @@ class Engine:
             src = self._source()
             if src is None:
                 return {"source": None, "suggestions": []}
+            if src["kind"] == "playlist":
+                pl = self._pl()
+                return {"source": src, "playlist": self._pl_summary(pl, {s.id: s for s in self.pool}),
+                        "suggestions": self._playlist_draft(pl)}
             if src["kind"] != "party":
                 return {"source": src, "suggestions": self._library_draft(src)}
             k = (self.playing, src["key"])
@@ -690,6 +816,8 @@ class Engine:
                 src = self._source()
             if src is None:
                 raise EngineError(409, "Pick a mood, genre or party first")
+            if src["kind"] == "playlist":
+                raise EngineError(409, "A playlist skips songs by id: use the playlist's exclude")
             return src["key"]
         if not re.fullmatch(r"(mood|genre|party):.{1,80}", source):
             raise EngineError(400, f"Unknown source: {source}")
@@ -830,6 +958,7 @@ class Engine:
         _known_genre(g, allow_any=True)
         with LOCK:
             self.genre = g
+            self.playlist, self.pl_run = None, {}  # one source at a time: Playlist back to None
             # One source at a time: a genre or mood turns party off (moods come through here too).
             if self.party:
                 self.party = None
@@ -913,6 +1042,271 @@ class Engine:
                 self.genre = config.ANY_GENRE  # the active genre was deleted
             self._recompute()
             self._changed()
+
+    # --- saved playlists (design HJGfo) ---------------------------------------------------
+    def _playlists_file(self):
+        return config.library_root() / "playlists.json"
+
+    def _load_playlists(self) -> dict[str, dict]:
+        """playlists.json: {list_id: entry}. Corrupt file or entries are skipped, never fatal."""
+        out = {}
+        for lid, p in self._load_json_dict("playlists.json").items():
+            try:
+                if not isinstance(p, dict) or not LIST_RE.fullmatch(lid):
+                    continue
+                ids = p.get("song_ids") if isinstance(p.get("song_ids"), list) else []
+                ex = p.get("excluded") if isinstance(p.get("excluded"), list) else []
+                out[lid] = {
+                    "list_id": lid, "name": str(p.get("name") or lid)[:100],
+                    "song_ids": list(dict.fromkeys(str(i) for i in ids)),  # YouTube order = the playlist
+                    "genre": p["genre"] if isinstance(p.get("genre"), str) else None,  # "treat songs as"
+                    "order": p.get("order") if p.get("order") in PL_ORDERS else "playlist",
+                    "at_end": p.get("at_end") if p.get("at_end") in PL_AT_END else "keep_going",
+                    "excluded": [str(i) for i in ex],  # ✕'d here: skipped, not deleted
+                    "synced_at": float(p.get("synced_at") or 0), "saved_at": float(p.get("saved_at") or 0)}
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _save_playlists(self) -> None:
+        config.write_json_atomic(self._playlists_file(), self.playlists)
+
+    def _pl(self) -> dict | None:
+        return self.playlists.get(self.playlist) if self.playlist else None
+
+    def _playlist(self, lid: str) -> dict:
+        pl = self.playlists.get(lid)
+        if pl is None:
+            raise EngineError(404, "No saved playlist with that id")
+        return pl
+
+    def _pl_songs(self, pl: dict) -> list[Song]:
+        """The playlist's playable songs in its order: in the library, not excluded, not failed."""
+        by, ex = {s.id: s for s in self.pool}, set(pl["excluded"])
+        return [by[i] for i in pl["song_ids"] if i in by and i not in ex and by[i].status != "failed"]
+
+    def _pl_left(self, pl: dict) -> list[Song]:
+        """What this run hasn't played yet (the playing song excluded), playlist order."""
+        return [s for s in self._pl_songs(pl) if s.id not in self.pl_run and s.id != self.playing]
+
+    def _pl_end_note(self, pl: dict, left: list[Song]) -> str | None:
+        """The heads-up two songs before the end: the last one is next (or playing)."""
+        if len(left) > 1 or not self.pl_run:
+            return None
+        last = left[-1] if left else (self.by_id(self.playing) if self.playing in pl["song_ids"] else None)
+        if last is None:
+            return None
+        then = {"keep_going": "similar songs from the library.", "repeat": f"{pl['name']} again from #1.",
+                "stop": "the music fades out and ON AIR turns off."}[pl["at_end"]]
+        return f"{pl['name']} ends after {party.artist_title(last)[1]}. Then: {then}"
+
+    def _pl_summary(self, pl: dict, by: dict[str, Song]) -> dict:
+        songs = [by[i] for i in pl["song_ids"] if i in by]
+        failed = [s for s in songs if s.status == "failed"]
+        return {"id": pl["list_id"], "name": pl["name"], "count": len(pl["song_ids"]),
+                "ready": sum(1 for s in songs if s.status == "ready"), "failed": len(failed),
+                "fail_reason": _fail_reason(failed), "covers": pl["song_ids"][:4], "genre": pl["genre"],
+                "order": pl["order"], "at_end": pl["at_end"], "excluded": len(pl["excluded"]),
+                "synced_at": pl["synced_at"], "stale": time.time() - pl["synced_at"] > PL_STALE,
+                "left": len(self._pl_left(pl)) if pl is self._pl() else None,
+                "url": f"https://www.youtube.com/playlist?list={pl['list_id']}"}
+
+    def _playlist_draft(self, pl: dict) -> list[dict]:
+        """The Suggestions tab while a playlist plays: the playlist itself. Playlist order: its own
+        order. Mix order: played, playing, then the planner's order (`plan` = 0 for next, 1 for
+        the 3rd song …, `why` = what makes it fit), then the songs not ready yet."""
+        by = {s.id: s for s in self.pool}
+        ex = set(pl["excluded"])
+        members = [i for i in pl["song_ids"] if i in by and i not in ex]
+        pos = {i: n + 1 for n, i in enumerate(pl["song_ids"])}
+        plan: dict[str, tuple[int, str | None]] = {}
+        ids = members
+        if pl["order"] == "mix":
+            mine = set(members)
+            left = [s for s in self._pl_left(pl) if s.status == "ready" and s.analysis]
+            head = [i for i in self.upcoming if i in mine]
+            rest = [s for s in left if s.id not in head]
+            prev = by.get(head[-1]) if head else by.get(self.playing)
+            if prev is not None and prev.analysis:
+                rest = order(prev, rest, {}, config.ANY_GENRE, pairs=self.pairs)
+            seq = [by[i] for i in head] + rest
+            before = by.get(self.playing)
+            for k, s in enumerate(seq):
+                plan[s.id] = (k, _fit_reason(before, s, seq[k:]))
+                before = s
+            played = [i for i in self.pl_run if i in mine and i != self.playing]
+            now = [self.playing] if self.playing in mine else []
+            ids = list(dict.fromkeys(played + now + [s.id for s in seq] + members))
+        left_ids = [s.id for s in self._pl_left(pl)]
+        last = left_ids[-1] if left_ids and pl["at_end"] != "repeat" else None
+        nxt = self.upcoming[0] if self.upcoming else None
+        rows = []
+        for i in ids:
+            s = by[i]
+            a, t = party.artist_title(s)
+            ready = s.status == "ready" and s.analysis is not None
+            state = ("playing" if i == self.playing else "played" if i in self.pl_run else "next" if i == nxt
+                     else "failed" if s.status == "failed" else "waiting" if not ready
+                     else "kept" if i in self.requested else "")
+            row = {"id": i, "artist": a, "title": t, "pos": pos[i], "state": state, "status": s.status,
+                   "played_at": self.pl_run.get(i), "bpm": s.analysis.bpm if s.analysis else None,
+                   "last": i == last, "error": s.error}
+            if i in plan and state not in ("played", "playing"):
+                row["plan"], row["why"] = plan[i]
+            rows.append(row)
+        return rows
+
+    def playlists_list(self) -> list[dict]:
+        with LOCK:
+            by = {s.id: s for s in self.pool}
+            return [self._pl_summary(p, by) for p in reversed(self.playlists.values())]
+
+    def save_playlist(self, url: str, genre: str | None) -> dict:
+        """Save a YouTube playlist link: read it (name + songs, one request), import its songs into
+        the library like Add link, and remember it. Saving one that's saved already opens it
+        (existing=True, nothing is read). Doesn't switch the source: picking it does."""
+        _known_genre(genre, allow_none=True)
+        try:
+            kind, lid = fetch.classify_url(url)
+        except ValueError as e:
+            raise EngineError(400, "Paste a playlist link: youtube.com/playlist?list=…") from e
+        if kind != "playlist":
+            # A watch link carrying list= is one song playing inside a playlist (design 10).
+            raise EngineError(400, ONE_SONG if "list=" in url else
+                              "That’s a link to one song. Paste a playlist link: youtube.com/playlist?list=…")
+        if not LIST_RE.fullmatch(lid):
+            raise EngineError(400, "That playlist id doesn't look right")
+        with LOCK:
+            if lid in self.playlists:
+                return {"existing": True, "playlist": self._pl_summary(self.playlists[lid], {s.id: s for s in self.pool})}
+        try:
+            name, songs = fetch.read_playlist(url)  # network, outside the lock
+        except fetch.FetchError as e:
+            raise EngineError(400, str(e)) from e
+        if not songs:
+            raise EngineError(404, "That playlist has no songs autodeck can read")
+        with LOCK:
+            if lid in self.playlists:  # saved meanwhile (double click)
+                return {"existing": True, "playlist": self._pl_summary(self.playlists[lid], {s.id: s for s in self.pool})}
+            added, _ = self._import_songs(songs, genre)
+            ids = list(dict.fromkeys(x.id for x in songs))
+            now = time.time()
+            self.playlists[lid] = {"list_id": lid, "name": (name or "YouTube playlist")[:100], "song_ids": ids,
+                                   "genre": genre, "order": "playlist", "at_end": "keep_going", "excluded": [],
+                                   "synced_at": now, "saved_at": now}
+            if genre:
+                self._apply_pl_genre(self.playlists[lid], None)
+            self._save_playlists()
+            self._changed()  # the worker starts on it from the top
+            return {"existing": False, "found": len(ids), "added": added,
+                    "playlist": self._pl_summary(self.playlists[lid], {s.id: s for s in self.pool})}
+
+    def _apply_pl_genre(self, pl: dict, old: str | None) -> None:
+        """"Treat songs as" = the genre_hint of every song in it (import as, for the whole list).
+        Owner-set per-song genres still win (Song.effective_genre). Back to "their own genres"
+        clears only the hint this playlist set."""
+        ids = set(pl["song_ids"])
+        for s in self.pool:
+            if s.id in ids and (pl["genre"] or s.genre_hint == old):
+                s.genre_hint = pl["genre"]  # in place: the worker holds this object
+                library.save_song(s)
+
+    def sync_playlist(self, lid: str) -> dict:
+        """↻: read the playlist again. New songs are imported and sit at their YouTube position;
+        songs removed on YouTube leave the playlist only (never the library).
+        Returns {"added": [#positions], "new_ids", "removed": n, "playlist"}."""
+        with LOCK:
+            self._playlist(lid)
+        try:
+            _name, songs = fetch.read_playlist(f"https://www.youtube.com/playlist?list={lid}")  # network
+        except fetch.FetchError as e:
+            raise EngineError(400, str(e)) from e
+        with LOCK:
+            pl = self._playlist(lid)  # removed meanwhile -> 404
+            new = list(dict.fromkeys(x.id for x in songs))
+            added, removed = sync_diff(pl["song_ids"], new)
+            self._import_songs(songs, pl["genre"])
+            pl["song_ids"], pl["synced_at"] = new, time.time()
+            pl["excluded"] = [i for i in pl["excluded"] if i in set(new)]
+            if pl["genre"]:
+                self._apply_pl_genre(pl, None)
+            self._save_playlists()
+            self._recompute()
+            self._changed()
+            return {"added": [n + 1 for n in added], "new_ids": [new[n] for n in added], "removed": len(removed),
+                    "playlist": self._pl_summary(pl, {s.id: s for s in self.pool})}
+
+    def pick_playlist(self, lid: str | None) -> None:
+        """Playlist dropdown: play from this saved playlist (None = Playlist: None). Like a genre
+        or party it is exclusive: Vibe goes to Any and Party to Off. A run starts from the top."""
+        with LOCK:
+            if lid is None:
+                self.playlist, self.pl_run = None, {}
+                keep = None
+            else:
+                pl = self._playlist(lid)
+                if self.playlist == lid:
+                    return
+                self.playlist, self.genre, self.party, self._sugg = lid, config.ANY_GENRE, None, None
+                self.pl_run = {self.playing: time.strftime("%H:%M")} if self.playing in pl["song_ids"] else {}
+                # Like a genre switch: the playlist's own next song replaces the fixed slot.
+                keep = [] if self.playing else None
+            self._save_session()
+            self._recompute(keep)
+            self._changed()
+
+    def update_playlist(self, lid: str, **changes) -> dict:
+        """Rename / treat songs as / playlist or mix order / at the end. Only the given keys change."""
+        with LOCK:
+            pl = self._playlist(lid)
+            if "name" in changes:
+                name = " ".join(str(changes["name"] or "").split())[:100]
+                if not name:
+                    raise EngineError(400, "Give the playlist a name")
+                pl["name"] = name
+            if "order" in changes and changes["order"] not in PL_ORDERS:
+                raise EngineError(400, "Order is playlist or mix")
+            if "at_end" in changes and changes["at_end"] not in PL_AT_END:
+                raise EngineError(400, "At the end is keep_going, repeat or stop")
+            pl.update({k: changes[k] for k in ("order", "at_end") if k in changes})
+            if "genre" in changes:
+                _known_genre(changes["genre"], allow_none=True)
+                old, pl["genre"] = pl["genre"], changes["genre"]
+                self._apply_pl_genre(pl, old)
+            self._save_playlists()
+            self._recompute([] if "order" in changes and pl is self._pl() and self.playing else None)
+            self._changed()
+            return self._pl_summary(pl, {s.id: s for s in self.pool})
+
+    def exclude_playlist_song(self, lid: str, sid: str, on: bool = True) -> None:
+        """✕ in a playlist: skip this song in it from now on (it stays in the playlist and the
+        library). on=False is the Undo."""
+        with LOCK:
+            pl = self._playlist(lid)
+            if sid not in pl["song_ids"]:
+                raise EngineError(404, "That song isn't in this playlist")
+            ex = [i for i in pl["excluded"] if i != sid]
+            pl["excluded"] = ex + [sid] if on else ex
+            self._save_playlists()
+            # A ✕ on the next song takes effect now, even if it was locked in.
+            self._recompute([i for i in self.upcoming[: config.FIXED_NEXT] if i != sid] if self.playing else None)
+            self._changed()
+
+    def remove_playlist(self, lid: str) -> dict:
+        """Forget the playlist (playlists.json only: songs, analysis and genres stay). If it was
+        playing, the source falls back to Vibe: Any; the locked next songs keep their slots, so
+        the deck plays on without a gap."""
+        with LOCK:
+            pl = self._playlist(lid)
+            del self.playlists[lid]
+            self._save_playlists()
+            was = self.playlist == lid
+            if was:
+                self.playlist, self.pl_run = None, {}
+                self._save_session()
+            self._recompute()
+            self._changed()
+            return {"name": pl["name"], "count": len(pl["song_ids"]), "was_playing": was}
 
     # --- decks & transitions ----------------------------------------------------
     def _ready(self, sid: str) -> Song:

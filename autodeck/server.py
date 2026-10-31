@@ -95,9 +95,39 @@ class GenresReq(BaseModel):
     genres: list[str]
 
 
+class PlaylistSaveReq(BaseModel):
+    url: str
+    genre: str | None = None  # "treat songs as"; None = their own genres
+
+
+class PlaylistPickReq(BaseModel):
+    id: str | None = None  # None = Playlist: None
+
+
+class PlaylistPatchReq(BaseModel):
+    # Only the fields sent change (genre: null = back to their own genres).
+    name: str | None = None
+    genre: str | None = None
+    order: str | None = None
+    at_end: str | None = None
+
+
+class PlaylistSongReq(BaseModel):
+    id: str
+
+
 class QueueReq(BaseModel):
     ids: list[str]
     pin: str | None = None
+
+
+LIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+
+
+def _list(lid: str) -> str:
+    if not LIST_ID_RE.match(lid):
+        raise HTTPException(404, "No saved playlist with that id")
+    return lid
 
 
 def _id(sid: str) -> str:
@@ -235,6 +265,43 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     def delete_mood(name: str):
         eng.delete_mood(name)
         return eng.state()
+
+    # --- saved playlists ---------------------------------------------------------------
+    @app.get("/api/playlists")
+    def playlists():
+        return {"playlists": eng.playlists_list()}
+
+    @app.post("/api/playlists")
+    def save_playlist(req: PlaylistSaveReq):
+        # Plain def: reading the playlist on YouTube takes seconds (threadpool).
+        return eng.save_playlist(req.url.strip()[:2000], req.genre)
+
+    @app.post("/api/playlist")
+    def pick_playlist(req: PlaylistPickReq):
+        eng.pick_playlist(_list(req.id) if req.id is not None else None)
+        return eng.state()
+
+    @app.post("/api/playlists/{lid}/sync")
+    def sync_playlist(lid: str):
+        return eng.sync_playlist(_list(lid))
+
+    @app.patch("/api/playlists/{lid}")
+    def patch_playlist(lid: str, req: PlaylistPatchReq):
+        return eng.update_playlist(_list(lid), **{k: getattr(req, k) for k in req.model_fields_set})
+
+    @app.post("/api/playlists/{lid}/exclude")
+    def exclude_playlist_song(lid: str, req: PlaylistSongReq):
+        eng.exclude_playlist_song(_list(lid), _id(req.id))
+        return eng.draft()
+
+    @app.post("/api/playlists/{lid}/unexclude")
+    def unexclude_playlist_song(lid: str, req: PlaylistSongReq):
+        eng.exclude_playlist_song(_list(lid), _id(req.id), on=False)
+        return eng.draft()
+
+    @app.delete("/api/playlists/{lid}")
+    def remove_playlist(lid: str):
+        return {**eng.remove_playlist(_list(lid)), "state": eng.state()}
 
     @app.post("/api/next_effect")
     def next_effect(req: EffectReq):
