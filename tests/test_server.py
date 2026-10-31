@@ -656,3 +656,10 @@ def test_accept_all_keeps_the_order_shown(client, monkeypatch):
     assert client.engine.requested == [IDS[3], NEW, IDS[2]]
     assert [q["id"] for q in st["queue"][:2]] == [IDS[3], IDS[2]]  # NEW is still downloading
     assert st["requested"][0]["id"] == NEW and st["requested"][0]["kept_from"] == "Hits"
+
+
+def test_requesting_a_played_song_plays_it_again(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    client.post("/api/playing", json={"id": IDS[1]})
+    st = client.post("/api/request", json={"id": IDS[0]}).json()
+    assert st["queue"][0]["id"] == IDS[0] and st["requested"] == []

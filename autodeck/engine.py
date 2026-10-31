@@ -351,6 +351,9 @@ class Engine:
             library.save_song(s)
             if sid not in self.requested:
                 self.requested.append(sid)
+            # Asking for a song that already played tonight means "play it again": without this
+            # it isn't eligible, so it sat in the requested list forever ("plays next once ready").
+            self.played = self.played - {sid}  # new set: get_state copies never see a resize
             self._recompute()
             self._changed()
 
