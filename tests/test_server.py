@@ -63,8 +63,8 @@ def test_state_shape(client):
     assert not any(q["kept"] for q in s["queue"])
     assert s["pool_counts"] == {"ready": 4}
     assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot", "danceability",
-                                  "kept", "kept_from", "in_playlist"}
-    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept", "kept_from", "in_playlist"} == set(s["queue"][0])
+                                  "kept", "kept_from", "in_playlist", "by"}
+    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept", "kept_from", "in_playlist", "by"} == set(s["queue"][0])
 
 
 def test_pool_shows_failed_song_with_error(client):
@@ -665,7 +665,7 @@ def test_switching_sources_is_exclusive(client, monkeypatch):
     client.post("/api/genre", json={"genre": "Pop"})
     st = client.post("/api/party", json={"flavor": "hits"}).json()
     assert st["party"] == "hits" and st["genre"] == "Any"  # party resets the vibe
-    assert st["source"] == {"kind": "party", "name": "hits", "key": "party:Hits", "label": "Hits"}
+    assert st["source"] == {"kind": "party", "name": "hits", "key": "party:Hits", "label": "Hits", "by": None}
     st = client.post("/api/party", json={"flavor": None}).json()
     assert st["genre"] == "Any" and st["source"] is None  # Off doesn't restore Pop
     client.post("/api/party", json={"flavor": "latino"})
@@ -925,3 +925,68 @@ def test_play_next_a_played_song_plays_it_again(client):
     client.post("/api/playing", json={"id": IDS[1]})
     s = client.post("/api/play_next", json={"id": IDS[0]}).json()
     assert _queue(s)[0] == IDS[0]
+
+
+# --- MCP (design m6p10) ------------------------------------------------------------------
+MCP = {"X-Autodeck-Client": "mcp", "X-Autodeck-Call": "c1", "X-Autodeck-Tool": "play_next",
+       "X-Autodeck-Client-Name": "Claude%20Code"}
+
+
+def _row(s, sid):
+    return next(q for q in s["queue"] + s["requested"] if q["id"] == sid)
+
+
+def test_mcp_tags_the_queued_song_until_it_plays_or_the_owner_changes_it(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    s = client.post("/api/play_next", json={"id": IDS[3]}, headers=MCP).json()
+    assert _row(s, IDS[3])["by"] == "mcp" and _row(s, IDS[1])["by"] is None
+    s = client.post("/api/play_next", json={"id": IDS[3]}).json()  # the owner picks it themselves
+    assert _row(s, IDS[3])["by"] is None
+    client.post("/api/play_next", json={"id": IDS[3]}, headers=MCP)
+    s = client.post("/api/playing", json={"id": IDS[3]}).json()  # it plays: the tag's job is done
+    assert client.engine.by_mcp == set()
+    assert all(q["by"] is None for q in s["queue"] + s["requested"])
+
+
+def test_mcp_tags_the_source_and_the_next_effect_until_the_owner_changes_them(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    s = client.post("/api/genre", json={"genre": "Pop"}, headers=MCP).json()
+    assert s["source"]["by"] == "mcp"
+    s = client.post("/api/party", json={"flavor": "hits"}, headers=MCP).json()
+    assert s["source"]["kind"] == "party" and s["source"]["by"] == "mcp"
+    s = client.post("/api/genre", json={"genre": "Hip-hop"}).json()
+    assert s["source"]["by"] is None
+    s = client.post("/api/next_effect", json={"effect": "echo"}, headers=MCP).json()
+    assert s["next_effect_by"] == "mcp"
+    assert client.post("/api/next_effect", json={"effect": "cut"}).json()["next_effect_by"] is None
+    client.post("/api/next_effect", json={"effect": "echo"}, headers=MCP)
+    assert client.post("/api/playing", json={"id": IDS[1]}).json()["next_effect_by"] is None  # next song
+
+
+def test_mcp_calls_land_in_the_activity_log_and_state(client):
+    st = client.get("/api/state").json()["mcp"]
+    assert st["enabled"] and st["mode"] == "steer" and not st["ever_connected"] and st["log"] == []
+    client.post("/api/playing", json={"id": IDS[0]})
+    client.post("/api/play_next", json={"id": IDS[3]}, headers=MCP)
+    st = client.get("/api/state").json()["mcp"]
+    assert st["running"] == {"tool": "play_next", "text": "playing next", "client": "Claude Code"}
+    assert st["connected"] and st["ever_connected"] and st["client"] == "Claude Code"
+    r = client.post("/api/mcp/activity", json={"call": "c1", "tool": "play_next", "client": "Claude Code",
+                                               "ok": True, "text": "Put Roar next", "song": IDS[3]})
+    assert r.status_code == 200
+    st = client.get("/api/state").json()["mcp"]
+    assert st["running"] is None and [(e["text"], e["status"], e["song"]) for e in st["log"]] == [
+        ("Put Roar next", "ok", IDS[3])]
+    client.post("/api/mcp/activity", json={"call": "c2", "tool": "set_genre", "client": "Claude Code",
+                                           "ok": False, "text": "Unknown genre: Polka"})
+    assert client.get("/api/state").json()["mcp"]["last_error"] == "Unknown genre: Polka"
+    assert client.post("/api/mcp/seen").json()["mcp"]["last_error"] is None  # settings opened
+
+
+def test_mcp_settings_switches_persist(client):
+    s = client.put("/api/mcp/settings", json={"enabled": False}).json()
+    assert s["mcp"]["enabled"] is False and s["mcp"]["mode"] == "steer"
+    s = client.put("/api/mcp/settings", json={"enabled": True, "mode": "read"}).json()
+    assert s["mcp"]["enabled"] and s["mcp"]["mode"] == "read"
+    assert config.settings()["mcp_mode"] == "read"
+    assert client.put("/api/mcp/settings", json={"mode": "admin"}).status_code == 400

@@ -1,17 +1,18 @@
 """FastAPI app: JSON API + audio files + static UI. State and queue rules live in engine.py."""
 import re
+import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
-from . import dj_mcp, library
+from . import dj_mcp, library, mcp_activity
 from .engine import Engine, EngineError
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -130,6 +131,31 @@ class QueueReq(BaseModel):
     pin: str | None = None
 
 
+class McpSettingsReq(BaseModel):
+    # Only the fields sent change.
+    enabled: bool | None = None
+    mode: str | None = None  # "steer" | "read"
+
+
+class McpActivityReq(BaseModel):
+    # dj_mcp's report when a tool call is done (dj_mcp._report).
+    call: str
+    tool: str
+    client: str | None = None
+    ok: bool
+    text: str | None = None
+    song: str | None = None
+
+
+def _by(x_autodeck_client: Annotated[str | None, Header()] = None) -> str | None:
+    """"mcp" when an assistant made this call: dj_mcp sends X-Autodeck-Client: mcp on every API
+    call of a tool. The engine tags what it changes ("via MCP"); anything else clears the tag."""
+    return "mcp" if x_autodeck_client == "mcp" else None
+
+
+By = Annotated[str | None, Depends(_by)]
+
+
 LIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
 
 
@@ -180,7 +206,17 @@ def create_app(engine: Engine | None = None) -> FastAPI:
             eng.stop_enrichment()
             eng.worker.stop()
 
-    app = FastAPI(lifespan=lifespan)
+    async def mcp_call(request: Request) -> None:
+        # Every API call an assistant's tool makes starts (or continues) its Activity log entry,
+        # so the MCP button shows "working" while the tool runs. Async: no threadpool hop.
+        h = request.headers
+        call, tool = h.get("x-autodeck-call"), h.get("x-autodeck-tool", "")
+        if h.get("x-autodeck-client") == "mcp" and call:
+            doing, read = dj_mcp.PLAIN.get(tool, (tool, True))
+            eng.mcp.begin(call[:64], tool[:64], urllib.parse.unquote(h.get("x-autodeck-client-name", ""))[:80] or None,
+                          doing, read)
+
+    app = FastAPI(lifespan=lifespan, dependencies=[Depends(mcp_call)])
     # DJ assistant MCP at /mcp (streamable HTTP). Its route is added straight to our router
     # (not app.mount) so the URL is exactly /mcp, no /mcp/ redirect that MCP clients may not
     # follow for POST. host=127.0.0.1 turns on the SDK's DNS-rebinding protection too.
@@ -231,16 +267,16 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return eng.state()
 
     @app.post("/api/play_next")
-    def play_next(req: RequestReq):
+    def play_next(req: RequestReq, by: By):
         # The deck button / action sheet: the very next song (not "after the kept ones").
         # `play_next` tells the page what happened, for its one-line notice.
         done = eng.play_next(_id(req.id), req.title[:300], req.channel[:300], req.duration,
-                             req.source[:80] if req.source else None)
+                             req.source[:80] if req.source else None, by)
         return {**eng.state(), "play_next": done}
 
     @app.post("/api/party")
-    def set_party(req: PartyReq):
-        eng.set_party(req.flavor)
+    def set_party(req: PartyReq, by: By):
+        eng.set_party(req.flavor, by)
         return eng.state()
 
     @app.get("/api/history")
@@ -253,8 +289,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return eng.draft()
 
     @app.post("/api/suggestions/accept")
-    def accept(req: SuggestionReq):
-        eng.accept(req.artist[:200], req.title[:300], _id(req.id) if req.id else None)
+    def accept(req: SuggestionReq, by: By):
+        eng.accept(req.artist[:200], req.title[:300], _id(req.id) if req.id else None, by)
         return eng.state()
 
     @app.post("/api/suggestions/accept_all")
@@ -274,9 +310,9 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return eng.draft()
 
     @app.post("/api/mood")
-    def build_mood(req: MoodReq):
+    def build_mood(req: MoodReq, by: By):
         # Plain def: playlist searches take seconds, FastAPI runs this in its threadpool.
-        return eng.build_mood(req.theme, req.songs)
+        return eng.build_mood(req.theme, req.songs, by)
 
     @app.delete("/api/mood/{name}")
     def delete_mood(name: str):
@@ -294,8 +330,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return eng.save_playlist(req.url.strip()[:2000], req.genre)
 
     @app.post("/api/playlist")
-    def pick_playlist(req: PlaylistPickReq):
-        eng.pick_playlist(_list(req.id) if req.id is not None else None)
+    def pick_playlist(req: PlaylistPickReq, by: By):
+        eng.pick_playlist(_list(req.id) if req.id is not None else None, by)
         return eng.state()
 
     @app.post("/api/playlists/{lid}/sync")
@@ -321,8 +357,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return {**eng.remove_playlist(_list(lid)), "state": eng.state()}
 
     @app.post("/api/next_effect")
-    def next_effect(req: EffectReq):
-        eng.set_next_effect(req.effect)
+    def next_effect(req: EffectReq, by: By):
+        eng.set_next_effect(req.effect, by)
         return eng.state()
 
     @app.post("/api/mix_now")
@@ -372,6 +408,27 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     def put_youtube(req: BrowserReq):
         return eng.set_youtube_browser(req.browser)
 
+    # --- MCP (design m6p10): the owner's switches and the assistants' Activity log -----------
+    @app.put("/api/mcp/settings")
+    def mcp_settings(req: McpSettingsReq):
+        try:
+            mcp_activity.set_switches(req.enabled, req.mode)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        return {"mcp": eng.mcp.state()}
+
+    @app.post("/api/mcp/seen")
+    def mcp_seen():
+        eng.mcp.seen()  # the owner opened the MCP settings: the red error has been seen
+        return {"mcp": eng.mcp.state()}
+
+    @app.post("/api/mcp/activity")
+    def mcp_activity_done(req: McpActivityReq):
+        doing, read = dj_mcp.PLAIN.get(req.tool, (req.tool, True))
+        eng.mcp.finish(req.call[:64], req.tool[:64], (req.client or "")[:80] or None, doing, read, req.ok,
+                       (req.text or "")[:300] or None, req.song if req.song and ID_RE.match(req.song) else None)
+        return {"ok": True}
+
     @app.post("/api/setup/repair")
     def repair():
         r = eng.repair_install()
@@ -384,8 +441,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return eng.state()
 
     @app.post("/api/genre")
-    def genre(req: GenreReq):
-        eng.set_genre(req.genre)
+    def genre(req: GenreReq, by: By):
+        eng.set_genre(req.genre, by)
         return eng.state()
 
     @app.put("/api/genres")

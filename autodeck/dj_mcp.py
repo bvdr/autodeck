@@ -12,20 +12,111 @@ Tool rules (owner's MCP conventions):
 - destructiveHint is true for anything not purely additive (it changes or removes state);
 - openWorldHint is true when the call reaches outside this machine (YouTube, Last.fm, Deezer);
 - one tool per operation, no action/mode switch parameters.
+
+The owner sees what assistants do (design m6p10): every call goes through `_DJ.call_tool`, the
+one place that checks the owner's switches (Off refuses everything, Only read refuses every tool
+whose readOnlyHint is false) and reports the call to the app's Activity log (mcp_activity.py).
+The tool's API calls carry X-Autodeck-* headers (`_headers`), so the app tags what an assistant
+changed ("via MCP"). Each steering tool `say`s one plain sentence, built from its result.
 """
+import contextvars
 import json
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
+import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from .mcp_activity import switches
+
 BASE = os.environ.get("AUTODECK_URL", "http://127.0.0.1:8765").rstrip("/")
 
-server = MCPServer(
+# Per tool: (what it does in plain words, read-only). The button says "Claude · playing next",
+# never a tool name; a read's words name it in the log's folded "Show N reads (…)" line.
+PLAIN: dict[str, tuple[str, bool]] = {}
+# The tool call in progress: {id, tool, client, text, song}. Set in call_tool; the sync tool body
+# runs on a worker thread that gets a copy of this context (anyio), and mutates the same dict.
+_call: contextvars.ContextVar[dict | None] = contextvars.ContextVar("autodeck_mcp_call", default=None)
+
+OFF = ("MCP is turned off in autodeck. The owner can turn it back on with “Let assistants DJ” "
+       "in autodeck's MCP settings.")
+ONLY_READ = ("autodeck is set to Only read: assistants can see what's playing, the library, history "
+             "and suggestions, but not change anything (this was {doing}). Ask the owner to switch "
+             "MCP to “Steer the session” in autodeck's MCP settings.")
+
+
+def _client(ctx) -> str:
+    """The assistant's name from the MCP session's clientInfo: its title, else the name made
+    readable ("claude-code" -> "Claude Code"). In-process calls (tests) have no session."""
+    try:
+        info = ctx.session.client_params.client_info
+    except (AttributeError, ValueError):  # no context / request context / handshake info
+        return "An assistant"
+    return info.title or info.name.replace("-", " ").replace("_", " ").title()
+
+
+class _DJ(MCPServer):
+    async def call_tool(self, name, arguments, context=None):
+        if name not in PLAIN:
+            return await super().call_tool(name, arguments, context)  # the SDK's unknown-tool error
+        doing, read = PLAIN[name]
+        enabled, mode = switches()
+        if not enabled:
+            raise ToolError(OFF)  # and nothing else happens: not even a log entry
+        c = {"id": uuid.uuid4().hex, "tool": name, "client": _client(context), "text": None, "song": None}
+        token = _call.set(c)
+        ok = False
+        try:
+            if mode == "read" and not read:
+                c["text"] = f"Refused {doing}: MCP is set to Only read"
+                raise ToolError(ONLY_READ.format(doing=doing))
+            try:
+                res = await super().call_tool(name, arguments, context)
+            except ToolError as e:
+                # The SDK wraps the tool's own ToolError ("Error executing tool …"); the owner reads
+                # the reason itself. Anything else (bad arguments, a crash) gets a plain line.
+                c["text"] = str(e.__cause__) if isinstance(e.__cause__, ToolError) else f"Couldn't finish {doing}"
+                raise
+            ok = True
+            return res
+        finally:
+            await anyio.to_thread.run_sync(_report, c, ok)
+            _call.reset(token)
+
+
+def _report(c: dict, ok: bool) -> None:
+    try:
+        _api("/api/mcp/activity", "POST", {"call": c["id"], "tool": c["tool"], "client": c["client"],
+                                           "ok": ok, "text": c["text"], "song": c["song"]})
+    except ToolError:
+        pass  # the log is for the owner; failing to write it must never fail the assistant's call
+
+
+def say(text: str, song: str | None = None) -> None:
+    """A steering tool's one plain sentence for the owner's log and toast ("Put X next"), plus
+    the song it's about (the toast's thumbnail). Built from the result, so it says what happened."""
+    c = _call.get()
+    if c is not None:
+        c["text"], c["song"] = text, song
+
+
+def _headers() -> dict:
+    """Marks the app's API calls as an assistant's: who (client), which call (one log entry per
+    tool call) and which tool. The app tags what these calls change with by: "mcp"."""
+    c = _call.get()
+    if c is None:
+        return {}
+    return {"X-Autodeck-Client": "mcp", "X-Autodeck-Call": c["id"], "X-Autodeck-Tool": c["tool"],
+            # Headers are latin-1: a client name is free text, so it travels percent-encoded.
+            "X-Autodeck-Client-Name": urllib.parse.quote(c["client"])}
+
+
+server = _DJ(
     name="autodeck",
     title="autodeck DJ",
     instructions=(
@@ -39,17 +130,21 @@ server = MCPServer(
 )
 
 
-def tool(title: str, *, read_only: bool = False, destructive: bool = True, open_world: bool = False):
+def tool(title: str, doing: str, *, read_only: bool = False, destructive: bool = True, open_world: bool = False):
     """Register a tool with ALL three hints set explicitly (+ title). Defaults are the
-    cautious ones (a write that changes state, local only); read tools override them."""
-    return server.tool(title=title, annotations=ToolAnnotations(
-        title=title, read_only_hint=read_only, destructive_hint=destructive, open_world_hint=open_world))
+    cautious ones (a write that changes state, local only); read tools override them.
+    `doing`: the plain words the owner sees while it runs ("playing next")."""
+    def register(fn):
+        PLAIN[fn.__name__] = (doing, read_only)
+        return server.tool(title=title, annotations=ToolAnnotations(
+            title=title, read_only_hint=read_only, destructive_hint=destructive, open_world_hint=open_world))(fn)
+    return register
 
 
 def _api(path: str, method: str = "GET", body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method,
-                                 headers={"Content-Type": "application/json"} if data else {})
+                                 headers={**({"Content-Type": "application/json"} if data else {}), **_headers()})
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
             return json.loads(r.read() or b"{}")
@@ -74,6 +169,18 @@ def _song(v: dict) -> dict:
     return out
 
 
+def _title(s: dict, sid: str) -> str:
+    return next((p["title"] for p in s.get("pool", []) if p["id"] == sid), sid)
+
+
+# The page's names for the effects (web/ui.js FX_LABEL), so the log reads like the screen.
+FX_NAME = {"blend": "Beat blend", "half_double": "Beat blend (½×/2×)", "bass_swap": "Bass swap",
+           "filter_sweep": "Filter sweep", "echo": "Echo out", "loop_roll": "Loop roll", "brake": "Brake",
+           "backspin": "Backspin", "reverb": "Reverb wash", "gate": "Gate / stutter", "riser": "Riser → drop",
+           "dropswap": "Drop swap", "cut": "Cut", "fade": "Fade"}
+songs_n = lambda n: f"{n} song{'' if n == 1 else 's'}"  # noqa: E731
+
+
 def _summary(s: dict) -> dict:
     pool = {p["id"]: p for p in s.get("pool", [])}
     return {
@@ -91,7 +198,7 @@ def _summary(s: dict) -> dict:
 
 
 # --- reading --------------------------------------------------------------------
-@tool("Now playing", read_only=True, destructive=False)
+@tool("Now playing", "now playing", read_only=True, destructive=False)
 def now_playing() -> dict:
     """What's playing, the next 10 songs (BPM, key, genre, danceability; kept = picked by the owner
     or you, else an auto pick from the active source), and the active
@@ -99,7 +206,7 @@ def now_playing() -> dict:
     return _summary(_api("/api/state"))
 
 
-@tool("Browse library", read_only=True, destructive=False)
+@tool("Browse library", "library", read_only=True, destructive=False)
 def list_library(query: str = "", status: str = "", limit: int = 30) -> list[dict]:
     """Songs in the library. `query` filters title/channel (case-insensitive); `status` one of
     queued, downloading, analyzing, ready, failed."""
@@ -109,20 +216,20 @@ def list_library(query: str = "", status: str = "", limit: int = 30) -> list[dic
     return out[: max(1, min(limit, 200))]
 
 
-@tool("Played history", read_only=True, destructive=False)
+@tool("Played history", "history", read_only=True, destructive=False)
 def get_history(limit: int = 20) -> list[dict]:
     """Songs played so far, newest first, with time, BPM, genre and the effect they came in with."""
     return _api(f"/api/history?limit={max(1, min(limit, 500))}")["history"]
 
 
-@tool("Search YouTube", read_only=True, destructive=False, open_world=True)
+@tool("Search YouTube", "search", read_only=True, destructive=False, open_world=True)
 def search_songs(query: str) -> list[dict]:
     """Search YouTube for songs (title, channel, duration, and status if already in the library).
     Use the returned id with play_next."""
     return _api("/api/search?" + urllib.parse.urlencode({"q": query}))["results"]
 
 
-@tool("Suggestions", read_only=True, destructive=False, open_world=True)
+@tool("Suggestions", "suggestions", read_only=True, destructive=False, open_world=True)
 def get_suggestions() -> list[dict]:
     """The draft for the active source. Party: songs not in the library that fit what's playing
     and the flavor (Last.fm), with BPM from Deezer and 'mixes' (beat-matches the current song).
@@ -131,7 +238,7 @@ def get_suggestions() -> list[dict]:
 
 
 # --- steering (change state: destructiveHint=True) -------------------------------
-@tool("Play next", open_world=True)
+@tool("Play next", "playing next", open_world=True)
 def play_next(song_id: str, title: str = "", channel: str = "", duration: float = 0.0) -> dict:
     """Play a song as the very next one, on the idle deck (same as the owner's deck button). The
     song planned there moves back to the top of Up next; a running mix is never interrupted (the
@@ -140,92 +247,124 @@ def play_next(song_id: str, title: str = "", channel: str = "", duration: float 
     `song_id` is a YouTube video id from search_songs or list_library."""
     s = _api("/api/play_next", "POST", {"id": song_id, "title": title, "channel": channel,
                                         "duration": duration, "source": "assistant"})
-    return {**_summary(s), "play_next": s["play_next"]}
+    p = s["play_next"]
+    t = _title(s, p["id"])
+    say(f"Put {t} next" if p["ready"] else f"Getting {t} ready to play next", p["id"])
+    return {**_summary(s), "play_next": p}
 
 
-@tool("Mix now")
+@tool("Mix now", "mixing now")
 def mix_now() -> dict:
     """Move to the next song at the next phrase boundary instead of waiting for the outro."""
-    return _summary(_api("/api/mix_now", "POST", {}))
+    s = _api("/api/mix_now", "POST", {})
+    nxt = (s.get("queue") or [None])[0]
+    say(f"Mixing into {nxt['title']} now" if nxt else "Mixing into the next song now", nxt and nxt["id"])
+    return _summary(s)
 
 
-@tool("Set next transition effect")
+@tool("Set next transition effect", "picking the next effect")
 def set_next_effect(effect: str = "") -> dict:
     """Force how the next transition sounds; empty = let the app choose. Effects: blend,
     bass_swap, filter_sweep (beat-matched), echo, loop_roll, brake, backspin, reverb, gate,
     riser, dropswap, cut, fade. An effect that can't work for the song pair falls back to the
     app's choice. Applies only to the current song's exit."""
-    return _summary(_api("/api/next_effect", "POST", {"effect": effect or None}))
+    s = _api("/api/next_effect", "POST", {"effect": effect or None})
+    fx = s.get("next_effect")
+    say(f"Set the next effect to {FX_NAME.get(fx, fx)}" if fx else "Let autodeck pick the next effect")
+    return _summary(s)
 
 
-@tool("Set genre")
+@tool("Set genre", "switching the vibe")
 def set_genre(genre: str) -> dict:
     """Play only this genre from now on ('Any' for everything). See now_playing for the list."""
-    return _summary(_api("/api/genre", "POST", {"genre": genre}))
+    s = _api("/api/genre", "POST", {"genre": genre})
+    say(f"Switched the vibe to {s['genre']}")
+    return _summary(s)
 
 
-@tool("Start party mode")
+@tool("Start party mode", "starting a party")
 def start_party(flavor: str) -> dict:
     """Party flavor: hits, oldies or latino. Plays fitting library songs, crowd-pleasers first,
     and replaces the genre filter while on."""
-    return _summary(_api("/api/party", "POST", {"flavor": flavor}))
+    s = _api("/api/party", "POST", {"flavor": flavor})
+    say(f"Started the {s['party'].title()} party")
+    return _summary(s)
 
 
-@tool("Stop party mode")
+@tool("Stop party mode", "stopping the party")
 def stop_party() -> dict:
     """Turn party mode off (back to the genre filter)."""
-    return _summary(_api("/api/party", "POST", {"flavor": None}))
+    s = _api("/api/party", "POST", {"flavor": None})
+    say("Turned party mode off")
+    return _summary(s)
 
 
-@tool("Set beat-to-beat mode")
+@tool("Set beat-to-beat mode", "switching beat to beat")
 def set_beat_to_beat(enabled: bool) -> dict:
     """On: transitions skip the outgoing outro and incoming intro (main part into main part)."""
-    return _summary(_api("/api/mode", "POST", {"beat_to_beat": enabled}))
+    s = _api("/api/mode", "POST", {"beat_to_beat": enabled})
+    say(f"Turned beat to beat {'on' if s['beat_to_beat'] else 'off'}")
+    return _summary(s)
 
 
-@tool("Accept suggestion", open_world=True)
+@tool("Accept suggestion", "keeping a suggestion", open_world=True)
 def accept_suggestion(artist: str, title: str) -> dict:
     """Add a suggested song (from get_suggestions): finds it on YouTube, preps it, plays it next."""
-    return _summary(_api("/api/suggestions/accept", "POST", {"artist": artist, "title": title}))
+    s = _api("/api/suggestions/accept", "POST", {"artist": artist, "title": title})
+    # The app doesn't say which YouTube video it matched, so this one names the request.
+    say(f"Kept {title} from the suggestions")
+    return _summary(s)
 
 
-@tool("Reject suggestion")
+@tool("Reject suggestion", "dropping a suggestion")
 def reject_suggestion(artist: str, title: str) -> list[dict]:
     """Never suggest this song again. Returns the remaining suggestions."""
-    return _api("/api/suggestions/reject", "POST", {"artist": artist, "title": title})["suggestions"]
+    r = _api("/api/suggestions/reject", "POST", {"artist": artist, "title": title})["suggestions"]
+    say(f"Won't suggest {title} again")
+    return r
 
 
-@tool("Set a song's genre")
+@tool("Set a song's genre", "fixing a genre")
 def set_song_genre(song_id: str, genre: str = "") -> dict:
     """Fix a song's genre label (empty = back to the app's guess)."""
-    return _summary(_api(f"/api/song/{song_id}", "POST", {"genre": genre or None}))
+    s = _api(f"/api/song/{song_id}", "POST", {"genre": genre or None})
+    say(f"Set the genre of {_title(s, song_id)} to {genre or 'auto'}", song_id)
+    return _summary(s)
 
 
-@tool("Remove song")
+@tool("Remove song", "removing a song")
 def remove_song(song_id: str) -> dict:
     """Remove a song from the library/queue (its cached files stay on disk; re-adding restores it)."""
-    return _summary(_api(f"/api/song/{song_id}", "DELETE"))
+    s = _api(f"/api/song/{song_id}", "DELETE")
+    say("Removed a song from the library", song_id)  # gone from the pool, so no title to read
+    return _summary(s)
 
 
-@tool("Build or refresh a mood", open_world=True)
+@tool("Build or refresh a mood", "building a mood", open_world=True)
 def build_mood(theme: str, songs: int = 30) -> dict:
     """Create a mood from a theme ("Balkan party", "Greek taverna", "90s eurodance"): the songs that
     appear across popular public YouTube/Deezer playlists on it are imported and the mix switches to
     it. Building an existing mood again adds more songs. Takes ~10-30 s."""
-    return _api("/api/mood", "POST", {"theme": theme, "songs": songs})
+    r = _api("/api/mood", "POST", {"theme": theme, "songs": songs})
+    say(f"Built the mood {r['mood']} ({songs_n(r['found'])})")
+    return r
 
 
-@tool("Delete a mood")
+@tool("Delete a mood", "deleting a mood")
 def delete_mood(name: str) -> dict:
     """Forget a mood (its songs stay in the library); the mix returns to Any if it was active."""
-    return _summary(_api(f"/api/mood/{urllib.parse.quote(name)}", "DELETE"))
+    s = _api(f"/api/mood/{urllib.parse.quote(name)}", "DELETE")
+    say(f"Deleted the mood {name}")
+    return _summary(s)
 
 
-@tool("Add songs by URL", destructive=False, open_world=True)
+@tool("Add songs by URL", "adding songs", destructive=False, open_world=True)
 def add_songs(url: str, genre: str = "") -> dict:
     """Add a YouTube / YouTube Music song or playlist URL to the library (optionally 'import as' a
     genre). Purely additive: songs are queued for download; nothing playing changes."""
-    return _api("/api/add", "POST", {"url": url, "genre": genre or None})
+    r = _api("/api/add", "POST", {"url": url, "genre": genre or None})
+    say(f"Added {songs_n(r['added'])} to the library")
+    return r
 
 
 # --- saved playlists ------------------------------------------------------------------
@@ -234,24 +373,25 @@ def _pl(p: dict) -> dict:
     return {k: p.get(k) for k in keep}
 
 
-@tool("List saved playlists", read_only=True, destructive=False)
+@tool("List saved playlists", "playlists", read_only=True, destructive=False)
 def list_playlists() -> list[dict]:
     """Saved YouTube playlists, newest first: id, name, song count, how many are ready, order
     (playlist / mix) and what happens at the end (keep_going / repeat / stop)."""
     return [_pl(p) for p in _api("/api/playlists")["playlists"]]
 
 
-@tool("Save a YouTube playlist", destructive=False, open_world=True)
+@tool("Save a YouTube playlist", "saving a playlist", destructive=False, open_world=True)
 def save_playlist(url: str, genre: str = "") -> dict:
     """Save a YouTube / YouTube Music playlist link (youtube.com/playlist?list=…) so it can be
     played from later; its songs are added to the library and download from the top. `genre`
     treats every song as that genre (owner-set genres still win). Saving one that's saved
     already returns it (existing=true). Purely additive; doesn't change what's playing."""
     r = _api("/api/playlists", "POST", {"url": url, "genre": genre or None})
+    say(f"Saved the playlist {r['playlist']['name']} ({songs_n(r['playlist']['count'])})")
     return {**{k: r[k] for k in ("existing", "found", "added") if k in r}, "playlist": _pl(r["playlist"])}
 
 
-@tool("Play from a saved playlist", open_world=True)
+@tool("Play from a saved playlist", "playing a playlist", open_world=True)
 def play_from_playlist(playlist_id: str) -> dict:
     """Make a saved playlist (id from list_playlists) the source: Up next follows it, Vibe goes to
     Any and Party to Off. Re-reads it from YouTube first if the last sync is over a day old."""
@@ -260,56 +400,65 @@ def play_from_playlist(playlist_id: str) -> dict:
         raise ToolError(f"No saved playlist {playlist_id}. See list_playlists.")
     if pl.get("stale"):
         _api(f"/api/playlists/{playlist_id}/sync", "POST", {})
-    return _summary(_api("/api/playlist", "POST", {"id": playlist_id}))
+    s = _api("/api/playlist", "POST", {"id": playlist_id})
+    say(f"Playing the {s['playlist']['name']} playlist")
+    return _summary(s)
 
 
-@tool("Sync a saved playlist", open_world=True)
+@tool("Sync a saved playlist", "syncing a playlist", open_world=True)
 def sync_playlist(playlist_id: str) -> dict:
     """Re-read a saved playlist on YouTube. New songs are added at their YouTube position; songs
     removed there leave the playlist (they stay in the library). Returns the new positions."""
     r = _api(f"/api/playlists/{playlist_id}/sync", "POST", {})
+    say(f"Synced {r['playlist']['name']}: {len(r['added'])} new, {r['removed']} gone")
     return {"added_at": r["added"], "removed": r["removed"], "playlist": _pl(r["playlist"])}
 
 
-@tool("Remove a saved playlist")
+@tool("Remove a saved playlist", "removing a playlist")
 def remove_playlist(playlist_id: str) -> dict:
     """Forget a saved playlist (its songs stay in the library). If it was playing, the source
     falls back to Vibe: Any and the music keeps going."""
     r = _api(f"/api/playlists/{playlist_id}", "DELETE")
+    say(f"Removed the playlist {r['name']}; its {songs_n(r['count'])} stay")
     return {"removed": r["name"], "songs_kept": r["count"], "was_playing": r["was_playing"]}
 
 
-@tool("Love a pair")
+@tool("Love a pair", "loving a mix")
 def love_pair(from_song_id: str, to_song_id: str) -> dict:
     """Remember that mixing from_song_id into to_song_id worked (🔥). Each love adds one to the
     pair's count (it clears an earlier 'avoid'); the planner then prefers playing to_song right
     after from_song, more with every love. Changes stored memory, so marked destructive.
     Ids are YouTube video ids (now_playing, get_history, list_library)."""
-    return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "loved"}))
+    s = _api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "loved"})
+    say(f"Loved mixing {_title(s, from_song_id)} into {_title(s, to_song_id)}", to_song_id)
+    return _summary(s)
 
 
-@tool("Avoid a pair")
+@tool("Avoid a pair", "avoiding a mix")
 def avoid_pair(from_song_id: str, to_song_id: str, why: str = "") -> dict:
     """Remember that mixing from_song_id into to_song_id didn't work (👎); resets the pair's loves.
     `why` (optional): "songs" = they don't go together, so to_song is never placed right after
     from_song again unless nothing else is ready; "effect" = only the effect used that time was
     wrong, so they can still meet with a different one. Empty = treated like "songs"."""
-    return _summary(_api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id,
-                                               "verdict": "avoided", "why": why or None}))
+    s = _api("/api/pair", "POST", {"from": from_song_id, "to": to_song_id, "verdict": "avoided", "why": why or None})
+    say(f"Won't mix {_title(s, from_song_id)} into {_title(s, to_song_id)} again", to_song_id)
+    return _summary(s)
 
 
-@tool("List remembered pairs", read_only=True, destructive=False)
+@tool("List remembered pairs", "pairs", read_only=True, destructive=False)
 def list_pairs() -> list[dict]:
     """Every rated hand-over, most loved first: from/to ids and titles, the effect, loved (how many
     🔥), avoided (1 = 👎), why ("songs" | "effect" | null) and last (when it was rated)."""
     return _api("/api/pairs")["pairs"]
 
 
-@tool("Forget a pair")
+@tool("Forget a pair", "forgetting a mix")
 def forget_pair(from_song_id: str, to_song_id: str) -> dict:
     """Erase what's remembered about mixing from_song_id into to_song_id (loves, avoid, reason).
     The reverse direction is a separate pair and stays. Can't be undone."""
-    return _summary(_api("/api/pair/forget", "POST", {"from": from_song_id, "to": to_song_id}))
+    s = _api("/api/pair/forget", "POST", {"from": from_song_id, "to": to_song_id})
+    say(f"Forgot mixing {_title(s, from_song_id)} into {_title(s, to_song_id)}", to_song_id)
+    return _summary(s)
 
 
 def main() -> None:

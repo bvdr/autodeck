@@ -95,3 +95,134 @@ def test_pair_tools_call_one_endpoint_each(monkeypatch):
         ("/api/pair", "POST", {"from": "a", "to": "b", "verdict": "avoided", "why": None}),
         ("/api/pair/forget", "POST", {"from": "a", "to": "b"}),
         ("/api/pairs", "GET", None)]
+
+
+# --- MCP settings, gate, activity (design m6p10) ---------------------------------------------
+from autodeck import config, mcp_activity  # noqa: E402
+
+
+def _call(name, args=None):
+    """A tool call the way an MCP client makes it: through the server's call_tool (the gate)."""
+    return asyncio.run(dj_mcp.server.call_tool(name, args or {}))
+
+
+def _fake_api(monkeypatch, state=None):
+    """dj_mcp._api stand-in: records (path, method, body, headers) and answers like the app."""
+    calls = []
+    st = {"pool": [{"id": "aaaaaaaaaa1", "title": "Smooth Criminal", "channel": "MJ", "status": "ready"}],
+          "queue": [], "genre": "Any", "party": None, "next_effect": None, **(state or {})}
+
+    def api(path, method="GET", body=None):
+        calls.append((path, method, body, dj_mcp._headers()))
+        if path == "/api/play_next":
+            return {**st, "play_next": {"id": body["id"], "ready": True, "planned": None}}
+        if path == "/api/history?limit=20":
+            return {"history": []}
+        return st
+    monkeypatch.setattr(dj_mcp, "_api", api)
+    return calls
+
+
+def _reports(calls):
+    return [c[2] for c in calls if c[0] == "/api/mcp/activity"]
+
+
+def test_off_refuses_every_tool_with_the_message_and_calls_nothing(tmp_library, monkeypatch):
+    mcp_activity.set_switches(enabled=False)
+    calls = _fake_api(monkeypatch)
+    for t in _tools():
+        with pytest.raises(dj_mcp.ToolError, match="MCP is turned off in autodeck"):
+            _call(t.name)
+    assert calls == []  # nothing else changes: not even the activity log
+
+
+def test_only_read_refuses_steering_tools_but_allows_reads(tmp_library, monkeypatch):
+    mcp_activity.set_switches(mode="read")
+    calls = _fake_api(monkeypatch)
+    reads = [t.name for t in _tools() if t.annotations.read_only_hint]
+    steers = [t.name for t in _tools() if not t.annotations.read_only_hint]
+    assert "now_playing" in reads and "play_next" in steers and "add_songs" in steers
+    for name in steers:
+        with pytest.raises(dj_mcp.ToolError, match="Only read"):
+            _call(name)
+    assert all(c[0] == "/api/mcp/activity" for c in calls)  # refused before touching the session
+    assert all(not r["ok"] for r in _reports(calls))
+    _call("now_playing")
+    _call("get_history")
+    assert _reports(calls)[-1]["ok"] and _reports(calls)[-1]["tool"] == "get_history"
+
+
+def test_steering_tools_say_one_plain_sentence_built_from_the_result(tmp_library, monkeypatch):
+    calls = _fake_api(monkeypatch, {"genre": "Balkan party", "next_effect": "echo"})
+    _call("play_next", {"song_id": "aaaaaaaaaa1"})  # no title passed: the sentence uses the app's
+    _call("set_genre", {"genre": "whatever the assistant typed"})
+    _call("set_next_effect", {"effect": "echo"})
+    said = [(r["tool"], r["text"], r["song"]) for r in _reports(calls)]
+    assert said == [("play_next", "Put Smooth Criminal next", "aaaaaaaaaa1"),
+                    ("set_genre", "Switched the vibe to Balkan party", None),
+                    ("set_next_effect", "Set the next effect to Echo out", None)]
+
+
+def test_api_calls_of_a_tool_carry_the_mcp_headers(tmp_library, monkeypatch):
+    calls = _fake_api(monkeypatch)
+    _call("now_playing")
+    hdr = calls[0][3]
+    assert hdr["X-Autodeck-Client"] == "mcp" and hdr["X-Autodeck-Tool"] == "now_playing"
+    assert hdr["X-Autodeck-Call"] == _reports(calls)[0]["call"]
+    assert dj_mcp._headers() == {}  # outside a tool call: a plain client
+
+
+def test_a_failed_tool_reports_the_reason(tmp_library, monkeypatch):
+    calls = _fake_api(monkeypatch)
+
+    def boom(path, method="GET", body=None):
+        if path == "/api/mcp/activity":
+            return calls.append((path, method, body, {}))
+        raise dj_mcp.ToolError("Couldn't find that song")
+    monkeypatch.setattr(dj_mcp, "_api", boom)
+    with pytest.raises(dj_mcp.ToolError):
+        _call("play_next", {"song_id": "aaaaaaaaaa1"})
+    assert _reports(calls) == [{"call": _reports(calls)[0]["call"], "tool": "play_next", "client": "An assistant",
+                                "ok": False, "text": "Couldn't find that song", "song": None}]
+
+
+def test_activity_ring_buffer_keeps_the_newest_50_newest_first(tmp_library):
+    a = mcp_activity.Activity()
+    for n in range(60):
+        a.finish(f"c{n}", "set_genre", "Claude Code", "switching the vibe", False, True, f"said {n}")
+    log = a.state()["log"]
+    assert len(log) == mcp_activity.LOG_SIZE and log[0]["text"] == "said 59" and log[-1]["text"] == "said 10"
+
+
+def test_mcp_state_fields_and_the_ten_minute_connected_window(tmp_library):
+    t = [1000.0]
+    a = mcp_activity.Activity(clock=lambda: t[0])
+    s = a.state()
+    assert {k: s[k] for k in ("enabled", "mode", "client", "last_call_at", "connected", "running",
+                              "last_error", "ever_connected")} == {
+        "enabled": True, "mode": "steer", "client": None, "last_call_at": None, "connected": False,
+        "running": None, "last_error": None, "ever_connected": False}
+    a.begin("c1", "now_playing", "Claude Code", "now playing", True)
+    s = a.state()
+    assert s["connected"] and s["running"] is None  # a read only flashes the dot
+    a.begin("c2", "play_next", "Claude Code", "playing next", False)
+    assert a.state()["running"] == {"tool": "play_next", "text": "playing next", "client": "Claude Code"}
+    a.finish("c2", "play_next", "Claude Code", "playing next", False, False, "Couldn't find that song")
+    s = a.state()
+    assert s["running"] is None and s["last_error"] == "Couldn't find that song" and s["client"] == "Claude Code"
+    assert s["log"][0]["status"] == "error" and len(s["log"]) == 2
+    t[0] += mcp_activity.CONNECTED_S - 1
+    assert a.state()["connected"]
+    t[0] += 2
+    assert not a.state()["connected"] and a.state()["last_error"]  # the error stays until seen
+    a.seen()
+    assert a.state()["last_error"] is None
+    assert mcp_activity.Activity().ever_connected  # persisted: first run is over for good
+
+
+def test_enabled_and_mode_persist_across_restarts(tmp_library):
+    assert mcp_activity.switches() == (True, "steer")  # default keeps the owner's Claude Code working
+    mcp_activity.set_switches(enabled=False, mode="read")
+    assert config.settings()["mcp_enabled"] is False and mcp_activity.switches() == (False, "read")
+    with pytest.raises(ValueError):
+        mcp_activity.set_switches(mode="admin")

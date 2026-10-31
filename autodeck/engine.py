@@ -17,7 +17,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from . import config, fetch, jobs, lastfm, library, moods, party, standalone
+from . import config, fetch, jobs, lastfm, library, mcp_activity, moods, party, standalone
 from .library import Song
 from .planner import FORCEABLE, Transition, avoids, genre_entry, order, pair_key, pick_transition, score_pair
 from .render import TimeMap, render, time_map_for
@@ -193,6 +193,13 @@ class Engine:
         self.mix_now_seq = 0
         # Owner's "beat to beat" mode: blends skip a's outro and b's intro (planner._main_view).
         self.beat_to_beat = False
+        # What an assistant changed (design m6p10 "via MCP" tags): "song:<id>" (a song it put in
+        # Up next), "source" (vibe / party / playlist), "effect" (the next effect). A tag goes when
+        # the song plays or the owner changes that thing (_mark with by=None). Memory only: after
+        # a restart nothing is "just changed" any more.
+        self.by_mcp: set[str] = set()
+        # The MCP button, toast and Activity log (mcp_activity.py); in /api/state as `mcp`.
+        self.mcp = mcp_activity.Activity()
         # Created here, started by the server lifespan (tests never start it).
         self.worker = jobs.Worker(self.get_state, on_change=self._on_worker_change)
         with LOCK:
@@ -265,6 +272,13 @@ class Engine:
         self.kept = {k: str(v) for k, v in kept.items() if k in ids} if isinstance(kept, dict) else {}
         req = d.get("requested")
         self.requested = [i for i in dict.fromkeys(req) if i in ids and i != playing] if isinstance(req, list) else []
+
+    def _mark(self, thing: str, by: str | None) -> None:
+        """Who last changed `thing`: an assistant (by="mcp") tags it, anyone else clears the tag."""
+        if by == "mcp":
+            self.by_mcp.add(thing)
+        else:
+            self.by_mcp.discard(thing)
 
     def by_id(self, sid: str) -> Song | None:
         return next((s for s in self.pool if s.id == sid), None)
@@ -399,7 +413,8 @@ class Engine:
         pl = self._pl()
         # in_playlist: an auto pick from the playing playlist (else a library song filling in around it).
         return {**self.view(s), "kept": s.id in self.requested, "kept_from": self.kept.get(s.id),
-                "in_playlist": pl is not None and s.id in pl["song_ids"]}
+                "in_playlist": pl is not None and s.id in pl["song_ids"],
+                "by": "mcp" if f"song:{s.id}" in self.by_mcp else None}
 
     # --- API operations ---------------------------------------------------------
     def state(self) -> dict:
@@ -408,12 +423,17 @@ class Engine:
             counts: dict[str, int] = {}
             for s in self.pool:
                 counts[s.status] = counts.get(s.status, 0) + 1
+            src = self._source()
+            if src is not None:
+                src["by"] = "mcp" if "source" in self.by_mcp else None
             return {"version": self.version, "genre": self.genre, "genres": config.genres(),
                     "notice": self.notice, "playing": self.playing, "beat_to_beat": self.beat_to_beat,
                     "party": self.party, "flavors": list(party.FLAVORS), "lastfm": bool(lastfm.api_key()),
                     "next_effect": self.next_effect, "effects": list(FORCEABLE), "mix_now_seq": self.mix_now_seq,
                     "moods": {k: len(v) for k, v in self.moods.items()},
-                    "source": self._source(),
+                    "source": src,
+                    "next_effect_by": "mcp" if "effect" in self.by_mcp else None,
+                    "mcp": self.mcp.state(),
                     # Saved playlists, newest first, and the active one (or None).
                     "playlists": [self._pl_summary(p, by) for p in reversed(self.playlists.values())],
                     "playlist": self._pl_summary(self._pl(), by) if self._pl() else None,
@@ -484,8 +504,10 @@ class Engine:
             if sid in self.requested:
                 self.requested.remove(sid)
             self.kept.pop(sid, None)  # "kept from …" is an Up next note; it has played now
+            self.by_mcp.discard(f"song:{sid}")  # so is "via MCP"
             if sid != self.playing:  # a pulled-back fader re-reports the same song: one entry
                 self.next_effect = None  # the forced effect was for the previous song's exit
+                self.by_mcp.discard("effect")
                 self._log_played(sid, plan[2] if plan and plan[0] == sid else None)
             prev, self.playing = self.playing, sid
             self.played = self.played | {sid}  # new set: get_state copies never see a resize
@@ -497,6 +519,7 @@ class Engine:
                     # The playlist is over and a library song took over ("Keep going"): the
                     # source hands over to Vibe: Any, seeded by what's playing.
                     self.playlist, self.pl_run = None, {}
+                    self.by_mcp.discard("source")
             self._save_session()
         if prev and prev != sid:
             # The song that just handed over is decoded in the browser already, and its renders
@@ -522,7 +545,7 @@ class Engine:
                      "status": by[h.id].status if h.id in by else None} for h in hits]
 
     def request(self, sid: str, title: str, channel: str, duration: float, kept_from: str | None = None,
-                first: bool = False) -> None:
+                first: bool = False, by: str | None = None) -> None:
         """Owner kept a song (the draft, the assistant, a pair): add it if new, prep it first, and
         put it in Up next after the songs already kept (`first`: before them, see play_next).
         `kept_from` is the note ("Balkan party", "search", "assistant")."""
@@ -543,6 +566,7 @@ class Engine:
                 self.requested.append(sid)
             if kept_from:
                 self.kept[sid] = kept_from
+            self._mark(f"song:{sid}", by)
             # Asking for a song that already played tonight means "play it again": without this
             # it isn't eligible, so it sat in the requested list forever ("plays next once ready").
             self.played = self.played - {sid}  # new set: get_state copies never see a resize
@@ -551,7 +575,7 @@ class Engine:
             self._changed()
 
     def play_next(self, sid: str, title: str = "", channel: str = "", duration: float = 0.0,
-                  kept_from: str | None = None) -> dict:
+                  kept_from: str | None = None, by: str | None = None) -> dict:
         """The very next song, on the idle deck (design yA49d). A ready pick goes first and the
         planned song moves back to second; one still downloading/analysing waits at the top of
         the requests while the planned song stays, then swaps in once ready (_recompute). The
@@ -560,7 +584,7 @@ class Engine:
             if sid == self.playing:
                 raise EngineError(409, "That song is playing now")
             planned = self.upcoming[0] if self.upcoming else None
-            self.request(sid, title, channel, duration, kept_from, first=True)
+            self.request(sid, title, channel, duration, kept_from, first=True, by=by)
             # The version bump (request's _changed) is what makes a player holding a plan for
             # `planned` fetch a new one; the old plan_ids stay valid on purpose: if that mix is
             # already audible the player keeps it, and /api/playing must still commit its map.
@@ -737,7 +761,7 @@ class Engine:
         except (OSError, ValueError):
             return {}
 
-    def build_mood(self, theme: str, n: int = 30) -> dict:
+    def build_mood(self, theme: str, n: int = 30, by: str | None = None) -> dict:
         """Collect the crowd's picks for a theme from public playlists, import them, and switch
         to the mood. Returns {"mood", "found", "added", "songs": [{title, votes}]}."""
         theme = " ".join(theme.split())[:60]
@@ -779,7 +803,7 @@ class Engine:
             if name not in config.genres():
                 config.save_genres([*config.genres(), name])
             library.save_pool([s.id for s in self.pool])
-        self.set_genre(name)  # switch to it now; also replans the next transition
+        self.set_genre(name, by)  # switch to it now; also replans the next transition
         return {"mood": name, "found": len(top), "added": added,
                 "songs": [{"title": s.title, "votes": v} for s, v in top[:10]]}
 
@@ -795,6 +819,7 @@ class Engine:
             config.save_genres([g for g in config.genres() if g != name] or list(config.DEFAULT_GENRES))
             if self.genre == name:
                 self.genre = config.ANY_GENRE
+                self.by_mcp.discard("source")
             self._recompute()
             self._changed()
 
@@ -844,11 +869,12 @@ class Engine:
             out |= self.rejected.get(PARTY_BUCKET, set())
         return out
 
-    def set_party(self, flavor: str | None) -> None:
+    def set_party(self, flavor: str | None, by: str | None = None) -> None:
         if flavor is not None and flavor not in party.FLAVORS:
             raise EngineError(400, f"Unknown party flavor: {flavor}")
         with LOCK:
             self.party = flavor
+            self._mark("source", by)
             if flavor:
                 # One source at a time: a party flavor resets the vibe to Any and the playlist to
                 # None. Off doesn't bring the old vibe back (owner's rule).
@@ -939,7 +965,7 @@ class Engine:
     def suggestions(self) -> list[dict]:
         return self.draft()["suggestions"]
 
-    def accept(self, artist: str, title: str, sid: str | None = None) -> None:
+    def accept(self, artist: str, title: str, sid: str | None = None, by: str | None = None) -> None:
         """Owner kept a draft song: it plays next (request()), noted as kept from the source.
         With an id (a library song) that's all; without one (a party pick) it's found on
         YouTube first."""
@@ -957,7 +983,7 @@ class Engine:
         with LOCK:
             src = self._source()
             self._sugg = None
-        self.request(sid, title, channel, duration, src["label"] if src else None)
+        self.request(sid, title, channel, duration, src["label"] if src else None, by=by)
 
     def accept_all(self, items: list[dict]) -> None:
         """"Add all N": keep each in the order shown. request() appends, so Up next keeps it."""
@@ -1050,11 +1076,12 @@ class Engine:
     def stop_enrichment(self) -> None:
         self._enrich_stop.set()
 
-    def set_next_effect(self, effect: str | None) -> None:
+    def set_next_effect(self, effect: str | None, by: str | None = None) -> None:
         if effect is not None and effect not in FORCEABLE:
             raise EngineError(400, f"Unknown transition effect: {effect}")
         with LOCK:
             self.next_effect = effect
+            self._mark("effect", by)
             self._changed()  # the player replans the not-yet-started mix with it
 
     def mix_now(self) -> None:
@@ -1108,10 +1135,11 @@ class Engine:
             self._save_session()
             self._changed()  # version bump: the player replans a not-yet-started transition
 
-    def set_genre(self, g: str) -> None:
+    def set_genre(self, g: str, by: str | None = None) -> None:
         _known_genre(g, allow_any=True)
         with LOCK:
             self.genre = g
+            self._mark("source", by)
             self.playlist, self.pl_run = None, {}  # one source at a time: Playlist back to None
             # One source at a time: a genre or mood turns party off (moods come through here too).
             if self.party:
@@ -1144,6 +1172,8 @@ class Engine:
             if pin is not None and pin not in ids:
                 raise EngineError(400, "Pinned song must be in the queue")
             mine = set(self.requested) | ({pin} if pin else set())
+            if pin:
+                self.by_mcp.discard(f"song:{pin}")  # the owner placed it: it's theirs now
             last = max((n for n, i in enumerate(ids) if i in mine), default=-1)
             self.requested = ids[: last + 1] + [i for i in self.requested if i not in ids]
             self._recompute(keep=ids[: config.FIXED_NEXT] if self.playing else [])
@@ -1177,6 +1207,7 @@ class Engine:
             self.upcoming = [i for i in self.upcoming if i != sid]
             self.requested = [i for i in self.requested if i != sid]
             self.kept.pop(sid, None)
+            self.by_mcp.discard(f"song:{sid}")
             if self.next_pick == sid:
                 self.next_pick = None  # re-adding it later must not make it jump the queue
             self.maps.pop(sid, None)
@@ -1396,7 +1427,7 @@ class Engine:
             return {"added": [n + 1 for n in added], "new_ids": [new[n] for n in added], "removed": len(removed),
                     "playlist": self._pl_summary(pl, {s.id: s for s in self.pool})}
 
-    def pick_playlist(self, lid: str | None) -> None:
+    def pick_playlist(self, lid: str | None, by: str | None = None) -> None:
         """Playlist dropdown: play from this saved playlist (None = Playlist: None). Like a genre
         or party it is exclusive: Vibe goes to Any and Party to Off. A run starts from the top."""
         with LOCK:
@@ -1411,6 +1442,7 @@ class Engine:
                 self.pl_run = {self.playing: time.strftime("%H:%M")} if self.playing in pl["song_ids"] else {}
                 # Like a genre switch: the playlist's own next song replaces the fixed slot.
                 keep = [] if self.playing else None
+            self._mark("source", by)
             self._save_session()
             self._recompute(keep)
             self._changed()
@@ -1463,6 +1495,7 @@ class Engine:
             was = self.playlist == lid
             if was:
                 self.playlist, self.pl_run = None, {}
+                self.by_mcp.discard("source")
                 self._save_session()
             self._recompute()
             self._changed()
