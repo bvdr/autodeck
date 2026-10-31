@@ -101,7 +101,9 @@ def _load_model():
 
         import onnxruntime as ort
 
-        d = config.library_root() / "models"
+        # The standalone app's setup installs both files; dev downloads them once.
+        installed = config.installed_model("discogs-effnet-bsdynamic-1.json")
+        d = installed.parent if installed else config.library_root() / "models"
         # The card's separate genre_discogs400 head is only published as .pb (no ONNX), and the
         # bsdynamic EffNet ONNX already outputs the same 400 sigmoid style activations (+ 1280-d
         # embeddings) with the same class list, so one model does the whole job.
@@ -150,7 +152,8 @@ def _language(y: np.ndarray) -> str | None:
         try:
             from faster_whisper import WhisperModel
 
-            _whisper = WhisperModel("tiny", device="cpu", compute_type="int8")
+            local = config.installed_model("faster-whisper-tiny")  # standalone app (setup installed it): no HF hub download
+            _whisper = WhisperModel(str(local) if local else "tiny", device="cpu", compute_type="int8")
         except Exception:
             _unavailable.add("whisper")
             raise

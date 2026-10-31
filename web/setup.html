@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Setting up autodeck</title>
+  <!-- First launch of the standalone app (autodeck/standalone.py). Loaded from disk before the
+       engine exists, so no fonts from the network and no /api: it talks to Python through
+       window.pywebview.api (desktop.SetupApi). -->
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { padding: 32px 36px; display: grid; gap: 20px; align-content: start; }
+    h1 { margin: 0; font: 700 30px/1.1 var(--display); }
+    .lead { margin: 0; color: var(--text-2); }
+    .bar { height: 8px; border-radius: 4px; background: var(--raised); overflow: hidden; }
+    .bar > i { display: block; height: 100%; width: 0; background: var(--ready); transition: width .3s; }
+    .row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--text-2); }
+    ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    li { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: baseline; }
+    li .detail { grid-column: 2 / 4; font-size: 13px; color: var(--text-3); min-height: 1em; }
+    li[data-status="done"] .mark { color: var(--ready); }
+    li[data-status="running"] .mark { color: var(--working); }
+    li[data-status="failed"] .mark { color: var(--failed); }
+    .err { color: var(--failed); margin: 0; }
+    .err:empty { display: none; }
+    .actions { display: flex; gap: 8px; }
+    details pre { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 8px; font: 12px/1.4 var(--mono);
+                  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Setting up autodeck</h1>
+  <p class="lead">One-time download of the audio and AI engines (about 600 MB, 1.5 GB on disk). autodeck opens when it's done.</p>
+  <div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+    <p class="row"><span id="now" aria-live="polite">Starting…</span><span id="pct" class="mono"></span></p>
+  </div>
+  <ol id="steps"></ol>
+  <p id="err" class="err" role="alert"></p>
+  <div class="actions">
+    <button id="cancel" class="btn" type="button">Cancel</button>
+    <button id="retry" class="btn primary" type="button" hidden>Retry</button>
+  </div>
+  <details><summary class="hint">Show log</summary><pre id="log"></pre></details>
+  <script type="module">
+    import { describe } from './setup.js';
+    const $ = (s) => document.querySelector(s);
+    let api;
+    function show(st) {
+      const d = describe(st);
+      $('.bar > i').style.width = `${d.percent}%`;
+      $('.bar').setAttribute('aria-valuenow', String(Math.round(d.percent)));
+      $('#now').textContent = d.now;
+      $('#pct').textContent = d.amount;
+      $('#steps').replaceChildren(...st.steps.map((s) => {
+        const li = document.createElement('li');
+        li.dataset.status = s.status;
+        li.innerHTML = '<span class="mark"></span><span class="name"></span><span class="mono dim"></span><span class="detail"></span>';
+        li.querySelector('.mark').textContent = { done: '✓', running: '●', failed: '✕' }[s.status] ?? '○';
+        li.querySelector('.name').textContent = s.name;
+        li.querySelector('.dim').textContent = s.status === 'running' ? `${s.percent}%` : '';
+        li.querySelector('.detail').textContent = s.detail;
+        return li;
+      }));
+      $('#err').textContent = st.error;
+      $('#cancel').hidden = st.status !== 'running';
+      $('#retry').hidden = !['failed', 'cancelled'].includes(st.status);
+      const log = $('#log'); const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+      log.textContent = st.log;
+      if (atEnd) log.scrollTop = log.scrollHeight;
+    }
+    async function poll() {
+      try { show(await api.state()); } catch (e) { $('#err').textContent = String(e); }
+      setTimeout(poll, 400); // when setup finishes, Python replaces this page with the app
+    }
+    // Python starts the setup itself (desktop.main); this page only shows it and offers
+    // Cancel/Retry. A module script runs late, so pywebview may already be ready by now.
+    function init() {
+      api = window.pywebview.api;
+      $('#cancel').addEventListener('click', () => api.cancel());
+      $('#retry').addEventListener('click', () => api.start());
+      poll();
+    }
+    if (window.pywebview?.api?.state) init(); else window.addEventListener('pywebviewready', init, { once: true });
+  </script>
+</body>
+</html>

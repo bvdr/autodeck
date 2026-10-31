@@ -528,3 +528,20 @@ def test_lastfm_key_can_be_set_from_settings_and_is_never_echoed(client, monkeyp
     assert "0" * 28 not in client.get("/api/settings").text
     assert lastfm.api_key() == "0" * 28 + "abcd" and oct(lastfm.key_file().stat().st_mode)[-3:] == "600"
     assert client.put("/api/settings/lastfm", json={"key": ""}).json()["lastfm"]["set"] is False
+
+
+def test_youtube_login_browser_is_a_setting(client, monkeypatch):
+    monkeypatch.delenv("AUTODECK_BROWSER", raising=False)
+    assert client.get("/api/settings").json()["youtube"] == {"browser": "chrome", "from_env": False}
+    assert client.put("/api/settings/youtube", json={"browser": "opera"}).status_code == 400
+    r = client.put("/api/settings/youtube", json={"browser": "brave"}).json()
+    assert r["youtube"] == {"browser": "brave", "from_env": False}
+    assert json.loads((config.library_root() / "settings.json").read_text()) == {"youtube_browser": "brave"}
+    monkeypatch.setenv("AUTODECK_BROWSER", "none")
+    assert client.get("/api/settings").json()["youtube"] == {"browser": "none", "from_env": True}
+
+
+def test_installation_status_and_repair_outside_the_standalone_app(client):
+    rt = client.get("/api/settings").json()["runtime"]
+    assert rt["standalone"] is False and rt["python"].startswith("3.12")
+    assert client.post("/api/setup/repair").status_code == 409  # dev: nothing to repair, never relaunches

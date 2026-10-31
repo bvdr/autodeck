@@ -52,15 +52,16 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "beat-this" },
+    { name = "deno" },
     { name = "essentia" },
     { name = "fastapi" },
     { name = "faster-whisper" },
+    { name = "imageio-ffmpeg" },
     { name = "librosa" },
     { name = "mcp" },
     { name = "onnxruntime" },
     { name = "pyloudnorm" },
     { name = "pyrubberband" },
-    { name = "pytest" },
     { name = "pywebview" },
     { name = "soundfile" },
     { name = "uvicorn" },
@@ -68,24 +69,37 @@ dependencies = [
     { name = "yt-dlp-ejs" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+ui = [
+    { name = "pywebview" },
+]
+
 [package.metadata]
 requires-dist = [
-    { name = "beat-this", git = "https://github.com/CPJKU/beat_this" },
+    { name = "beat-this", specifier = "==1.1.0" },
+    { name = "deno", specifier = ">=2.9.8" },
     { name = "essentia", specifier = "==2.1b6.dev1389" },
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "faster-whisper", specifier = ">=1.2.1" },
+    { name = "imageio-ffmpeg", specifier = ">=0.7.0" },
     { name = "librosa", specifier = ">=1.0.0" },
     { name = "mcp", specifier = ">=1.10" },
     { name = "onnxruntime", specifier = ">=1.31.1" },
     { name = "pyloudnorm", specifier = ">=0.2.0" },
     { name = "pyrubberband", specifier = ">=0.4.0" },
-    { name = "pytest", specifier = ">=9.2.0" },
     { name = "pywebview", specifier = ">=6.2.1" },
     { name = "soundfile", specifier = ">=0.14.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
     { name = "yt-dlp", specifier = ">=2026.10.26" },
     { name = "yt-dlp-ejs", specifier = ">=0.8.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.2.0" }]
+ui = [{ name = "pywebview", specifier = ">=6.2.1" }]
 
 [[package]]
 name = "av"
@@ -116,7 +130,7 @@ wheels = [
 [[package]]
 name = "beat-this"
 version = "1.1.0"
-source = { git = "https://github.com/CPJKU/beat_this#b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "einops" },
     { name = "numpy" },
@@ -124,6 +138,10 @@ dependencies = [
     { name = "soxr" },
     { name = "torch" },
     { name = "torchaudio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/c4/7ce01e047c1e8d99490e95172d710e08901c24fb24e19a5dd4f885177c99/beat_this-1.1.0.tar.gz", hash = "sha256:3017c741f972972a650edcaccfe5760687fe4f5587feaa98896d90f866c2435c", size = 40635, upload-time = "2026-04-14T10:16:39.5Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/0e/e23cbbe6e3efcd54e84dec22b6d88954655036a993cc3843ab741bc24de4/beat_this-1.1.0-py3-none-any.whl", hash = "sha256:3f2b2d1e027c6dac380bf80c71555e3c28a4036a7f1af20129a945915a72a645", size = 40060, upload-time = "2026-04-14T10:16:37.955Z" },
 ]
 
 [[package]]
@@ -589,6 +607,19 @@ wheels = [
 ]
 
 [[package]]
+name = "deno"
+version = "2.9.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/b9/695b7c6b1f8bf31a83a403b785f9f31a8354c08796acb3a5e387c2813954/deno-2.9.8.tar.gz", hash = "sha256:f050f14d259f1e6f39a86aa8dd85f787df2311fc8ceb0be57485a127567ae137", size = 8168, upload-time = "2026-10-21T15:32:03.155Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/b1/ed2631d14362b442854a14efc5e3ac1b3422e6544734b2d746114f874acf/deno-2.9.8-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:338245af268724ae55ebebdb81270a0553b665affde8bdd80b01b8f1c07c7163", size = 42807330, upload-time = "2026-10-21T15:31:44.653Z" },
+    { url = "https://files.pythonhosted.org/packages/67/d7/78ae96540972c31d5787ab454af58a30a52ec35984bc4143b19f4175707d/deno-2.9.8-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b82eac91d3e3f6fe37d94a12f833550e05029274cb9020b1e3f0f61e1678dc24", size = 38783813, upload-time = "2026-10-21T15:31:48.542Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/01/4a71078d8007c04f36b7306a0e9838e43a6e0c56d48f947040b779d469d1/deno-2.9.8-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:3e286918a36f436134336c5c6ef37dfe3a27f16ea22cd6af452ab7daa4ef1da4", size = 40125945, upload-time = "2026-10-21T15:31:52.352Z" },
+    { url = "https://files.pythonhosted.org/packages/76/21/16d41da4c0c1c966d85fbfc5af6e2ea5e55eb9aadce00b82810875fe11d0/deno-2.9.8-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:b1d1318e7deda8efd593aefa8b565a827fe71cf83aeff09d3a5ceb047444ca18", size = 41964284, upload-time = "2026-10-21T15:31:56.477Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/42/07b0f91b0962869218653e32a85aebf22fc359a146d8c032623994b9457f/deno-2.9.8-py3-none-win_amd64.whl", hash = "sha256:60dd97e612b8bab67c8080712646a821071e3809909489f853763cea19617700", size = 41825460, upload-time = "2026-10-21T15:32:00.7Z" },
+]
+
+[[package]]
 name = "einops"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -773,6 +804,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f5/08/8eea9d4b8302028f3abb2c0813953f7aec26d33b7a8960ed760e65ff29fa/idna-3.20.tar.gz", hash = "sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44", size = 216463, upload-time = "2026-09-17T14:11:04.752Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl", hash = "sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c", size = 69583, upload-time = "2026-09-17T14:11:03.168Z" },
+]
+
+[[package]]
+name = "imageio-ffmpeg"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/ee/e3e0753f1054da1f115ee5d113307ed58faf4e31fa90d5d31739db15d125/imageio_ffmpeg-0.7.0.tar.gz", hash = "sha256:eec1f8b9bd873a2f179c994c653d5970ad560e245faf1a777e971933228b829a", size = 26037, upload-time = "2026-10-28T08:50:00.328Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/ef/e006996ba8735c1605b05fc931b7b49297cbdf11603259701bd0d62e17e1/imageio_ffmpeg-0.7.0-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.whl", hash = "sha256:fafa399433b571e8963471487cd7a7bb3ee7b532af42e6342145add6379f479b", size = 24933149, upload-time = "2026-10-28T08:48:39.709Z" },
+    { url = "https://files.pythonhosted.org/packages/24/d3/be06b86c75acc49113aaf869b8c3d1e721ee01e1d1d7fa12cfc7d9708ea3/imageio_ffmpeg-0.7.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:5cb5c37d3c19aa8e7cd95b9f4833e6a3d9fd33e4b1d126a42995b14aef9fef02", size = 21114068, upload-time = "2026-10-28T08:49:58.132Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/68/5c7eac9733c0a35b46f939df7079bbf72463dc347d4ff51fbad138d15ba9/imageio_ffmpeg-0.7.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:588a23c6a1c55a7cb51febfe97d3ef8dd5e7fa0ef7e14c7da8828e2886bdd3a3", size = 25632882, upload-time = "2026-10-28T08:47:56.023Z" },
+    { url = "https://files.pythonhosted.org/packages/04/96/15fe7ef562f7494c358cbd9b521d2da82d7a331b5513703756166478bd5f/imageio_ffmpeg-0.7.0-py3-none-manylinux2014_x86_64.whl", hash = "sha256:4e1f36bef7bedd4bc5dc25f60a8345d88f57133fa1e754f09b411ac61b854408", size = 29498414, upload-time = "2026-10-28T08:49:37.544Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/9a/9dccc110e8bdd825b69e3d540e3dba0c29762aaab55530273863e25c91e6/imageio_ffmpeg-0.7.0-py3-none-win32.whl", hash = "sha256:f439dc720813fb7c10aba8c5f7681d4ca4d2aeae4f35e8347d2851b81b7b0a92", size = 19652425, upload-time = "2026-10-28T08:48:15.649Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/55/1d50cdd78d862a30c2ce44f01cea387f77b364b21fa2fecf1590258b215b/imageio_ffmpeg-0.7.0-py3-none-win_amd64.whl", hash = "sha256:7a22b45f60321d4172bdf2bc61f716bce4c81b85727bd59c7c7e371055a6a440", size = 31247004, upload-time = "2026-10-28T08:49:09.115Z" },
 ]
 
 [[package]]

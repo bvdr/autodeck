@@ -5,17 +5,68 @@ Runs on macOS (Apple Silicon), local only: the server binds `127.0.0.1`.
 
 ## One-time setup
 
-    brew install uv rubberband ffmpeg deno
+    brew install uv rubberband ffmpeg
     uv sync
 
-`deno` (plus the `yt-dlp-ejs` package, installed by `uv sync`) is what yt-dlp uses to solve YouTube's player challenges; without them
-yt-dlp warns and some formats are missing.
+`deno` (installed by `uv sync` as the `deno` package, with `yt-dlp-ejs`) is what yt-dlp uses to solve
+YouTube's player challenges; without them yt-dlp warns and some formats are missing.
 
 ## Run
 
     uv run python -m autodeck      # serves http://127.0.0.1:8765 and opens it in the browser
 
 Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
+
+## Mac app
+
+Two ways to get an `autodeck.app`:
+
+**Thin launcher (dev, this Mac):** `scripts/make_mac_app.sh [--notarize] [--install]` builds a tiny
+app that runs `uv run python -m autodeck.desktop` in this repo, so it always runs the current code.
+It needs the repo, uv and the Homebrew tools on the Mac.
+
+**Standalone app / DMG (any Apple Silicon Mac, nothing installed):**
+
+    scripts/build_standalone.sh                 # dist/autodeck.app + dist/autodeck-<version>.dmg, notarized
+    scripts/build_standalone.sh --no-notarize   # signed only, for quick iterations
+
+Users open the DMG (~26 MB), drag autodeck to Applications and open it. Build requirements (build
+Mac only): uv with its managed CPython 3.12 (`uv python install 3.12`), Xcode command line tools,
+the Developer ID Application certificate (`AUTODECK_SIGN_ID`, SHA-1, defaults to ours) and
+notarytool credentials under the keychain profile `autodeck` (`AUTODECK_NOTARY_PROFILE`):
+`xcrun notarytool store-credentials autodeck --apple-id <apple id> --team-id HRP3W3WRHZ`.
+
+- **What's in the app (~58 MB):** a trimmed python-build-standalone CPython 3.12 (the Python uv
+  manages), the official `uv` binary (PyPI wheel, hash-checked), the official Rubber Band CLI
+  (breakfastquay.com, pinned sha256), autodeck's source, `pyproject.toml` and `uv.lock`. Everything
+  is signed with the hardened runtime; the only entitlements are on the Python interpreter
+  (`disable-library-validation`, `allow-unsigned-executable-memory`; see
+  `scripts/standalone/entitlements.plist` for why).
+- **First launch = setup** (`autodeck/standalone.py`): a "Setting up autodeck" window with progress
+  (bytes, current step, log, Cancel/Retry) installs about 1.5 GB into
+  `~/Library/Application Support/autodeck/`: `runtime/` (a copy of the Python + a venv made by
+  `uv sync --frozen --no-dev` from the bundled lock: exact versions, hashes checked; ffmpeg comes from
+  the `imageio-ffmpeg` wheel, deno from the `deno` wheel) and `models/` (beat_this, Discogs-EffNet,
+  Whisper tiny; pinned URLs and sha256). uv's download cache is `~/Library/Caches/autodeck/uv`.
+  Setup is resumable: an interrupted run continues next launch (downloads resume from `.part`
+  files), and it only counts as done once `runtime/setup.json` is written. A new app version with a
+  different `uv.lock` re-runs the sync (uv only changes the difference).
+- **Settings → Installation** shows the Python version and installed size; **Repair installation**
+  reinstalls the packages, re-checks the models and restarts the app.
+- **Data:** library and settings stay in `~/Library/Application Support/autodeck/`, caches in
+  `~/Library/Caches/autodeck/`, the log in `~/Library/Logs/autodeck.log`. Nothing is written inside the app.
+- **yt-dlp updates itself:** YouTube breaks old yt-dlp within weeks, so once a day (in the
+  background) the app asks PyPI for a newer yt-dlp and the yt-dlp-ejs version it pins, checks the
+  sha256 and unpacks both into `~/Library/Application Support/autodeck/pylib/<version>/`. The next
+  launch uses it; the two newest are kept and one that won't import is dropped.
+- **First run:** after setup, an empty library shows a "Start from a playlist" screen (paste a
+  YouTube / YouTube Music playlist, or use Liked Music) until at least one song is ready. Pick where
+  your YouTube login comes from there or in **Settings → YouTube login from** (Chrome by default;
+  Safari needs Full Disk Access for autodeck; "none" = public videos only). macOS asks once for
+  Keychain access to the browser's cookies: click Always Allow.
+- **Test it clean:** `AUTODECK_HOME`, `AUTODECK_CACHES` and `AUTODECK_LIBRARY` move every folder the
+  app writes, e.g. `env -i HOME=$HOME PATH=/usr/bin:/bin AUTODECK_PORT=8767 AUTODECK_HOME=/tmp/x/home
+  AUTODECK_CACHES=/tmp/x/caches AUTODECK_LIBRARY=/tmp/x/lib dist/autodeck.app/Contents/MacOS/autodeck`.
 
 ## First run
 
@@ -26,8 +77,9 @@ Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
 - **Keychain prompt:** yt-dlp reads your YouTube login from Chrome, and macOS asks for Keychain
   access to "Chrome Safe Storage". Click **Always Allow**, or it asks again on every download.
   Cookies are read live by yt-dlp and never written to disk or logged by autodeck.
-- **`AUTODECK_BROWSER`** picks the browser to read cookies from (default `chrome`; also e.g.
-  `firefox`, `safari`, `brave`). `AUTODECK_BROWSER=none` uses no cookies at all, which works for
+- **Settings → YouTube login from** picks the browser to read cookies from (Chrome, Safari,
+  Firefox, Brave, Edge or none; default Chrome; saved in `settings.json` in the app's data folder).
+  The **`AUTODECK_BROWSER`** env var overrides it (any yt-dlp browser name). `AUTODECK_BROWSER=none` uses no cookies at all, which works for
   public videos and playlists but not for Liked Music. Use `none` for unattended runs and tests, since
   the Keychain prompt blocks them.
 - **`AUTODECK_LIBRARY`** moves the library cache (default `~/Library/Application Support/autodeck/library/`). It holds one folder per
@@ -39,7 +91,9 @@ Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
 
 ## Importing music
 
-Paste a URL in the import bar and press **Add**. Optionally pick an "import as" genre first: every song in
+With an empty library the page shows only a **Start from a playlist** screen: paste a YouTube or
+YouTube Music playlist (or press **Use my Liked Music**), watch the first songs get ready, then
+**Start**. It comes back if the library is ever emptied. After that, paste a URL in the import bar and press **Add**. Optionally pick an "import as" genre first: every song in
 that import gets that genre, ahead of the app's own guess (a genre you set on a single song still wins).
 Re-adding the URL of a song that failed to download or analyze queues it for another try.
 

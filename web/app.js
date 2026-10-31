@@ -6,6 +6,7 @@ import * as S from './schedule.js';
 import { Deck, loadTrack, laneText } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
 import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab } from './ui.js';
+import { initOnboard, renderOnboard } from './onboard.js';
 
 const $ = (sel) => document.querySelector(sel);
 const POLL_MS = 2000;
@@ -863,7 +864,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === ' ' && !typing && !live() && O.id) { e.preventDefault(); play(); }
   if (e.key === '/' && !e.target.closest?.('input, textarea, select')) { e.preventDefault(); focusSearch(); }
 });
-initUi(onState, {
+initOnboard({ api, setOpener, last: getState });
+initUi((s) => { renderOnboard(s); onState(s); }, {
   loadOpener: (song) => { if (!live()) loadOpener(song, null, true); },
   isLive: live,
 });

@@ -12,8 +12,8 @@
 #
 # The app runs `uv run python -m autodeck.desktop` in this repo (its own .venv), so it stays tiny
 # and always runs the current code. It needs the repo, uv and the Homebrew tools (ffmpeg,
-# rubberband, deno) on this Mac. A self-contained app (PyInstaller, ~1.5 GB with PyTorch) is a
-# separate job, only needed to run autodeck on a Mac without the repo.
+# rubberband, deno) on this Mac. For a self-contained app + DMG that runs on a Mac without any
+# of that, use scripts/build_standalone.sh.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -561,6 +561,27 @@ export function lastfmState(lf) {
   // the page's to delete, and "removing" it would silently do nothing.
   return { text: `Set · ends in …${lf.hint}${from}`, cls: 'set', removable: lf.source === 'settings' };
 }
+const BROWSER_NAME = { chrome: 'Chrome', safari: 'Safari', firefox: 'Firefox', brave: 'Brave', edge: 'Edge' };
+/** What Settings says under "YouTube login from", from GET /api/settings' `youtube`. */
+export function browserNote(yt) {
+  if (yt?.from_env) return `Set to "${yt.browser}" by the AUTODECK_BROWSER environment variable, which wins over this choice`;
+  if (!yt || yt.browser === 'none') return 'No login: public videos and playlists work, Liked Music does not';
+  const name = BROWSER_NAME[yt.browser] ?? yt.browser;
+  // Safari keeps its cookies in a protected folder; the other browsers' are behind a Keychain prompt.
+  if (yt.browser === 'safari') return 'Uses your Safari login. autodeck needs Full Disk Access (System Settings → Privacy & Security) to read it';
+  return `Uses your ${name} login. macOS asks once for Keychain access: click Always Allow`;
+}
+/** The Installation line in Settings, from GET /api/settings' `runtime`. */
+export function runtimeNote(rt) {
+  if (!rt?.standalone) return { text: `Running from the repo (Python ${rt?.python ?? '?'})`, repair: false };
+  const gb = (rt.size / 1e9).toFixed(1);
+  return { text: `autodeck ${rt.app_version ?? '?'} · Python ${rt.python} · ${gb} GB installed`, repair: true };
+}
+async function repairInstall() {
+  if (!confirm('Repair reinstalls autodeck\'s packages and re-checks its models (a large download), then restarts the app. Continue?')) return;
+  try { await api('/api/setup/repair', 'POST'); $('#rt-state').textContent = 'Restarting to repair…'; }
+  catch (e) { $('#rt-err').textContent = e.message; }
+}
 function showSettings(st) {
   const k = lastfmState(st.lastfm);
   const el = $('#lastfm-state');
@@ -568,6 +589,20 @@ function showSettings(st) {
   el.replaceChildren(icon(k.cls === 'set' ? 'circle-check' : 'info'), k.text);
   $('#lastfm-remove').hidden = !k.removable;
   if (st.library) $('#lib-path').textContent = st.library;
+  if (st.runtime) {
+    const r = runtimeNote(st.runtime);
+    $('#rt-state').replaceChildren(icon('info'), r.text);
+    $('#rt-repair').hidden = !r.repair;
+  }
+  if (st.youtube) {
+    $('#yt-browser').value = st.youtube.browser;
+    $('#yt-browser').disabled = st.youtube.from_env; // the env var wins; changing it here would do nothing
+    $('#yt-state').replaceChildren(icon('info'), browserNote(st.youtube));
+  }
+}
+async function saveBrowser(browser) {
+  $('#yt-err').textContent = '';
+  try { showSettings(await api('/api/settings/youtube', 'PUT', { browser })); } catch (e) { $('#yt-err').textContent = e.message; loadSettings(); }
 }
 async function loadSettings() {
   try { showSettings(await api('/api/settings')); } catch (e) { $('#lastfm-err').textContent = e.message; }
@@ -671,6 +706,8 @@ export function initUi(stateCb, h = {}) {
   $('#menu-btn').addEventListener('click', () => togglePop('menu'));
   $('#menu-add').addEventListener('click', () => togglePop('add', true));
   $('#menu-settings').addEventListener('click', () => togglePop('settings', true));
+  $('#yt-browser').addEventListener('change', (e) => saveBrowser(e.target.value));
+  $('#rt-repair').addEventListener('click', repairInstall);
   for (const [name, p] of Object.entries(POPS)) {
     $(p.pop).addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;

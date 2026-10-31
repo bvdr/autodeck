@@ -60,6 +60,31 @@ def migrate_legacy_library() -> str | None:
     return f"Moved your library from {LEGACY_LIBRARY} to {new}"
 
 
+def data_dir() -> Path:
+    """App-level files (settings.json, lastfm.env, pylib/): Application Support, or beside a
+    test library when AUTODECK_LIBRARY is set so tests never touch the owner's real files."""
+    return library_root() if os.environ.get("AUTODECK_LIBRARY") else APP_SUPPORT
+
+
+def app_home() -> Path:
+    """The standalone app's own files: runtime/ (Python + packages), models/, setup marker.
+    AUTODECK_HOME moves it (clean-machine tests); read live so tests can monkeypatch it."""
+    return Path(os.environ.get("AUTODECK_HOME") or APP_SUPPORT)
+
+
+def caches_dir() -> Path:
+    """Re-downloadable caches of the standalone app (uv's package cache, numba, pycache).
+    AUTODECK_CACHES moves it, for the same reason as AUTODECK_HOME."""
+    return Path(os.environ.get("AUTODECK_CACHES") or CACHES)
+
+
+def installed_model(name: str) -> Path | None:
+    """A model the standalone app's setup downloaded (models/ in app_home()), so analysis never
+    downloads at song time. None when absent (dev): callers then download as before."""
+    p = app_home() / "models" / name
+    return p if p.exists() else None
+
+
 # Module-level alias requested by the spec; resolved at import time, so code that
 # must honor AUTODECK_LIBRARY overrides at runtime should call library_root().
 LIBRARY: Path = library_root()
@@ -100,3 +125,35 @@ def genres() -> list[str]:
 
 def save_genres(items: list[str]) -> None:
     write_json_atomic(_genres_file(), items)
+
+
+# --- owner settings (settings.json) -------------------------------------------------
+# Where yt-dlp reads the YouTube login from. Keys are yt-dlp's --cookies-from-browser names.
+BROWSERS = {"chrome": "Chrome", "safari": "Safari", "firefox": "Firefox", "brave": "Brave",
+            "edge": "Edge", "none": "none"}
+DEFAULT_BROWSER = "chrome"
+
+
+def _settings_file() -> Path:
+    return data_dir() / "settings.json"
+
+
+def settings() -> dict:
+    try:
+        d = json.loads(_settings_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (FileNotFoundError, ValueError):  # missing or corrupt -> defaults
+        return {}
+
+
+def save_setting(key: str, value) -> None:
+    write_json_atomic(_settings_file(), {**settings(), key: value})
+
+
+def youtube_browser() -> str:
+    """AUTODECK_BROWSER (env) > Settings > chrome. An unknown saved value falls back to chrome."""
+    env = os.environ.get("AUTODECK_BROWSER")
+    if env:
+        return env.lower()  # free-form on purpose: any yt-dlp browser name (vivaldi, opera, ...)
+    saved = settings().get("youtube_browser")
+    return saved if saved in BROWSERS else DEFAULT_BROWSER

@@ -6,6 +6,7 @@ calls get_state() while already holding it, so any second lock here could
 deadlock; reusing the same RLock can't.
 """
 import json
+import os
 import re
 import logging
 import threading
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from . import config, fetch, jobs, lastfm, library, moods, party
+from . import config, fetch, jobs, lastfm, library, moods, party, standalone
 from .library import Song
 from .planner import FORCEABLE, Transition, genre_entry, order, pair_key, pick_transition, score_pair
 from .render import TimeMap, render, time_map_for
@@ -614,7 +615,24 @@ class Engine:
         # Where the library lives, for the Settings note; home shortened to ~ (it's shown, not used).
         lib = str(config.library_root()).replace(str(Path.home()), "~", 1)
         return {"lastfm": {"set": bool(key), "hint": key[-4:] if key else None, "source": lastfm.key_source()},
-                "library": lib}
+                "library": lib,
+                # from_env: AUTODECK_BROWSER overrides the saved choice, so the page says so.
+                "youtube": {"browser": config.youtube_browser(), "from_env": bool(os.environ.get("AUTODECK_BROWSER"))},
+                "runtime": standalone.status()}
+
+    def repair_install(self) -> dict:
+        """Settings -> Repair installation (standalone app only): flag it, then relaunch the
+        app, whose setup reinstalls the packages and re-checks the models."""
+        if not standalone.ACTIVE:
+            raise EngineError(409, "Repair is for the standalone app; in the repo run `uv sync`")
+        standalone.request_repair()
+        return {"relaunch": True}
+
+    def set_youtube_browser(self, browser: str) -> dict:
+        if browser not in config.BROWSERS:
+            raise EngineError(400, "Pick one of: " + ", ".join(config.BROWSERS.values()))
+        config.save_setting("youtube_browser", browser)  # fetch reads it on every call: no restart
+        return self.settings()
 
     def set_lastfm_key(self, key: str | None) -> dict:
         key = (key or "").strip()
