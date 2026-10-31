@@ -457,3 +457,50 @@ def test_moods_refresh_adds_and_delete_forgets(client, monkeypatch):
     st = client.request("DELETE", "/api/mood/Greek taverna").json()
     assert st["moods"] == {} and "Greek taverna" not in st["genres"] and st["genre"] == "Any"
     assert client.request("DELETE", "/api/mood/nope").status_code == 404
+
+
+def test_pair_verdicts_are_stored_listed_and_shape_the_queue(client, tmp_library):
+    client.post("/api/playing", json={"id": IDS[0]})
+    # IDS[1] (122 Pop) is the natural next song after IDS[0] (120 Pop); IDS[3] (90) is far off.
+    assert client.get("/api/state").json()["queue"][0]["id"] == IDS[1]
+    s = client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "avoided"}).json()
+    assert s["pairs"] == {f"{IDS[0]}>{IDS[1]}": "avoided"}
+    q = [x["id"] for x in s["queue"]]
+    # Avoided pair never back to back, even when it held a locked slot.
+    assert all((a, b) != (IDS[0], IDS[1]) for a, b in zip([IDS[0], *q], q))
+    client.post("/api/pair", json={"from": IDS[2], "to": IDS[3], "verdict": "loved"})
+    assert json.loads((tmp_library / "pairs.json").read_text()) == {
+        f"{IDS[0]}>{IDS[1]}": "avoided", f"{IDS[2]}>{IDS[3]}": "loved"}
+    pairs = client.get("/api/pairs").json()["pairs"]
+    assert [p["verdict"] for p in pairs] == ["loved", "avoided"]
+    assert pairs[0] == {"from": IDS[2], "to": IDS[3], "from_title": f"title {IDS[2]}",
+                        "to_title": f"title {IDS[3]}", "verdict": "loved"}
+    # null forgets; a fresh engine reads the file back.
+    client.post("/api/pair", json={"from": IDS[2], "to": IDS[3], "verdict": None})
+    assert Engine().pairs == {f"{IDS[0]}>{IDS[1]}": "avoided"}
+
+
+def test_pair_rejects_bad_input(client):
+    assert client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "meh"}).status_code == 400
+    assert client.post("/api/pair", json={"from": IDS[0], "to": IDS[0], "verdict": "loved"}).status_code == 400
+    assert client.post("/api/pair", json={"from": "../x", "to": IDS[0], "verdict": "loved"}).status_code == 404
+
+
+def test_history_rows_carry_from_and_verdict(client, tmp_library):
+    client.post("/api/playing", json={"id": IDS[0]})  # started fresh: no hand-over
+    tr = client.get("/api/transition", params={"from": IDS[0]}).json()
+    client.post("/api/playing", json={"id": tr["transition"]["in_id"], "plan_id": tr["plan_id"]})
+    b = tr["transition"]["in_id"]
+    client.post("/api/pair", json={"from": IDS[0], "to": b, "verdict": "loved"})
+    h = client.get("/api/history").json()["history"]
+    assert (h[0]["id"], h[0]["from"], h[0]["verdict"]) == (b, IDS[0], "loved")
+    assert (h[1]["id"], h[1]["from"], h[1]["verdict"]) == (IDS[0], None, None)
+
+
+def test_history_derives_from_for_old_lines(client, tmp_library):
+    # Lines written before "from" existed: the previous line is the song it came in from.
+    lines = [{"id": IDS[0], "title": "a", "effect": None}, {"id": IDS[1], "title": "b", "effect": "blend"}]
+    (tmp_library / "history.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    client.post("/api/pair", json={"from": IDS[0], "to": IDS[1], "verdict": "avoided"})
+    h = client.get("/api/history").json()["history"]
+    assert (h[0]["from"], h[0]["verdict"], h[1]["from"]) == (IDS[0], "avoided", None)

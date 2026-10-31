@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import dj_mcp, library
 from .engine import Engine, EngineError
@@ -55,6 +55,13 @@ class MoodReq(BaseModel):
 
 class EffectReq(BaseModel):
     effect: str | None = None  # None = let the app pick
+
+
+class PairReq(BaseModel):
+    # `from` is a Python keyword, hence the alias.
+    from_: str = Field(alias="from")
+    to: str
+    verdict: str | None = None  # "loved" | "avoided"; None forgets the pair
 
 
 class ModeReq(BaseModel):
@@ -193,6 +200,15 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     def mix_now():
         eng.mix_now()
         return eng.state()
+
+    @app.post("/api/pair")
+    def pair(req: PairReq):
+        eng.set_pair(_id(req.from_), _id(req.to), req.verdict)
+        return eng.state()
+
+    @app.get("/api/pairs")
+    def pairs():
+        return {"pairs": eng.pairs_list()}
 
     @app.post("/api/mode")
     def mode(req: ModeReq):

@@ -16,7 +16,7 @@ import soundfile as sf
 
 from . import config, fetch, jobs, lastfm, library, moods, party
 from .library import Song
-from .planner import FORCEABLE, Transition, genre_entry, order, pick_transition, score_pair
+from .planner import FORCEABLE, Transition, genre_entry, order, pair_key, pick_transition, score_pair
 from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
@@ -74,6 +74,9 @@ class Engine:
         # Party mode: a flavor (party.FLAVORS) replaces the genre filter while on; None = off.
         self.party: str | None = None
         self.rejected: set[str] = self._load_rejected()  # party.key()s the owner turned down
+        # Pair memory: the owner's verdict on a hand-over, pair_key(a, b) -> "loved" | "avoided".
+        # Directional and kept for removed songs too (re-adding the link brings the memory back).
+        self.pairs: dict[str, str] = self._load_pairs()
         self._sugg: tuple[tuple, float, list] | None = None  # ((playing, party), time, list)
         self._enrich_stop = threading.Event()
         # Effect forced for the playing song's exit (dropdown, MCP). Server-side so every
@@ -179,13 +182,21 @@ class Engine:
         if keep is None:
             keep = self.upcoming[: config.FIXED_NEXT]
         keep = asked + [i for i in keep if i in ok and i not in asked]
+        # A kept song whose hand-over the owner marked avoided loses its fixed slot (and so does
+        # everything after it), so a fresh 👎 takes effect right away; order() still puts it
+        # back if nothing else is left. The owner's own "play next" picks always stay.
+        for j in range(len(asked), len(keep)):
+            before = keep[j - 1] if j else cur.id
+            if self.pairs.get(pair_key(before, keep[j])) == "avoided":
+                keep = keep[:j]
+                break
         # Pins are absolute upcoming indices; order() sees the list after the kept prefix.
         n = len(keep)
         pins = {i - n: sid for i, sid in self.pinned.items() if i >= n and sid not in keep}
         prev = self.by_id(keep[-1]) if keep else cur
         pin_ids = set(pins.values())  # pinned songs are the owner's choice: they stay whatever the filter
         pool = [s for s in cands if s.id not in keep and (s.id in group or s.id in pin_ids or not prefiltered)]
-        rest = order(prev, pool, pins, use_genre, bonus=party.bonus if self.party else None)
+        rest = order(prev, pool, pins, use_genre, bonus=party.bonus if self.party else None, pairs=self.pairs)
         self.upcoming = keep + [s.id for s in rest]
 
     def view(self, s: Song) -> dict:
@@ -207,6 +218,13 @@ class Engine:
                     "next_effect": self.next_effect, "effects": list(FORCEABLE), "mix_now_seq": self.mix_now_seq,
                     "moods": {k: len(v) for k, v in self.moods.items()},
                     "queue": [self.view(by[i]) for i in self.upcoming if i in by],
+                    # What the queue panel marks: the first `queue_locked` songs keep their order
+                    # (_recompute's FIXED_NEXT, only while something plays), `pinned` = songs the
+                    # owner dragged, `requested` = "play next" picks still downloading/analysing.
+                    "queue_locked": config.FIXED_NEXT if self.playing else 0,
+                    "pinned": sorted(set(self.pinned.values())),
+                    "requested": [self.view(by[i]) for i in self.requested if i in by and i not in self.upcoming],
+                    "pairs": dict(self.pairs),
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
                     "pool": [self.view(s) for s in self.pool],
@@ -320,25 +338,81 @@ class Engine:
         """Append one line per song that started playing (owner asked for a log). JSON Lines:
         append-only, survives restarts, a crash loses at most the line being written."""
         s = self.by_id(sid)
+        # "from": the song it was mixed in from, so a Played row can rate that hand-over. A song
+        # started from scratch (Play, resume, recovery) has no hand-over: None.
         line = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "id": sid, "title": s.title, "channel": s.channel,
+                "from": self.playing if came_in else None,
                 "bpm": round(s.analysis.bpm, 1) if s.analysis else None, "genre": s.effective_genre(),
                 "effect": came_in.kind if came_in else None, "party": self.party}
         with open(self._history_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def history(self, limit: int = 200) -> list[dict]:
-        """Most recent first."""
+        """Most recent first. Each entry carries `from` (the song it was mixed in from, or None)
+        and `verdict` (the owner's pair rating of that hand-over, or None)."""
         try:
             lines = self._history_file().read_text(encoding="utf-8").splitlines()
         except OSError:
             return []
-        out = []
-        for ln in reversed(lines[-limit:]):
+        rows = []
+        for ln in lines[-(limit + 1):]:  # one extra: the oldest shown row's predecessor
             try:
-                out.append(json.loads(ln))
+                rows.append(json.loads(ln))
             except ValueError:
                 continue  # a half-written last line after a crash
-        return out
+        with LOCK:
+            pairs = dict(self.pairs)
+        for prev, h in zip([None, *rows], rows):
+            if "from" not in h:
+                # Lines written before "from" existed: a song that came in via an effect was
+                # mixed in from the line before it (the log is in play order).
+                h["from"] = prev["id"] if prev and h.get("effect") else None
+            h["verdict"] = pairs.get(pair_key(h["from"], h["id"])) if h["from"] else None
+        return list(reversed(rows[-limit:]))
+
+    # --- pair memory --------------------------------------------------------------------
+    def _pairs_file(self):
+        return config.library_root() / "pairs.json"
+
+    def _load_pairs(self) -> dict[str, str]:
+        try:
+            d = json.loads(self._pairs_file().read_text(encoding="utf-8"))
+            return {str(k): v for k, v in d.items() if v in ("loved", "avoided")} if isinstance(d, dict) else {}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return {}
+
+    def set_pair(self, a: str, b: str, verdict: str | None) -> None:
+        """Owner's 🔥 (loved) / 👎 (avoided) on the hand-over a -> b; None forgets it.
+        Saved on every rating (atomic), then the queue is re-ordered with it."""
+        if verdict not in ("loved", "avoided", None):
+            raise EngineError(400, f"Unknown verdict: {verdict}")
+        if a == b:
+            raise EngineError(400, "A pair needs two different songs")
+        with LOCK:
+            if verdict is None:
+                self.pairs.pop(pair_key(a, b), None)
+            else:
+                self.pairs[pair_key(a, b)] = verdict
+            config.write_json_atomic(self._pairs_file(), self.pairs)
+            self._recompute()
+            self._changed()
+
+    def pairs_list(self) -> list[dict]:
+        """Every rated pair with titles (songs no longer in the pool: from their cache)."""
+        with LOCK:
+            items = list(self.pairs.items())
+            by = {s.id: s for s in self.pool}
+
+        def title(sid: str) -> str:
+            s = by.get(sid) or library.load_song(sid)
+            return s.title if s else sid
+
+        out = []
+        for k, v in items:
+            a, _, b = k.partition(">")
+            out.append({"from": a, "to": b, "from_title": title(a), "to_title": title(b), "verdict": v})
+        # Loved first, then avoided; most recently rated first within each (dict order = insertion).
+        return sorted(reversed(out), key=lambda p: p["verdict"] != "loved")
 
     # --- moods ----------------------------------------------------------------------
     def _moods_file(self):
