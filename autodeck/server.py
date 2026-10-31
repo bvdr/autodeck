@@ -64,6 +64,10 @@ class PairReq(BaseModel):
     verdict: str | None = None  # "loved" | "avoided"; None forgets the pair
 
 
+class LastfmKeyReq(BaseModel):
+    key: str | None = None  # empty/None = remove
+
+
 class ModeReq(BaseModel):
     beat_to_beat: bool
 
@@ -209,6 +213,14 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.get("/api/pairs")
     def pairs():
         return {"pairs": eng.pairs_list()}
+
+    @app.get("/api/settings")
+    def get_settings():
+        return eng.settings()
+
+    @app.put("/api/settings/lastfm")
+    def put_lastfm(req: LastfmKeyReq):
+        return eng.set_lastfm_key(req.key)
 
     @app.post("/api/mode")
     def mode(req: ModeReq):

@@ -5,6 +5,7 @@ import webbrowser
 
 import uvicorn
 
+from . import config
 from .server import create_app
 
 HOST, PORT = "127.0.0.1", 8765  # loopback only: nothing is ever exposed to the network
@@ -16,6 +17,9 @@ def main() -> None:
     if not os.environ.get("AUTODECK_NO_BROWSER"):
         # Small delay so the server is listening by the time the tab loads.
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+    moved = config.migrate_legacy_library()
+    if moved:
+        print(moved)
     uvicorn.run(create_app(), host=HOST, port=PORT)
 
 

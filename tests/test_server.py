@@ -512,3 +512,18 @@ def test_retry_requeues_a_failed_song(client):
     f = next(p for p in s["pool"] if p["id"] == "ffffffffff6")
     assert f["status"] == "queued" and f["error"] is None
     assert client.post(f"/api/song/{IDS[0]}/retry").status_code == 409  # only failed songs
+
+
+def test_lastfm_key_can_be_set_from_settings_and_is_never_echoed(client, monkeypatch):
+    from autodeck import lastfm
+    monkeypatch.delenv("LASTFM_API_KEY", raising=False)
+    monkeypatch.setattr(lastfm, "LEGACY_KEY_FILE", config.library_root() / "none.env")
+    assert client.get("/api/settings").json()["lastfm"]["set"] is False
+    assert client.put("/api/settings/lastfm", json={"key": "nope"}).status_code == 400
+    monkeypatch.setattr(lastfm, "check_key", lambda k: k.startswith("0"))
+    assert client.put("/api/settings/lastfm", json={"key": "f" * 32}).status_code == 400  # Last.fm says no
+    r = client.put("/api/settings/lastfm", json={"key": "0" * 28 + "abcd"}).json()
+    assert r["lastfm"] == {"set": True, "hint": "abcd", "source": "settings"}
+    assert "0" * 28 not in client.get("/api/settings").text
+    assert lastfm.api_key() == "0" * 28 + "abcd" and oct(lastfm.key_file().stat().st_mode)[-3:] == "600"
+    assert client.put("/api/settings/lastfm", json={"key": ""}).json()["lastfm"]["set"] is False

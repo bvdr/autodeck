@@ -103,3 +103,30 @@ def test_corrupt_genres_falls_back_to_defaults(tmp_library):
     from autodeck import config
     (tmp_library / "genres.json").write_text("[\"Po")
     assert config.genres() == config.DEFAULT_GENRES
+
+
+def test_legacy_library_moves_to_application_support_once(tmp_path, monkeypatch):
+    # Owner: data belongs in the normal Mac place, not ~/autodeck-library. One-time rename.
+    from autodeck import config
+    home = tmp_path / "home"
+    legacy = home / "autodeck-library"
+    (legacy / "abc").mkdir(parents=True)
+    (legacy / "abc" / "song.json").write_text("{}")
+    (legacy / "lastfm-cache").mkdir()
+    monkeypatch.delenv("AUTODECK_LIBRARY", raising=False)
+    monkeypatch.setattr(config, "LEGACY_LIBRARY", legacy)
+    monkeypatch.setattr(config, "APP_SUPPORT", home / "Library/Application Support/autodeck")
+    monkeypatch.setattr(config, "CACHES", home / "Library/Caches/autodeck")
+    assert "Moved" in config.migrate_legacy_library()
+    new = home / "Library/Application Support/autodeck/library"
+    assert (new / "abc" / "song.json").exists() and not legacy.exists()
+    assert (home / "Library/Caches/autodeck/lastfm-cache").is_dir()
+    assert config.migrate_legacy_library() is None  # nothing left to move
+
+
+def test_no_migration_when_library_is_overridden(tmp_path, monkeypatch):
+    from autodeck import config
+    monkeypatch.setenv("AUTODECK_LIBRARY", str(tmp_path / "x"))
+    monkeypatch.setattr(config, "LEGACY_LIBRARY", tmp_path)
+    assert config.migrate_legacy_library() is None
+    assert config.cache_root() == tmp_path / "x" / "cache"

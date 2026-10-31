@@ -19,10 +19,45 @@ DEFAULT_GENRES = ["Pop", "Hip-hop", "Romanian hip-hop", "Romanian sârbe"]
 ANY_GENRE = "Any"  # pseudo-genre: no filtering
 
 
+# Where a Mac app keeps its data (Apple's convention), not a loose folder in the home dir:
+#   ~/Library/Application Support/autodeck/library  songs, analyses, moods, session, history, models
+#   ~/Library/Caches/autodeck                         Last.fm / Deezer lookups (safe to delete)
+# Outside the repo on purpose: audio must never be committed.
+APP_SUPPORT = Path.home() / "Library" / "Application Support" / "autodeck"
+CACHES = Path.home() / "Library" / "Caches" / "autodeck"
+LEGACY_LIBRARY = Path.home() / "autodeck-library"  # before 2026-10-31
+
+
 def library_root() -> Path:
     # Read the env var on every call (not at import) so tests can monkeypatch it.
-    # The cache lives outside the repo on purpose: audio must never be committed.
-    return Path(os.environ.get("AUTODECK_LIBRARY") or Path.home() / "autodeck-library")
+    return Path(os.environ.get("AUTODECK_LIBRARY") or APP_SUPPORT / "library")
+
+
+def cache_root() -> Path:
+    """Re-fetchable lookups. With AUTODECK_LIBRARY set (tests, experiments) they stay beside
+    that library instead of mixing into the real ~/Library/Caches."""
+    if os.environ.get("AUTODECK_LIBRARY"):
+        return library_root() / "cache"
+    return CACHES
+
+
+def migrate_legacy_library() -> str | None:
+    """Move a pre-2026-10-31 ~/autodeck-library to the Mac location, once, at startup.
+    A rename on the same disk: instant, no copy, nothing duplicated. The lookup caches go to
+    ~/Library/Caches. Returns a message when something moved."""
+    if os.environ.get("AUTODECK_LIBRARY") or not LEGACY_LIBRARY.is_dir():
+        return None
+    new = library_root()
+    if new.exists():
+        return None  # never merge two libraries silently; the new one wins
+    new.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(LEGACY_LIBRARY, new)
+    for name in ("lastfm-cache", "deezer-cache"):
+        old = new / name
+        if old.is_dir() and not (CACHES / name).exists():
+            CACHES.mkdir(parents=True, exist_ok=True)
+            os.rename(old, CACHES / name)
+    return f"Moved your library from {LEGACY_LIBRARY} to {new}"
 
 
 # Module-level alias requested by the spec; resolved at import time, so code that

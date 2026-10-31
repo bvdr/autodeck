@@ -6,6 +6,7 @@ calls get_state() while already holding it, so any second lock here could
 deadlock; reusing the same RLock can't.
 """
 import json
+import re
 import logging
 import threading
 import time
@@ -604,6 +605,24 @@ class Engine:
                 raise EngineError(409, "Nothing is playing")
             self.mix_now_seq += 1
             self._changed()
+
+    # --- settings -------------------------------------------------------------------
+    def settings(self) -> dict:
+        """Never returns the key itself, only whether one is set and its last 4 characters."""
+        key = lastfm.api_key()
+        return {"lastfm": {"set": bool(key), "hint": key[-4:] if key else None, "source": lastfm.key_source()}}
+
+    def set_lastfm_key(self, key: str | None) -> dict:
+        key = (key or "").strip()
+        if key and not re.fullmatch(r"[0-9a-fA-F]{32}", key):
+            raise EngineError(400, "A Last.fm API key is 32 letters and digits (0-9, a-f)")
+        if key and not lastfm.check_key(key):  # network, outside the lock
+            raise EngineError(400, "Last.fm didn't accept that key")
+        lastfm.save_key(key or None)
+        with LOCK:
+            self._sugg = None  # suggestions may now work (or stop)
+            self._changed()
+        return self.settings()
 
     def set_beat_to_beat(self, on: bool) -> None:
         with LOCK:

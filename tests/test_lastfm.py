@@ -45,7 +45,7 @@ def test_track_info_and_similar(fake_api):
 def test_unknown_track_and_no_key_degrade_to_empty(fake_api, monkeypatch):
     assert lastfm.track_info("Nobody", "Nothing") == {}
     monkeypatch.delenv("LASTFM_API_KEY")
-    monkeypatch.setattr(lastfm, "KEY_FILE", lastfm.KEY_FILE.with_name("missing.env"))
+    monkeypatch.setattr(lastfm, "LEGACY_KEY_FILE", lastfm.key_file().with_name("missing.env"))
     assert lastfm.artist_tags("Anyone") == []
 
 

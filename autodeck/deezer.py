@@ -20,7 +20,7 @@ TIMEOUT = 8
 
 
 def _get(path: str) -> dict:
-    cf = config.library_root() / "deezer-cache" / (hashlib.sha1(path.encode()).hexdigest()[:20] + ".json")
+    cf = config.cache_root() / "deezer-cache" / (hashlib.sha1(path.encode()).hexdigest()[:20] + ".json")
     try:
         if time.time() - cf.stat().st_mtime < CACHE_TTL:
             return json.loads(cf.read_text())
