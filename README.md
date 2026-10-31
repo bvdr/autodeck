@@ -84,12 +84,31 @@ Pick **Hits**, **Oldies** or **Latino** under *Party* (*Off* returns to the genr
 
 ## Played log
 
-**Played** (above *Library*) lists every song that started, newest first, with time, BPM, genre and
-the effect it came in with. Stored as JSON Lines in `<library>/history.jsonl`.
+**Played** (next to *Pairs* and *Library*) lists every song that started, newest first, with time,
+BPM, genre and the effect it came in with. Stored as JSON Lines in `<library>/history.jsonl`.
+
+## Screen
+
+The **ON AIR** sign says what comes next and when (with the effect picker), or which effect is
+playing and how many bars are left. Below it, both decks share one time axis: the NOW line, the
+transition window with each deck's gain curve, and the vertical crossfader. Before the first song the
+lamp is the **PLAY** button (Space plays): it holds the song to resume after a reload, or the first in
+Up next; **Or start with** loads another one. **Library** shows why a song failed, with **Retry**.
+On a phone (≤ 600 px wide) the same page splits into Now / Vibe / Queue / Search tabs.
+
+## Pair memory
+
+Rate a hand-over with **🔥** (nailed it) or **👎** (didn't work): on its Played row, or on the sign's
+"How was that mix?" question that shows for 30 s after each mix. Tap again to undo. Verdicts are
+directional (A → B) and stored in `<library>/pairs.json` (`{"A>B": "loved" | "avoided"}`), written on
+every rating. The planner gives a loved pair a bonus (half of it for B → A) and never places an
+avoided pair back to back unless nothing else is ready. **Pairs** lists them: *Play pair* queues
+both songs next, ✕ forgets the pair.
 
 ## Search
 
-Type a song or artist in **Search**. Matches from your library show first, then YouTube results.
+Type a song or artist in the search field (press **/** to jump there). Library matches show as you
+type; **Enter** adds YouTube results.
 **Play next** downloads and analyzes that song right away (ahead of everything else, whatever genre
 is active) and plays it next once it's ready.
 
@@ -115,7 +134,7 @@ Register it with Claude Code:
 
 Tools: now_playing, list_library, get_history, search_songs, get_suggestions (read-only);
 play_next, mix_now, set_next_effect, set_genre, start_party, stop_party, set_beat_to_beat,
-accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs. autodeck itself must be
+accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs, love_pair, avoid_pair. autodeck itself must be
 running (`AUTODECK_URL`, default http://127.0.0.1:8765). The forced next effect and "mix now" live on
 the server, so the page, the API and the assistant stay in sync.
 
@@ -125,7 +144,7 @@ the server, so the page, the API and the assistant stay in sync.
     uv run pytest -m "not slow and not network"      # also skip the heavy real-model tests
                                                      # (a -m on the command line replaces the default, so keep "not network")
     AUTODECK_BROWSER=none uv run pytest -m network   # hits real YouTube, public content only
-    node --test web/schedule.test.mjs web/sortable.test.mjs   # transition timing, drag drop index
+    node --test web/*.test.mjs   # transition timing, lane geometry, drag drop index
 
 ## Known limits
 
