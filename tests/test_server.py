@@ -60,8 +60,9 @@ def test_state_shape(client):
     assert s["playing"] is None and s["genre"] == "Any" and s["notice"] is None
     assert [q["id"] for q in s["queue"]] == IDS  # nothing playing: pool order
     assert s["pool_counts"] == {"ready": 4}
-    assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot", "danceability"}
-    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) == set(s["queue"][0])
+    assert set(s["queue"][0]) == {"id", "title", "channel", "status", "error", "genre", "bpm", "camelot", "danceability",
+                                  "kept_from"}
+    assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept_from"} == set(s["queue"][0])
 
 
 def test_pool_shows_failed_song_with_error(client):
@@ -382,6 +383,7 @@ def test_party_with_no_fitting_song_never_goes_silent(client):
 
 def test_suggestions_accept_and_reject(client, monkeypatch):
     from autodeck import fetch, party
+    client.post("/api/party", json={"flavor": "hits"})
     monkeypatch.setattr(party, "suggestions", lambda cur, flavor, pool, rejected, n=8: [
         {"artist": "Toto", "title": "Rosanna", "reason": "r"}] if party.key("Toto", "Rosanna") not in rejected else [])
     assert client.get("/api/suggestions").json()["suggestions"][0]["title"] == "Rosanna"
@@ -390,7 +392,8 @@ def test_suggestions_accept_and_reject(client, monkeypatch):
     assert any(p["id"] == NEW for p in st["pool"]) and NEW in client.engine.requested
     left = client.post("/api/suggestions/reject", json={"artist": "Toto", "title": "Rosanna"}).json()
     assert left["suggestions"] == []
-    assert party.key("Toto", "Rosanna") in json.loads((config.library_root() / "rejected.json").read_text())
+    assert json.loads((config.library_root() / "rejected.json").read_text()) == {
+        "party:Hits": [party.key("Toto", "Rosanna")]}
 
 
 def test_enrichment_fills_meta_from_lastfm(client, monkeypatch):
@@ -434,7 +437,7 @@ def test_build_mood_imports_crowd_picks_and_switches_to_it(client, monkeypatch):
     from autodeck import moods
     client.post("/api/playing", json={"id": IDS[0]})
     picks = [(Song(NEW, "Antique - Opa Opa", "c", 200.0, "queued"), 3), (library.load_song(IDS[2]), 2)]
-    monkeypatch.setattr(moods, "collect", lambda theme, n=30: picks)
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: (picks, 6))
     r = client.post("/api/mood", json={"theme": "balkan party"}).json()
     assert r["mood"] == "Balkan party" and r["found"] == 2 and r["added"] == 1
     st = client.get("/api/state").json()
@@ -442,16 +445,16 @@ def test_build_mood_imports_crowd_picks_and_switches_to_it(client, monkeypatch):
     assert [q["id"] for q in st["queue"]] == [IDS[2]]  # the ready member; the new one is downloading
     assert client.engine.by_id(NEW).genre_hint == "Balkan party"  # worker fetches it first
     assert library.load_song(IDS[2]).genre == "Hip-hop" or True  # existing labels untouched
-    monkeypatch.setattr(moods, "collect", lambda theme, n=30: [])
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: ([], 0))
     assert client.post("/api/mood", json={"theme": "zzz"}).status_code == 404
 
 
 def test_moods_refresh_adds_and_delete_forgets(client, monkeypatch):
     from autodeck import moods
     client.post("/api/playing", json={"id": IDS[0]})
-    monkeypatch.setattr(moods, "collect", lambda theme, n=30: [(library.load_song(IDS[2]), 2)])
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: ([(library.load_song(IDS[2]), 2)], 6))
     client.post("/api/mood", json={"theme": "greek taverna"})
-    monkeypatch.setattr(moods, "collect", lambda theme, n=30: [(library.load_song(IDS[3]), 2)])
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: ([(library.load_song(IDS[3]), 2)], 6))
     client.post("/api/mood", json={"theme": "greek taverna"})  # refresh: adds, keeps the old pick
     assert client.get("/api/state").json()["moods"] == {"Greek taverna": 2}
     st = client.request("DELETE", "/api/mood/Greek taverna").json()
@@ -545,3 +548,111 @@ def test_installation_status_and_repair_outside_the_standalone_app(client):
     rt = client.get("/api/settings").json()["runtime"]
     assert rt["standalone"] is False and rt["python"].startswith("3.12")
     assert client.post("/api/setup/repair").status_code == 409  # dev: nothing to repair, never relaunches
+
+
+# --- sources & suggestions (per-source drafts, exclusions, kept-from) ---------------------
+def _mood(client, monkeypatch, name="balkan party", picks=None):
+    from autodeck import moods
+    picks = picks or [(library.load_song(IDS[3]), 2), (library.load_song(IDS[2]), 5)]
+    monkeypatch.setattr(moods, "collect", lambda theme, n=30: (picks, 6))
+    return client.post("/api/mood", json={"theme": name}).json()["mood"]
+
+
+def test_switching_sources_is_exclusive(client, monkeypatch):
+    client.post("/api/genre", json={"genre": "Pop"})
+    st = client.post("/api/party", json={"flavor": "hits"}).json()
+    assert st["party"] == "hits" and st["genre"] == "Any"  # party resets the vibe
+    assert st["source"] == {"kind": "party", "name": "hits", "key": "party:Hits", "label": "Hits"}
+    st = client.post("/api/party", json={"flavor": None}).json()
+    assert st["genre"] == "Any" and st["source"] is None  # Off doesn't restore Pop
+    client.post("/api/party", json={"flavor": "latino"})
+    st = client.post("/api/genre", json={"genre": "Hip-hop"}).json()
+    assert st["party"] is None and st["source"]["key"] == "genre:Hip-hop"
+    client.post("/api/party", json={"flavor": "latino"})
+    mood = _mood(client, monkeypatch)  # a mood goes through set_genre too
+    st = client.get("/api/state").json()
+    assert st["party"] is None and st["source"]["key"] == f"mood:{mood}"
+    assert Engine().party is None  # and the session saved it
+
+
+def test_no_source_no_draft(client):
+    assert client.get("/api/suggestions").json() == {"source": None, "suggestions": []}
+    assert client.post("/api/suggestions/reject", json={"artist": "a", "title": "b"}).status_code == 409
+
+
+def test_mood_draft_ranks_by_votes_and_skips_up_next(client, monkeypatch):
+    from autodeck import party
+    mood = _mood(client, monkeypatch)
+    eng = client.engine
+    # Nothing playing: every ready member is in Up next, so nothing is drafted.
+    assert client.get("/api/suggestions").json()["suggestions"] == []
+    eng.upcoming = []  # e.g. both members played meanwhile / not ready yet
+    d = client.get("/api/suggestions").json()
+    assert d["source"]["key"] == f"mood:{mood}"
+    assert [x["id"] for x in d["suggestions"]] == [IDS[2], IDS[3]]  # 5 votes before 2
+    first = d["suggestions"][0]
+    assert first["why"] == "in 5 of 6 playlists" and first["bpm"] == 121 and first["artist"]
+    client.post("/api/suggestions/reject", json={"artist": first["artist"], "title": first["title"]})
+    assert [x["id"] for x in client.get("/api/suggestions").json()["suggestions"]] == [IDS[3]]
+    rej = json.loads((config.library_root() / "rejected.json").read_text())
+    assert rej == {f"mood:{mood}": [party.key(first["artist"], first["title"])]}
+    # Only for that source: the same song is still drafted for its genre.
+    client.post("/api/genre", json={"genre": "Hip-hop"})
+    eng.upcoming = []
+    assert IDS[2] in [x["id"] for x in client.get("/api/suggestions").json()["suggestions"]]
+    # Undo puts it back.
+    client.post("/api/genre", json={"genre": mood})
+    eng.upcoming = []
+    client.post("/api/suggestions/unreject", json={"artist": first["artist"], "title": first["title"],
+                                                   "source": f"mood:{mood}"})
+    assert [x["id"] for x in client.get("/api/suggestions").json()["suggestions"]] == [IDS[2], IDS[3]]
+
+
+def test_excludes_survive_a_restart(client, monkeypatch):
+    mood = _mood(client, monkeypatch)
+    client.post("/api/suggestions/reject", json={"artist": "Goran", "title": "Kalashnikov"})
+    assert Engine().rejected == {f"mood:{mood}": {"goran kalashnikov"}}
+
+
+def test_flat_rejected_json_migrates_into_the_party_bucket(tmp_library, monkeypatch):
+    from autodeck import party
+    (tmp_library / "rejected.json").write_text(json.dumps(["toto rosanna"]))
+    eng = Engine(pool=[])
+    assert eng.rejected == {"party": {"toto rosanna"}}
+    assert json.loads((tmp_library / "rejected.json").read_text()) == {"party": ["toto rosanna"]}
+    seen = []
+    monkeypatch.setattr(party, "suggestions", lambda cur, flavor, pool, rejected, n=8: seen.append(rejected) or [])
+    for f in party.FLAVORS:  # every flavor still skips it
+        eng.set_party(f)
+        eng.draft()
+    assert all("toto rosanna" in r for r in seen) and len(seen) == 3
+    assert Engine(pool=[]).rejected == {"party": {"toto rosanna"}}  # survives a restart
+
+
+def test_accept_by_id_skips_youtube_and_notes_the_source(client, monkeypatch):
+    from autodeck import fetch
+    mood = _mood(client, monkeypatch)
+
+    def boom(*a, **k):
+        raise AssertionError("no YouTube search for a library song")
+    monkeypatch.setattr(fetch, "search", boom)
+    client.post("/api/playing", json={"id": IDS[0]})
+    st = client.post("/api/suggestions/accept", json={"id": IDS[3], "artist": "x", "title": "y"}).json()
+    row = next(q for q in st["queue"] if q["id"] == IDS[3])
+    assert st["queue"][0]["id"] == IDS[3] and row["kept_from"] == mood
+    assert Engine().kept == {IDS[3]: mood}  # survives a restart
+    st = client.post("/api/playing", json={"id": IDS[3]}).json()
+    assert IDS[3] not in client.engine.kept  # cleared once it played
+    assert all(q["kept_from"] is None for q in st["queue"])
+
+
+def test_accept_all_keeps_the_order_shown(client, monkeypatch):
+    from autodeck import fetch
+    client.post("/api/playing", json={"id": IDS[0]})
+    client.post("/api/party", json={"flavor": "hits"})
+    monkeypatch.setattr(fetch, "search", lambda q, n=10: [Song(NEW, "Toto - Rosanna", "Toto", 330.0, "queued")])
+    st = client.post("/api/suggestions/accept_all", json={"items": [
+        {"id": IDS[3]}, {"artist": "Toto", "title": "Rosanna"}, {"id": IDS[2]}]}).json()
+    assert client.engine.requested == [IDS[3], NEW, IDS[2]]
+    assert [q["id"] for q in st["queue"][:2]] == [IDS[3], IDS[2]]  # NEW is still downloading
+    assert st["requested"][0]["id"] == NEW and st["requested"][0]["kept_from"] == "Hits"

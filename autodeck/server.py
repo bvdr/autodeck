@@ -44,8 +44,14 @@ class PartyReq(BaseModel):
 
 
 class SuggestionReq(BaseModel):
-    artist: str
-    title: str
+    artist: str = ""
+    title: str = ""
+    id: str | None = None      # a library song (mood/genre draft): no YouTube search needed
+    source: str | None = None  # reject/unreject: the source key it was drafted for (default: active)
+
+
+class AcceptAllReq(BaseModel):
+    items: list[SuggestionReq]  # in the order shown; Up next keeps it
 
 
 class MoodReq(BaseModel):
@@ -194,17 +200,29 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     @app.get("/api/suggestions")
     def suggestions():
-        return {"suggestions": eng.suggestions()}
+        # {"source": {kind, name, key, label} | None, "suggestions": [{id, artist, title, why, bpm, …}]}
+        return eng.draft()
 
     @app.post("/api/suggestions/accept")
     def accept(req: SuggestionReq):
-        eng.accept(req.artist[:200], req.title[:300])
+        eng.accept(req.artist[:200], req.title[:300], _id(req.id) if req.id else None)
+        return eng.state()
+
+    @app.post("/api/suggestions/accept_all")
+    def accept_all(req: AcceptAllReq):
+        eng.accept_all([{"artist": x.artist[:200], "title": x.title[:300], "id": _id(x.id) if x.id else None}
+                        for x in req.items[:100]])
         return eng.state()
 
     @app.post("/api/suggestions/reject")
     def reject(req: SuggestionReq):
-        eng.reject(req.artist[:200], req.title[:300])
-        return {"suggestions": eng.suggestions()}
+        eng.reject(req.artist[:200], req.title[:300], req.source)
+        return eng.draft()
+
+    @app.post("/api/suggestions/unreject")
+    def unreject(req: SuggestionReq):
+        eng.unreject(req.artist[:200], req.title[:300], req.source)
+        return eng.draft()
 
     @app.post("/api/mood")
     def build_mood(req: MoodReq):

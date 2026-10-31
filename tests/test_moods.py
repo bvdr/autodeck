@@ -19,9 +19,10 @@ def test_rank_by_playlist_votes_with_deezer_bonus_and_dedup():
 
 def test_collect_reads_playlists_and_handles_none(monkeypatch):
     monkeypatch.setattr(moods, "_youtube_playlists", lambda t: [])
-    assert moods.collect("nothing") == []
+    assert moods.collect("nothing") == ([], 0)
     monkeypatch.setattr(moods, "_youtube_playlists", lambda t: ["u1", "u2"])
     monkeypatch.setattr(moods.fetch, "expand", lambda url: [s("a" + url, "A - Song"), s("b" + url, f"B - {url}")])
     monkeypatch.setattr(moods, "_deezer_keys", lambda t: set())
-    top = moods.collect("theme", n=2)
+    top, of = moods.collect("theme", n=2)
+    assert of == 2  # two playlists, no Deezer vote
     assert top[0][1] == 2 and top[0][0].title == "A - Song" and len(top) == 2

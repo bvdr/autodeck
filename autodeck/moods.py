@@ -74,8 +74,10 @@ def rank(lists: list[list[Song]], deezer: set[str]) -> list[tuple[Song, int]]:
     return [(first[k], votes[k]) for k in order]
 
 
-def collect(theme: str, n: int = 30) -> list[tuple[Song, int]]:
-    """Top n songs for a theme with their vote counts. Empty if nothing was found."""
+def collect(theme: str, n: int = 30) -> tuple[list[tuple[Song, int]], int]:
+    """Top n songs for a theme with their vote counts, and how many votes were possible (the
+    playlists read, +1 when Deezer had any): the draft's "in 5 of 6 playlists". ([], 0) if
+    nothing was found."""
     lists = []
     for url in _youtube_playlists(theme):
         try:
@@ -83,5 +85,6 @@ def collect(theme: str, n: int = 30) -> list[tuple[Song, int]]:
         except fetch.FetchError as e:
             log.warning("playlist %s skipped: %s", url, e)
     if not lists:
-        return []
-    return rank(lists, _deezer_keys(theme))[:n]
+        return [], 0
+    deezer = _deezer_keys(theme)
+    return rank(lists, deezer)[:n], len(lists) + (1 if deezer else 0)

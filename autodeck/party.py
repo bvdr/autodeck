@@ -49,6 +49,13 @@ def key(artist: str, title: str) -> str:
     return " ".join("".join(c if c.isalnum() else " " for c in t).split())
 
 
+def artist_title(s: Song) -> tuple[str, str]:
+    """A library song's artist and title: Last.fm's when enrichment found them, else guessed
+    from the YouTube title/channel. Shared so library songs and suggestions match by key()."""
+    a, t = (s.meta or {}).get("artist"), (s.meta or {}).get("title")
+    return (a, t) if a else lastfm.split_title(s.title, s.channel)
+
+
 def suggestions(current: Song | None, flavor: str | None, pool: list[Song], rejected: set[str],
                 n: int = 8) -> list[dict]:
     """Songs the owner doesn't have that fit what's playing and the flavor.
@@ -56,12 +63,7 @@ def suggestions(current: Song | None, flavor: str | None, pool: list[Song], reje
     "Similar to the current song" first (Last.fm listening sessions: what people play
     together), then the flavor's own chart. Excludes library songs and rejected ones.
     """
-    have = set()
-    for s in pool:
-        a, t = (s.meta or {}).get("artist"), (s.meta or {}).get("title")
-        if not a:
-            a, t = lastfm.split_title(s.title, s.channel)
-        have.add(key(a, t))
+    have = {key(*artist_title(s)) for s in pool}
     seen = set(have) | set(rejected)
     out: list[dict] = []
 
@@ -75,9 +77,7 @@ def suggestions(current: Song | None, flavor: str | None, pool: list[Song], reje
                 return
 
     if current is not None:
-        a, t = (current.meta or {}).get("artist"), (current.meta or {}).get("title")
-        if not a:
-            a, t = lastfm.split_title(current.title, current.channel)
+        a, t = artist_title(current)
         take(lastfm.similar_tracks(a, t, 25), f"people play it with {t}")
     for kind, tag in SOURCES.get(flavor or "", [("chart", None)]):
         if len(out) >= n:

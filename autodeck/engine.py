@@ -24,6 +24,11 @@ from .render import TimeMap, render, time_map_for
 
 LOCK = library.LOCK
 PLANS_PER_SONG = 4
+# rejected.json bucket that applies to every party flavor: where the single global list from
+# before per-source exclusions (2026-10-31) went. Those were all party rejections.
+PARTY_BUCKET = "party"
+# ponytail: a mood/genre draft lists at most this many songs; paging if moods grow past it.
+DRAFT_MAX = 60
 
 
 class EngineError(Exception):
@@ -74,13 +79,21 @@ class Engine:
         # a genre (its name is in the genres list), but membership is this list, so a song keeps
         # its own genre label and can be in several moods.
         self.moods: dict[str, list[str]] = self._load_moods()
+        # Playlist votes per mood, for ranking its draft: name -> {"of": votes possible,
+        # "votes": {song id: votes}}. Separate file so moods.json keeps its simple shape.
+        self.mood_votes: dict[str, dict] = self._load_json_dict("mood-votes.json")
         # Party mode: a flavor (party.FLAVORS) replaces the genre filter while on; None = off.
         self.party: str | None = None
-        self.rejected: set[str] = self._load_rejected()  # party.key()s the owner turned down
+        # The owner's ✕ per source: source key ("mood:Balkan party", "genre:Pop", "party:Hits",
+        # or PARTY_BUCKET for every flavor) -> party.key()s never to suggest there again.
+        self.rejected: dict[str, set[str]] = self._load_rejected()
+        # Songs kept (✓ / Add all) from a draft -> the source's label, shown in Up next as
+        # "kept from Balkan party". Saved in session.json; dropped once the song plays.
+        self.kept: dict[str, str] = {}
         # Pair memory: the owner's verdict on a hand-over, pair_key(a, b) -> "loved" | "avoided".
         # Directional and kept for removed songs too (re-adding the link brings the memory back).
         self.pairs: dict[str, str] = self._load_pairs()
-        self._sugg: tuple[tuple, float, list] | None = None  # ((playing, party), time, list)
+        self._sugg: tuple[tuple, float, list] | None = None  # ((playing, source key), time, list)
         self._enrich_stop = threading.Event()
         # Effect forced for the playing song's exit (dropdown, MCP). Server-side so every
         # client agrees; cleared when the next song starts. mix_now_seq: bumped by "mix now"
@@ -117,7 +130,7 @@ class Engine:
             "playing": self.playing, "played": sorted(self.played),
             "maps": {k: tm.points for k, tm in self.maps.items()},
             "entered": {k: asdict(t) for k, t in self.entered.items()},
-            "beat_to_beat": self.beat_to_beat, "party": self.party})
+            "beat_to_beat": self.beat_to_beat, "party": self.party, "kept": self.kept})
 
     def _load_session(self) -> None:
         try:
@@ -134,6 +147,8 @@ class Engine:
         self.playing, self.played, self.maps, self.entered = playing, played, maps, entered
         self.beat_to_beat = bool(d.get("beat_to_beat", False))
         self.party = d.get("party") if d.get("party") in party.FLAVORS else None
+        kept = d.get("kept")
+        self.kept = {k: str(v) for k, v in kept.items() if k in ids} if isinstance(kept, dict) else {}
 
     def by_id(self, sid: str) -> Song | None:
         return next((s for s in self.pool if s.id == sid), None)
@@ -208,6 +223,10 @@ class Engine:
                 "genre": s.effective_genre(), "bpm": an.bpm if an else None, "camelot": an.camelot if an else None,
                 "danceability": (s.meta or {}).get("danceability")}
 
+    def _queued(self, s: Song) -> dict:
+        """An Up next row: the song plus where the owner kept it from (None = the source's own pick)."""
+        return {**self.view(s), "kept_from": self.kept.get(s.id)}
+
     # --- API operations ---------------------------------------------------------
     def state(self) -> dict:
         with LOCK:
@@ -220,13 +239,14 @@ class Engine:
                     "party": self.party, "flavors": list(party.FLAVORS), "lastfm": bool(lastfm.api_key()),
                     "next_effect": self.next_effect, "effects": list(FORCEABLE), "mix_now_seq": self.mix_now_seq,
                     "moods": {k: len(v) for k, v in self.moods.items()},
-                    "queue": [self.view(by[i]) for i in self.upcoming if i in by],
+                    "source": self._source(),
+                    "queue": [self._queued(by[i]) for i in self.upcoming if i in by],
                     # What the queue panel marks: the first `queue_locked` songs keep their order
                     # (_recompute's FIXED_NEXT, only while something plays), `pinned` = songs the
                     # owner dragged, `requested` = "play next" picks still downloading/analysing.
                     "queue_locked": config.FIXED_NEXT if self.playing else 0,
                     "pinned": sorted(set(self.pinned.values())),
-                    "requested": [self.view(by[i]) for i in self.requested if i in by and i not in self.upcoming],
+                    "requested": [self._queued(by[i]) for i in self.requested if i in by and i not in self.upcoming],
                     "pairs": dict(self.pairs),
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
@@ -287,6 +307,7 @@ class Engine:
                            for i, p in self.pinned.items() if p != sid}
             if sid in self.requested:
                 self.requested.remove(sid)
+            self.kept.pop(sid, None)  # "kept from …" is an Up next note; it has played now
             if sid != self.playing:  # a pulled-back fader re-reports the same song: one entry
                 self.next_effect = None  # the forced effect was for the previous song's exit
                 self._log_played(sid, plan[2] if plan and plan[0] == sid else None)
@@ -428,6 +449,13 @@ class Engine:
         except (OSError, ValueError, TypeError, AttributeError):
             return {}
 
+    def _load_json_dict(self, name: str) -> dict:
+        try:
+            d = json.loads((config.library_root() / name).read_text(encoding="utf-8"))
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
     def build_mood(self, theme: str, n: int = 30) -> dict:
         """Collect the crowd's picks for a theme from public playlists, import them, and switch
         to the mood. Returns {"mood", "found", "added", "songs": [{title, votes}]}."""
@@ -437,7 +465,7 @@ class Engine:
         name = theme[:1].upper() + theme[1:]
         if name == config.ANY_GENRE:
             raise EngineError(400, f"'{name}' is reserved")
-        top = moods.collect(theme, max(5, min(n, 60)))  # network: seconds, outside the lock
+        top, of = moods.collect(theme, max(5, min(n, 60)))  # network: seconds, outside the lock
         if not top:
             raise EngineError(404, f"No playlists found for '{theme}'")
         added = 0
@@ -461,6 +489,12 @@ class Engine:
             # (the owner may be relying on songs already in it).
             self.moods[name] = list(dict.fromkeys([*self.moods.get(name, []), *ids]))
             config.write_json_atomic(self._moods_file(), self.moods)
+            # Votes rank the mood's draft. A refresh keeps each song's best count so far.
+            mv = self.mood_votes.setdefault(name, {"of": 0, "votes": {}})
+            mv["of"] = max(int(mv.get("of") or 0), of)
+            for sid, (_s, v) in zip(ids, top):
+                mv["votes"][sid] = max(int(mv["votes"].get(sid) or 0), v)
+            config.write_json_atomic(config.library_root() / "mood-votes.json", self.mood_votes)
             if name not in config.genres():
                 config.save_genres([*config.genres(), name])
             library.save_pool([s.id for s in self.pool])
@@ -475,6 +509,8 @@ class Engine:
                 raise EngineError(404, f"No mood called {name}")
             del self.moods[name]
             config.write_json_atomic(self._moods_file(), self.moods)
+            if self.mood_votes.pop(name, None) is not None:
+                config.write_json_atomic(config.library_root() / "mood-votes.json", self.mood_votes)
             config.save_genres([g for g in config.genres() if g != name] or list(config.DEFAULT_GENRES))
             if self.genre == name:
                 self.genre = config.ANY_GENRE
@@ -485,17 +521,52 @@ class Engine:
     def _rejected_file(self):
         return config.library_root() / "rejected.json"
 
-    def _load_rejected(self) -> set[str]:
+    def _load_rejected(self) -> dict[str, set[str]]:
         try:
-            return set(json.loads(self._rejected_file().read_text(encoding="utf-8")))
-        except (OSError, ValueError, TypeError):
-            return set()
+            d = json.loads(self._rejected_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if isinstance(d, list):
+            # Before per-source exclusions it was one flat list, and only Party could reject:
+            # it becomes the bucket every party flavor reads, so nothing comes back. Written in
+            # the new shape right away, so the migration runs once.
+            out = {PARTY_BUCKET: {str(k) for k in d}}
+            self._save_rejected(out)
+            return out
+        if not isinstance(d, dict):
+            return {}
+        return {str(k): {str(x) for x in v} for k, v in d.items() if isinstance(v, list)}
+
+    def _save_rejected(self, rejected: dict[str, set[str]] | None = None) -> None:
+        r = self.rejected if rejected is None else rejected
+        config.write_json_atomic(self._rejected_file(), {k: sorted(v) for k, v in r.items() if v})
+
+    def _source(self) -> dict | None:
+        """Where the next songs come from: one of party / mood / genre, or None (Any, party off).
+        `key` names its exclusions in rejected.json; `label` is what the owner reads."""
+        if self.party:
+            name = self.party.title()
+            return {"kind": "party", "name": self.party, "key": f"party:{name}", "label": name}
+        if self.genre == config.ANY_GENRE:
+            return None
+        kind = "mood" if self.genre in self.moods else "genre"
+        return {"kind": kind, "name": self.genre, "key": f"{kind}:{self.genre}", "label": self.genre}
+
+    def _excluded(self, key: str) -> set[str]:
+        out = set(self.rejected.get(key, ()))
+        if key.startswith("party:"):
+            out |= self.rejected.get(PARTY_BUCKET, set())
+        return out
 
     def set_party(self, flavor: str | None) -> None:
         if flavor is not None and flavor not in party.FLAVORS:
             raise EngineError(400, f"Unknown party flavor: {flavor}")
         with LOCK:
             self.party = flavor
+            if flavor:
+                # One source at a time: a party flavor resets the vibe to Any. Off doesn't bring
+                # the old vibe back (owner's rule).
+                self.genre = config.ANY_GENRE
             self._sugg = None
             cur = self.by_id(self.playing) if self.playing else None
             keep = None
@@ -503,44 +574,132 @@ class Engine:
                 # Like a genre switch: the best-fitting ready song becomes next, so it's audible soon.
                 fit = [s for s in self.pool if self._eligible(s) and party.fits(s, flavor)]
                 if fit:
-                    from .planner import score_pair
                     keep = [max(fit, key=lambda s: score_pair(cur, s) + party.bonus(cur, s)).id]
             self._save_session()
             self._recompute(keep)
             self._changed()
 
-    def suggestions(self) -> list[dict]:
+    def _library_draft(self, src: dict) -> list[dict]:
+        """Draft for a mood or genre (call with LOCK held): library songs of that source that
+        aren't in Up next (queued, requested or playing) or excluded for it. A mood's are its
+        members ranked by playlist votes; a genre's are its ready songs."""
+        skip = set(self.upcoming) | set(self.requested) | {self.playing}
+        ex = self._excluded(src["key"])
+        name = src["name"]
+        if src["kind"] == "mood":
+            mv = self.mood_votes.get(name) or {}
+            votes, of = mv.get("votes") or {}, mv.get("of")
+            by = {s.id: s for s in self.pool}
+            # sorted() is stable: equal votes keep the mood's own (first-seen) order.
+            songs = [by[i] for i in sorted((i for i in self.moods.get(name, []) if i in by),
+                                           key=lambda i: -int(votes.get(i) or 0))]
+        else:
+            songs = [s for s in self.pool if s.status == "ready" and s.analysis and s.effective_genre() == name]
+        out = []
+        for s in songs:
+            if s.id in skip:
+                continue
+            a, t = party.artist_title(s)
+            if party.key(a, t) in ex:
+                continue
+            if src["kind"] == "mood":
+                v = votes.get(s.id)
+                why = f"in {v} of {of} playlists" if v and of else f"from the {name} playlists"
+            else:
+                why = "played tonight" if s.id in self.played else s.effective_genre()
+            out.append({"id": s.id, "artist": a, "title": t, "why": why, "status": s.status,
+                        "bpm": s.analysis.bpm if s.analysis else None})
+            if len(out) >= DRAFT_MAX:
+                break
+        return out
+
+    def draft(self) -> dict:
+        """The Suggestions tab: {"source", "suggestions"} for the active source. Party drafts
+        songs you don't have (Last.fm, cached 5 min per playing song); moods and genres draft
+        from the library (cheap, never cached). No source (Any, party off) = no draft."""
         with LOCK:
-            k = (self.playing, self.party)
+            src = self._source()
+            if src is None:
+                return {"source": None, "suggestions": []}
+            if src["kind"] != "party":
+                return {"source": src, "suggestions": self._library_draft(src)}
+            k = (self.playing, src["key"])
             if self._sugg and self._sugg[0] == k and time.time() - self._sugg[1] < 300:
-                return self._sugg[2]
+                return {"source": src, "suggestions": self._sugg[2]}
             cur = self.by_id(self.playing) if self.playing else None
-            pool, rejected = list(self.pool), set(self.rejected)
+            pool, rejected = list(self.pool), self._excluded(src["key"])
         res = party.suggestions(cur, self.party, pool, rejected)  # network: outside the lock
+        for x in res:
+            # Not in the library (that's the point): no id until accepted and found on YouTube.
+            x.setdefault("id", None)
+            x.setdefault("why", x.get("reason"))
         with LOCK:
             self._sugg = (k, time.time(), res)
-        return res
+        return {"source": src, "suggestions": res}
 
-    def accept(self, artist: str, title: str) -> None:
-        """Owner accepted a suggestion: find it on YouTube, then prep it and play it next."""
-        try:
-            hits = fetch.search(f"{artist} {title}", 3)
-        except fetch.FetchError as e:
-            raise EngineError(400, str(e)) from e
-        if not hits:
-            raise EngineError(404, f"Couldn't find {artist} – {title} on YouTube")
-        h = hits[0]
+    def suggestions(self) -> list[dict]:
+        return self.draft()["suggestions"]
+
+    def accept(self, artist: str, title: str, sid: str | None = None) -> None:
+        """Owner kept a draft song: it plays next (request()), noted as kept from the source.
+        With an id (a library song) that's all; without one (a party pick) it's found on
+        YouTube first."""
+        if sid is None:
+            try:
+                hits = fetch.search(f"{artist} {title}", 3)
+            except fetch.FetchError as e:
+                raise EngineError(400, str(e)) from e
+            if not hits:
+                raise EngineError(404, f"Couldn't find {artist} – {title} on YouTube")
+            h = hits[0]
+            sid, title, channel, duration = h.id, h.title, h.channel, h.duration
+        else:
+            channel, duration = "", 0.0  # request() only uses these for a song not in the pool
         with LOCK:
+            src = self._source()
+            if src:
+                self.kept[sid] = src["label"]  # before request(): its version bump shows it
             self._sugg = None
-        self.request(h.id, h.title, h.channel, h.duration)
-
-    def reject(self, artist: str, title: str) -> None:
+        self.request(sid, title, channel, duration)
         with LOCK:
-            self.rejected.add(party.key(artist, title))
-            config.write_json_atomic(self._rejected_file(), sorted(self.rejected))
-            if self._sugg:  # drop it from the cached list right away
-                k, t, lst = self._sugg
-                self._sugg = (k, t, [x for x in lst if party.key(x["artist"], x["title"]) != party.key(artist, title)])
+            self._save_session()
+
+    def accept_all(self, items: list[dict]) -> None:
+        """"Add all N": keep each in the order shown. request() appends, so Up next keeps it."""
+        for x in items:
+            self.accept(x.get("artist", ""), x.get("title", ""), x.get("id"))
+
+    def _reject_key(self, source: str | None) -> str:
+        if source is None:
+            with LOCK:
+                src = self._source()
+            if src is None:
+                raise EngineError(409, "Pick a mood, genre or party first")
+            return src["key"]
+        if not re.fullmatch(r"(mood|genre|party):.{1,80}", source):
+            raise EngineError(400, f"Unknown source: {source}")
+        return source
+
+    def reject(self, artist: str, title: str, source: str | None = None) -> None:
+        """✕: never suggest this song for that source again (default: the active one). The UI
+        passes the source it drafted from, so an Undo after a switch still hits the right one."""
+        key, k = self._reject_key(source), party.key(artist, title)
+        with LOCK:
+            self.rejected.setdefault(key, set()).add(k)
+            self._save_rejected()
+            if self._sugg and self._sugg[0][1] == key:  # drop it from the cached list right away
+                c, t, lst = self._sugg
+                self._sugg = (c, t, [x for x in lst if party.key(x["artist"], x["title"]) != k])
+
+    def unreject(self, artist: str, title: str, source: str | None = None) -> None:
+        """Undo a ✕ (the few seconds the row shows Undo)."""
+        key, k = self._reject_key(source), party.key(artist, title)
+        with LOCK:
+            self.rejected.get(key, set()).discard(k)
+            if key.startswith("party:"):
+                self.rejected.get(PARTY_BUCKET, set()).discard(k)
+            self._save_rejected()
+            self._sugg = None
 
     def enrich_once(self) -> bool:
         """Fill one song's party facts: Last.fm first (ready songs first), then danceability
@@ -656,6 +815,11 @@ class Engine:
         _known_genre(g, allow_any=True)
         with LOCK:
             self.genre = g
+            # One source at a time: a genre or mood turns party off (moods come through here too).
+            if self.party:
+                self.party = None
+                self._sugg = None
+                self._save_session()
             cur = self.by_id(self.playing) if self.playing else None
             keep = None
             if cur is not None:
@@ -712,6 +876,7 @@ class Engine:
             self.pool.remove(self._song(sid))  # list.remove: the worker's identity check sees it gone
             self.upcoming = [i for i in self.upcoming if i != sid]
             self.pinned = {i: p for i, p in self.pinned.items() if p != sid}
+            self.kept.pop(sid, None)
             self.maps.pop(sid, None)
             self.entered.pop(sid, None)
             self.plans = {k: v for k, v in self.plans.items() if v[0] != sid}

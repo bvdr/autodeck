@@ -117,10 +117,11 @@ def search_songs(query: str) -> list[dict]:
     return _api("/api/search?" + urllib.parse.urlencode({"q": query}))["results"]
 
 
-@tool("Party suggestions", read_only=True, destructive=False, open_world=True)
+@tool("Suggestions", read_only=True, destructive=False, open_world=True)
 def get_suggestions() -> list[dict]:
-    """Songs not in the library that fit what's playing and the party flavor (Last.fm), with
-    BPM from Deezer and whether they beat-match the current song ('mixes')."""
+    """The draft for the active source. Party: songs not in the library that fit what's playing
+    and the flavor (Last.fm), with BPM from Deezer and 'mixes' (beat-matches the current song).
+    Mood/genre: library songs of it not in Up next yet (these carry an id). Empty with no source."""
     return _api("/api/suggestions")["suggestions"]
 
 
