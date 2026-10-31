@@ -119,13 +119,20 @@ as its peaks allow.
 resets Vibe to Any; picking a genre or mood turns Party off (Off doesn't bring the old vibe back).
 
 The **Suggestions** tab (first of Suggestions · Played · Pairs · Library) is a draft from that source,
-not the queue: a mood drafts its songs that aren't in Up next yet, best-voted first ("in 5 of 6
-playlists"); a genre its ready songs not in Up next; a party flavor songs you don't have (below).
+not the queue: a mood drafts its songs that aren't in Up next or played tonight, best-voted first ("in 5 of 6
+playlists"), ready or not (✓ prepares it first); a genre its songs ranked by how well they mix from
+the end of Up next, ready first; a party flavor songs you don't have (below).
 **✓** puts a song in Up next (it shows "kept from Balkan party" there until it plays); **Add all N**
 keeps the rest in the order shown; **✕** means "never suggest this for this source" (Undo for a few
 seconds). Excludes are saved per source in `<library>/rejected.json` (`{"mood:Balkan party": […],
 "party:Hits": […]}`; the old flat list became a `"party"` bucket every flavor reads). With Vibe Any and
 Party Off there's no draft.
+
+**Up next** is only what you keep: draft picks, search's *Play next*, the assistant's play_next, and
+anything you drag into place, in your order (saved across restarts). When fewer than 3 ready songs
+are lined up, autodeck adds **Auto** picks from the active source (best mix from the end of the
+list; any genre, with a notice, if the source has nothing ready) so the music never stops; ✓ on an
+Auto row keeps it. The first two rows lock once the next mix is planned.
 
 ## Moods
 
