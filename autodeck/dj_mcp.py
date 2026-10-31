@@ -133,11 +133,14 @@ def get_suggestions() -> list[dict]:
 # --- steering (change state: destructiveHint=True) -------------------------------
 @tool("Play next", open_world=True)
 def play_next(song_id: str, title: str = "", channel: str = "", duration: float = 0.0) -> dict:
-    """Keep a song in Up next (adds it to the library if new, downloads and analyses it first;
-    it plays after the songs already kept). `song_id` is a YouTube video id from search_songs or
-    list_library."""
-    return _summary(_api("/api/request", "POST", {"id": song_id, "title": title, "channel": channel,
-                                                  "duration": duration, "source": "assistant"}))
+    """Play a song as the very next one, on the idle deck (same as the owner's deck button). The
+    song planned there moves back to the top of Up next; a running mix is never interrupted (the
+    song plays right after it). A song not ready yet (added to the library if new, then downloaded
+    and analysed) waits at the top and swaps in once ready; `play_next.ready` says which.
+    `song_id` is a YouTube video id from search_songs or list_library."""
+    s = _api("/api/play_next", "POST", {"id": song_id, "title": title, "channel": channel,
+                                        "duration": duration, "source": "assistant"})
+    return {**_summary(s), "play_next": s["play_next"]}
 
 
 @tool("Mix now")

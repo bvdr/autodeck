@@ -769,3 +769,73 @@ def test_requesting_a_played_song_plays_it_again(client):
     client.post("/api/playing", json={"id": IDS[1]})
     st = client.post("/api/request", json={"id": IDS[0]}).json()
     assert st["queue"][config.FIXED_NEXT]["id"] == IDS[0] and st["requested"] == []
+
+
+# --- play next on the idle deck (design yA49d) ---------------------------------------
+def _queue(s):
+    return [q["id"] for q in s["queue"]]
+
+
+def test_play_next_ready_song_goes_first_and_bumps_the_planned_one_to_the_top(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    before = client.get("/api/transition", params={"from": IDS[0]}).json()
+    assert before["transition"]["in_id"] == IDS[1]  # IDS[1] is planned on the idle deck
+    v0 = client.get("/api/state").json()["version"]
+    s = client.post("/api/play_next", json={"id": IDS[3], "title": "x"}).json()
+    # The pick goes first; the planned song isn't lost, it's right behind it.
+    assert _queue(s)[:2] == [IDS[3], IDS[1]]
+    assert s["play_next"] == {"id": IDS[3], "ready": True, "planned": IDS[1]}
+    assert s["version"] > v0 and client.engine.requested[0] == IDS[3]
+    # The player replans: the mix out of the playing song now brings in the pick, on a fresh plan.
+    after = client.get("/api/transition", params={"from": IDS[0]}).json()
+    assert after["transition"]["in_id"] == IDS[3] and after["plan_id"] != before["plan_id"]
+
+
+def test_play_next_jumps_ahead_of_earlier_kept_songs(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    client.post("/api/request", json={"id": IDS[2]})
+    s = client.post("/api/play_next", json={"id": IDS[3]}).json()
+    assert _queue(s)[0] == IDS[3] and client.engine.requested[:2] == [IDS[3], IDS[2]]
+
+
+def test_play_next_not_ready_waits_as_a_request_then_swaps_in(client):
+    eng = client.engine
+    client.post("/api/playing", json={"id": IDS[0]})
+    client.post("/api/request", json={"id": IDS[2]})
+    s = client.post("/api/play_next", json={"id": NEW, "title": "Hit", "channel": "c", "duration": 180}).json()
+    # Not playable yet: the planned song stays planned; the pick tops the requests and is prepped first.
+    assert _queue(s)[0] == IDS[1] and s["requested"][0]["id"] == NEW
+    assert s["play_next"] == {"id": NEW, "ready": False, "planned": IDS[1]}
+    assert eng.requested[0] == NEW and eng.get_state()[1][0] == NEW
+    _ready(NEW, 121, "Hip-hop")
+    song = eng.by_id(NEW)
+    song.status, song.analysis = "ready", library.load_song(NEW).analysis
+    eng._on_worker_change()  # analysed: it swaps in on its own, ahead of the locked-in rows
+    assert _queue(client.get("/api/state").json())[:2] == [NEW, IDS[1]]
+    eng._on_worker_change()  # and only once: later changes don't keep re-promoting it
+    assert _queue(client.get("/api/state").json())[:2] == [NEW, IDS[1]]
+
+
+def test_play_next_never_touches_a_running_mix(client):
+    eng = client.engine
+    client.post("/api/playing", json={"id": IDS[0]})
+    plan = client.get("/api/transition", params={"from": IDS[0]}).json()
+    # The mix into IDS[1] is already scheduled (past the replan margin) when the owner picks:
+    # the server can't tell, so the pick must still land after the incoming song.
+    s = client.post("/api/play_next", json={"id": IDS[3]}).json()
+    assert s["playing"] == IDS[0]
+    # The incoming starts sounding (both decks play): its plan still commits its time map.
+    s = client.post("/api/playing", json={"id": IDS[1], "plan_id": plan["plan_id"]}).json()
+    assert eng.maps[IDS[1]] is eng.plans[plan["plan_id"]][1]
+    assert s["playing"] == IDS[1] and _queue(s)[0] == IDS[3]  # the pick plays right after this mix
+    # Mid-mix (playing = the incoming): the pick is still "after this mix", the playing song stays.
+    s = client.post("/api/play_next", json={"id": IDS[2]}).json()
+    assert s["playing"] == IDS[1] and _queue(s)[:2] == [IDS[2], IDS[3]]
+    assert client.post("/api/play_next", json={"id": IDS[1]}).status_code == 409
+
+
+def test_play_next_a_played_song_plays_it_again(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    client.post("/api/playing", json={"id": IDS[1]})
+    s = client.post("/api/play_next", json={"id": IDS[0]}).json()
+    assert _queue(s)[0] == IDS[0]

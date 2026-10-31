@@ -69,3 +69,13 @@ def test_mcp_is_served_by_the_app_at_slash_mcp(tmp_library):
             "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
         assert r.status_code == 200, r.text
         assert "autodeck" in r.text
+
+
+def test_play_next_means_the_very_next_song(monkeypatch):
+    # Same action as the deck button: /api/play_next (the idle deck), not /api/request ("soon").
+    calls = []
+    monkeypatch.setattr(dj_mcp, "_api", lambda path, method="GET", body=None: calls.append((path, body)) or {
+        "play_next": {"id": "aaaaaaaaaa1", "ready": False, "planned": None}})
+    out = dj_mcp.play_next("aaaaaaaaaa1", "Hit")
+    assert calls[0][0] == "/api/play_next" and calls[0][1]["source"] == "assistant"
+    assert out["play_next"] == {"id": "aaaaaaaaaa1", "ready": False, "planned": None}

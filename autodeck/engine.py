@@ -109,6 +109,11 @@ class Engine:
         # anything, cap or not); ready ones play after the locked-in rows, whatever the source.
         # Dropped once they start playing. Saved in session.json with their `kept` notes.
         self.requested: list[str] = []
+        # "Play next on deck B" (play_next) picked a song that isn't ready yet: it waits at the
+        # top of `requested`, and the planned song stays planned until _recompute sees it ready,
+        # then it jumps ahead of the locked-in rows once. Not saved: after a restart it is simply
+        # the first kept song.
+        self.next_pick: str | None = None
         # Moods built from public playlists (moods.py): name -> song ids. A mood is selected like
         # a genre (its name is in the genres list), but membership is this list, so a song keeps
         # its own genre label and can be in several moods.
@@ -278,6 +283,14 @@ class Engine:
         ok = {s.id for s in cands} | {s.id for s in pl_ready}
         if keep is None:
             keep = self.upcoming[: config.FIXED_NEXT] if cur else []
+        if self.next_pick in ok:
+            # The play_next pick is playable: it takes the idle deck, and what was planned there
+            # stays locked right behind it (back at the top of Up next, not lost). The player
+            # sees the next song change and replans the mix (shouldReplan); a mix already under
+            # way never replans, and the server's `playing` is its incoming song by then, so
+            # the pick still lands after it.
+            keep = [self.next_pick, *keep]
+            self.next_pick = None
         locked = [i for i in dict.fromkeys(keep) if i in ok]
         # A locked auto pick whose hand-over the owner marked avoided loses its slot (and so does
         # everything after it), so a fresh 👎 takes effect right away. Kept songs always stay.
@@ -459,10 +472,11 @@ class Engine:
             return [{"id": h.id, "title": h.title, "channel": h.channel, "duration": h.duration,
                      "status": by[h.id].status if h.id in by else None} for h in hits]
 
-    def request(self, sid: str, title: str, channel: str, duration: float, kept_from: str | None = None) -> None:
-        """Owner kept a song (search "play next", the draft, the assistant): add it if new, prep it
-        first, and put it in Up next after the songs already kept. `kept_from` is the note
-        ("Balkan party", "search", "assistant")."""
+    def request(self, sid: str, title: str, channel: str, duration: float, kept_from: str | None = None,
+                first: bool = False) -> None:
+        """Owner kept a song (the draft, the assistant, a pair): add it if new, prep it first, and
+        put it in Up next after the songs already kept (`first`: before them, see play_next).
+        `kept_from` is the note ("Balkan party", "search", "assistant")."""
         with LOCK:
             s = self.by_id(sid)
             if s is None:
@@ -473,7 +487,10 @@ class Engine:
             if s.status == "failed":  # picking it again is a retry
                 s.status, s.error = "queued", None
             library.save_song(s)
-            if sid not in self.requested:
+            if first:
+                self.requested = [sid] + [i for i in self.requested if i != sid]
+                self.next_pick = sid
+            elif sid not in self.requested:
                 self.requested.append(sid)
             if kept_from:
                 self.kept[sid] = kept_from
@@ -483,6 +500,23 @@ class Engine:
             self._recompute()
             self._save_session()
             self._changed()
+
+    def play_next(self, sid: str, title: str = "", channel: str = "", duration: float = 0.0,
+                  kept_from: str | None = None) -> dict:
+        """The very next song, on the idle deck (design yA49d). A ready pick goes first and the
+        planned song moves back to second; one still downloading/analysing waits at the top of
+        the requests while the planned song stays, then swaps in once ready (_recompute). The
+        playing song is never touched. Returns what the UI's one-line notice needs."""
+        with LOCK:
+            if sid == self.playing:
+                raise EngineError(409, "That song is playing now")
+            planned = self.upcoming[0] if self.upcoming else None
+            self.request(sid, title, channel, duration, kept_from, first=True)
+            # The version bump (request's _changed) is what makes a player holding a plan for
+            # `planned` fetch a new one; the old plan_ids stay valid on purpose: if that mix is
+            # already audible the player keeps it, and /api/playing must still commit its map.
+            return {"id": sid, "ready": bool(self.upcoming) and self.upcoming[0] == sid,
+                    "planned": planned if planned != sid else None}
 
     # --- played log ------------------------------------------------------------------
     def _history_file(self):
@@ -1026,6 +1060,8 @@ class Engine:
             self.upcoming = [i for i in self.upcoming if i != sid]
             self.requested = [i for i in self.requested if i != sid]
             self.kept.pop(sid, None)
+            if self.next_pick == sid:
+                self.next_pick = None  # re-adding it later must not make it jump the queue
             self.maps.pop(sid, None)
             self.entered.pop(sid, None)
             self.plans = {k: v for k, v in self.plans.items() if v[0] != sid}

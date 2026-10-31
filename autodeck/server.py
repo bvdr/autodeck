@@ -221,6 +221,14 @@ def create_app(engine: Engine | None = None) -> FastAPI:
                     req.source[:80] if req.source else None)
         return eng.state()
 
+    @app.post("/api/play_next")
+    def play_next(req: RequestReq):
+        # The deck button / action sheet: the very next song (not "after the kept ones").
+        # `play_next` tells the page what happened, for its one-line notice.
+        done = eng.play_next(_id(req.id), req.title[:300], req.channel[:300], req.duration,
+                             req.source[:80] if req.source else None)
+        return {**eng.state(), "play_next": done}
+
     @app.post("/api/party")
     def set_party(req: PartyReq):
         eng.set_party(req.flavor)
