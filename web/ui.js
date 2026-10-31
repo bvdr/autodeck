@@ -472,7 +472,6 @@ async function search(q) {
   q = q.trim();
   if (!q) { $('#res-lib').replaceChildren(); $('#res-yt').replaceChildren(); $('#res-yt-h').hidden = $('#res-lib-h').hidden = true; msg.textContent = ''; return; }
   const local = showLocal(q);
-  $('#search-panel').hidden = false;
   msg.textContent = 'Searching YouTube…';
   try {
     const { results } = await api(`/api/search?${new URLSearchParams({ q })}`);
@@ -573,9 +572,16 @@ export function initUi(stateCb, h = {}) {
   });
   // Search: library matches as you type, YouTube on Enter. Desktop: a popover; phone: the tab.
   const q = $('#q'), panel = $('#search-panel');
-  q.addEventListener('input', () => { const v = q.value.trim(); panel.hidden = !v; showLocal(v); if (!v) search(''); });
-  q.addEventListener('focus', () => { if (q.value.trim()) panel.hidden = false; });
-  $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); search(q.value); });
+  // Desktop: the panel hangs under the header field. Placed from the field's box once per
+  // open (one layout read, not per frame); the phone's CSS makes it static in the Search tab.
+  const place = () => {
+    const r = $('#search-form').getBoundingClientRect();
+    Object.assign(panel.style, { top: `${r.bottom + window.scrollY + 8}px`, left: `${r.left + window.scrollX}px` });
+  };
+  const open = (on) => { if (on && panel.hidden) place(); panel.hidden = !on; };
+  q.addEventListener('input', () => { const v = q.value.trim(); open(!!v); showLocal(v); if (!v) search(''); });
+  q.addEventListener('focus', () => { if (q.value.trim()) open(true); });
+  $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); open(true); search(q.value); });
   $('#search-form').addEventListener('keydown', (e) => { if (e.key === 'Escape') { panel.hidden = true; q.blur(); } });
   $('#search-cancel').addEventListener('click', () => { q.value = ''; search(''); toTab('now'); });
   document.addEventListener('pointerdown', (e) => {

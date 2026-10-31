@@ -543,7 +543,7 @@ function liveFrame(dt) {
     else if (i === onAir && started) role = ['on air', 'on-air'];
     else if (p && i === p.inDeck) role = [isBeatmatched(p.kind) ? `cued · matched to ${'AB'[1 - i]}` : 'cued', ''];
     else if (p && started && mixing) role = ['fading out', ''];
-    else if (!d.busy) role = ['played', ''];
+    else if (!d.busy) role = ['empty', '']; // stopped or dropped: nothing on this deck now
     setRole(i, ...role);
     $(`#deck${i}`).classList.toggle('empty', !d.busy);
     const pos = d.info ? Math.max(0, d.pos(t)) : 0;
@@ -579,7 +579,7 @@ function updateSign(t, p, mixing, inc, onAir, label) {
   if (M.manual) {
     setText('#sign-kicker', "You're mixing");
     setText('#sign-title', airInfo?.title ?? '—');
-    setText('#sign-sub', 'Auto paused for this mix · let go and the nearer deck takes over');
+    setText('#sign-sub', 'Auto paused for this mix');
   } else if (p && !mixing) {
     const loved = pairs[`${cur?.id}>${p.res.in_deck.id}`] === 'loved';
     setKicker(loved ? 'loved' : 'next');
