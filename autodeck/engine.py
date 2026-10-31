@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict
+from pathlib import Path
 
 import soundfile as sf
 
@@ -610,7 +611,10 @@ class Engine:
     def settings(self) -> dict:
         """Never returns the key itself, only whether one is set and its last 4 characters."""
         key = lastfm.api_key()
-        return {"lastfm": {"set": bool(key), "hint": key[-4:] if key else None, "source": lastfm.key_source()}}
+        # Where the library lives, for the Settings note; home shortened to ~ (it's shown, not used).
+        lib = str(config.library_root()).replace(str(Path.home()), "~", 1)
+        return {"lastfm": {"set": bool(key), "hint": key[-4:] if key else None, "source": lastfm.key_source()},
+                "library": lib}
 
     def set_lastfm_key(self, key: str | None) -> dict:
         key = (key or "").strip()

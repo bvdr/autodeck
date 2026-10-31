@@ -518,7 +518,8 @@ def test_lastfm_key_can_be_set_from_settings_and_is_never_echoed(client, monkeyp
     from autodeck import lastfm
     monkeypatch.delenv("LASTFM_API_KEY", raising=False)
     monkeypatch.setattr(lastfm, "LEGACY_KEY_FILE", config.library_root() / "none.env")
-    assert client.get("/api/settings").json()["lastfm"]["set"] is False
+    st = client.get("/api/settings").json()
+    assert st["lastfm"]["set"] is False and st["library"].endswith(config.library_root().name)
     assert client.put("/api/settings/lastfm", json={"key": "nope"}).status_code == 400
     monkeypatch.setattr(lastfm, "check_key", lambda k: k.startswith("0"))
     assert client.put("/api/settings/lastfm", json={"key": "f" * 32}).status_code == 400  # Last.fm says no
