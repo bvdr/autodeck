@@ -204,6 +204,10 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 28px; border-radius
 .sign-text { overflow: hidden; }
 .lamp { width: 132px; border: 0; border-radius: var(--r-lg) 0 0 var(--r-lg); background: var(--on-air); color: var(--bg); padding: 0; cursor: default;
   display: grid; place-items: center; transition: width var(--settle); }
+/* Handover glow: a layer whose opacity app.js pulses once (only opacity animates). */
+.lamp { position: relative; }
+.lamp::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0;
+  box-shadow: 0 0 40px 6px var(--on-air); }
 .lamp-on { display: grid; justify-items: center; font: 700 30px/1.15 var(--display); letter-spacing: 2px; }
 .lamp-play { display: none; }
 body.idle .lamp { width: 220px; cursor: pointer; }
@@ -251,6 +255,10 @@ body.idle.empty .sign-title, .sign-title.long { font-size: clamp(32px, 4vw, 56px
 .mix-name { font: 700 40px/1 var(--display); display: flex; gap: 12px; align-items: center; }
 #mix-shape { display: flex; }
 #mix-shape .shape { width: 64px; height: 24px; }
+/* Settle: the phrase blocks fade out over the next state instead of pushing it around
+   (out of flow while they fade; app.js settleOut). */
+.sign-side { position: relative; }
+.side-mix.leaving { position: absolute; inset: 0; padding: inherit; align-content: center; pointer-events: none; }
 .mix-bars { display: flex; gap: 6px; }
 .mix-bars i { width: 29px; height: 12px; border-radius: 2px; background: var(--raised); }
 .mix-bars i.done { background: var(--text); }

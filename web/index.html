@@ -276,6 +276,9 @@
       <h2 id="sign-title" class="sign-title">—</h2>
       <p id="sign-sub" class="sign-sub"></p>
       <p id="status" class="sign-status" role="status" aria-live="polite"></p>
+      <!-- The transition moment, announced beat by beat (app.js moment()); screen readers only:
+           the sign already shows each beat. -->
+      <p id="announce" class="sr-only" role="status" aria-live="polite"></p>
     </div>
     <div class="sign-side">
       <!-- idle -->

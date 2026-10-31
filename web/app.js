@@ -4,7 +4,7 @@
 // Web Audio plumbing in deck.js, everything else on the page in ui.js.
 import * as S from './schedule.js';
 import { Deck, loadTrack, laneText } from './deck.js';
-import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
+import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith, mixBeat, mixAnnouncement } from './lanes.js';
 import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs, fxShape } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
 import { initMcp, renderMcp } from './mcp.js';
@@ -424,6 +424,8 @@ function setLive(on) {
   textCache.clear();
   shown.clear();
   idleKey = '';
+  wasBusy = [true, true]; // so a deck that's empty when the mixer starts gets cleared (liveFrame)
+  mo = { plan: null, beat: null }; ghost = null;
   $('#play').disabled = on;
   for (const el of ['#xfader', '#live-filter', '#live-echo']) $(el).disabled = !on;
   if (on) {
@@ -551,18 +553,78 @@ function setText(sel, s) {
   if (el) el.textContent = s;
 }
 const shown = new Map();
+/** Returns true when it changed, so callers can play an enter motion once. */
 function show(sel, on) {
-  if (shown.get(sel) === on) return;
+  if (shown.get(sel) === on) return false;
   shown.set(sel, on);
   $(sel).hidden = !on;
+  return true;
 }
 function setRole(i, text, cls) {
   const el = $(`#deck${i} .role`);
   const k = `${text}|${cls}`;
   if (el.dataset.k === k) return;
+  const first = !el.dataset.k;
   el.dataset.k = k;
   el.textContent = text;
   el.className = `role ${cls}`;
+  // CUED -> MIXING IN etc. (design plxFh "quick 120 ms"): the new tag fades in, never a jump.
+  if (!first) motion(el, [{ opacity: 0 }, { opacity: 1 }], QUICK_MS);
+}
+
+// --- the transition moment (design plxFh) ----------------------------------------------
+// One-shot motions for the beats of a mix. Only transform and opacity animate: the audio engine
+// shares this thread, and those two run on the compositor. Web Animations, not CSS classes:
+// the CSS reduced-motion rule doesn't reach element.animate(), so still() is checked here.
+// Reduced motion: handover and effect landing become instant swaps; real-time values
+// (countdown, playhead, fader) keep updating since they're information, not decoration.
+const QUICK_MS = 120, SETTLE_MS = 240, HANDOVER_MS = 600; // = --quick / --settle / --handover
+const still = () => reduceMotion.matches;
+function motion(el, frames, ms, easing = 'ease-out', pseudoElement) {
+  if (el && !still()) el.animate(frames, { duration: ms, easing, pseudoElement });
+}
+let mo = { plan: null, beat: null }; // the beat liveFrame last saw (mixBeat)
+let ghost = null;                    // { mix, from }: previous mix window fading out (replan / settle)
+let lastMix = null;                  // the mix last drawn, becomes the ghost
+const announce = (t) => setText('#announce', t);
+
+/** Called every frame; acts only when the plan or its beat changed. */
+function moment(p, beat, ts) {
+  if (p === mo.plan && beat === mo.beat) return;
+  const prev = mo;
+  mo = { plan: p, beat };
+  const lines = [];
+  if (prev.plan && p !== prev.plan) {
+    // The old window goes: a replan cross-fades into the new shape, the end of a mix (settle)
+    // fades the red tint. Both the "settle 240 ms" token.
+    if (!still() && lastMix) ghost = { mix: lastMix, from: ts };
+    if (prev.beat === 'mixing' || prev.beat === 'handover') lines.push(mixAnnouncement('settle', M.decks[M.cur].info?.title ?? ''));
+  }
+  if (p) {
+    const title = p.res.in_deck.title, fx = FX_LABEL[p.kind] ?? p.kind;
+    if (beat !== prev.beat || p !== prev.plan) lines.push(mixAnnouncement(beat, title, fx));
+    // Handover: ON AIR slides from the outgoing's lane to the incoming's, the lamp glows once.
+    if (beat === 'handover' && prev.plan === p) handover(p.inDeck);
+  }
+  if (lines.length) announce(lines.join('. '));
+}
+
+function handover(to) {
+  if (still()) return;
+  // Two layout reads once per mix (not per frame): where the tag was, where it is now.
+  const from = $(`#deck${1 - to} .role`).getBoundingClientRect(), el = $(`#deck${to} .role`), now = el.getBoundingClientRect();
+  motion(el, [{ transform: `translate(${from.left - now.left}px, ${from.top - now.top}px)` }, { transform: 'none' }],
+    HANDOVER_MS, 'cubic-bezier(.2, .8, .2, 1)');
+  motion($('#play'), [{ opacity: 0 }, { opacity: 1, offset: 0.35 }, { opacity: 0 }], HANDOVER_MS, 'ease-out', '::after');
+}
+
+/** Settle: the phrase blocks fade out (out of flow, over whatever the sign shows next). */
+function settleOut(el) {
+  if (still()) return;
+  el.hidden = false;
+  el.classList.add('leaving');
+  const a = el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: SETTLE_MS, easing: 'ease-in-out' });
+  a.onfinish = a.oncancel = () => { el.classList.remove('leaving'); el.hidden = shown.get('#side-mix') !== true; };
 }
 
 const pickNow = () => S.pickDeck({ live: live(), cur: M.cur, plan: M.plan, now: M.ctx ? now() : 0 });
@@ -570,7 +632,7 @@ const pickNow = () => S.pickDeck({ live: live(), cur: M.cur, plan: M.plan, now: 
 const lanes = [0, 1].map((i) => new Lane($(`#deck${i} canvas`), i));
 // Lane view offset (left edge - now), eased toward its target over ~the handover token
 // (600 ms) so the view pans after a mix instead of jumping. Reduced motion: it jumps.
-let viewOff = null, lastTs = 0;
+let viewOff = null, lastTs = 0, wasBusy = [true, true];
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 function frame(ts) {
@@ -601,10 +663,10 @@ function idleFrame() {
 }
 
 function liveFrame(dt) {
-  const t = now(), p = M.plan;
-  // ON AIR moves to the incoming halfway through a transition, when it's the louder one
-  // (deck roles only swap at the very end, which looked like the old song hung on).
-  const onAir = p && t >= p.T0 + p.length / 2 ? p.inDeck : M.cur;
+  const t = now(), p = M.plan, beat = mixBeat(t, p);
+  // ON AIR moves to the incoming halfway through a transition (the handover beat), when it's
+  // the louder one (deck roles only swap at the very end, which looked like the old song hung on).
+  const onAir = beat === 'handover' ? p.inDeck : M.cur;
   const anchor = p ?? (M.lastPlan && t < M.lastPlan.end + 2 ? M.lastPlan : null);
   const target = laneLeft(t, anchor?.T0 ?? null) - t;
   viewOff = viewOff == null || reduceMotion.matches ? target : viewOff + (target - viewOff) * (1 - Math.exp(-dt / 0.15));
@@ -612,25 +674,37 @@ function liveFrame(dt) {
   const mixing = p && t >= p.T0;
   const label = p ? FX_LABEL[p.kind] ?? p.kind : '';
   const inc = p ? M.decks[p.inDeck] : null;
+  const mix = p ? { plan: p, inDeck: p.inDeck, bar: p.bar, live: mixing,
+    label: mixTag(p.kind, label, p.length, p.bar, mixing),
+    bassTo: p.kind === 'bass_swap' ? { time: S.bassMid(p.T0, p.length, p.bar), letter: 'AB'[p.inDeck] } : null } : null;
+  moment(p, beat, performance.now());
+  if (mix) lastMix = mix;
+  const k = ghost ? Math.min(1, (performance.now() - ghost.from) / SETTLE_MS) : 1;
+  if (k >= 1) ghost = null;
   M.decks.forEach((d, i) => {
     const started = d.started(t);
     let role = ['', ''];
     if (!d.info) role = ['empty', ''];
     else if (i === onAir && started) role = ['on air', 'on-air'];
-    else if (p && i === p.inDeck) role = [isBeatmatched(p.kind) ? `cued · matched to ${'AB'[1 - i]}` : 'cued', ''];
+    // Locked (design plxFh): the incoming's tag goes CUED -> MIXING IN once the mix can't change.
+    else if (p && i === p.inDeck) role = beat !== 'planned' ? ['mixing in', ''] : [isBeatmatched(p.kind) ? `cued · matched to ${'AB'[1 - i]}` : 'cued', ''];
     else if (p && started && mixing) role = ['fading out', ''];
     else if (!d.busy) role = ['empty', '']; // stopped or dropped: nothing on this deck now
     setRole(i, ...role);
     $(`#deck${i}`).classList.toggle('empty', !d.busy);
+    // Settle (design plxFh): a deck that stops empties its text and says what comes next.
+    // laneText writes directly, so the cached writes for this lane are forgotten.
+    if (d.busy !== wasBusy[i]) {
+      wasBusy[i] = d.busy;
+      if (!d.busy) { laneText($(`#deck${i}`), null); textCache.delete(`#deck${i} .artist`); }
+    }
+    if (!d.busy) setText(`#deck${i} .artist`, M.req?.loading ? 'Preparing next mix…' : '');
     const pos = d.info ? Math.max(0, d.pos(t)) : 0;
-    setText(`#deck${i} .time`, d.info ? `${fmt(pos)} / ${fmt(d.info.duration_rendered)}` : '');
+    setText(`#deck${i} .time`, d.info && d.busy ? `${fmt(pos)} / ${fmt(d.info.duration_rendered)}` : '');
     if (d.info) $(`#deck${i} .overview .pos`).style.transform = `translateX(${(Math.min(0.995, pos / d.info.duration_rendered) * 100).toFixed(2)}%)`;
     lanes[i].setInfo(d.info);
-    const mix = p ? { plan: p, inDeck: p.inDeck, bar: p.bar, live: mixing,
-      label: mixTag(p.kind, label, p.length, p.bar, mixing),
-      bassTo: p.kind === 'bass_swap' ? { time: S.bassMid(p.T0, p.length, p.bar), letter: 'AB'[p.inDeck] } : null } : null;
     const marks = p && i !== p.inDeck ? { end: p.end - d.zero } : p ? { start: p.inOffset } : {};
-    lanes[i].draw({ zero: d.zero, startAt: d.busy ? d.startAt : null, endAt: d.endAt }, view, mix, marks, i === 1);
+    lanes[i].draw({ zero: d.zero, startAt: d.busy ? d.startAt : null, endAt: d.endAt }, view, mix, marks, i === 1, ghost?.mix, k);
   });
   // The fader animates from the same progress the gain curves use.
   if (!M.manual && p) {
@@ -706,7 +780,11 @@ function updateSign(t, p, mixing, inc, onAir, label) {
   $('#sign').classList.toggle('mixing', side === 'mix');
   show('#side-idle', false);
   show('#side-next', side === 'next');
-  show('#side-mix', side === 'mix');
+  if (show('#side-mix', side === 'mix')) {
+    // Mix starts: the effect name lands (opacity 0 -> 1, 8 px rise). Mix ends: blocks fade.
+    if (side === 'mix') motion($('#side-mix .mix-name'), [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], SETTLE_MS, 'ease-in-out');
+    else settleOut($('#side-mix'));
+  }
   show('#side-rate', side === 'rate');
   show('#side-help', side === 'help');
   show('.sign-side', side !== null);
@@ -792,8 +870,10 @@ function updateFx(t) {
   const p = M.plan;
   const locked = p && t >= p.T0 - S.REPLAN_MARGIN; // too late to change it
   show('#fx-btn', !!p && !locked && !M.manual);
-  show('#fx-locked', !!p && locked && t < p.T0);
-  if (p && locked) setText('#fx-locked span', `${FX_LABEL[p.kind] ?? p.kind} · locked`);
+  // Locked: a read-only label ("🔒 Bass swap", the lock is the icon), faded in, never a dead dropdown.
+  const lockedLabel = !!p && locked && t < p.T0;
+  if (show('#fx-locked', lockedLabel) && lockedLabel) motion($('#fx-locked'), [{ opacity: 0 }, { opacity: 1 }], QUICK_MS);
+  if (p && locked) setText('#fx-locked span', FX_LABEL[p.kind] ?? p.kind);
   if (locked && !fxList.hidden) closeFx(false);
   if (!p || p === M.fxPlan || !fxList.hidden) return;
   M.fxPlan = p;

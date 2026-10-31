@@ -7,7 +7,7 @@
 // a couple of drawImage crops plus a few dozen rects. Canvas sizes come from a
 // ResizeObserver, never from reading layout inside the frame loop (that would force a
 // synchronous layout after the frame's text updates: layout thrash).
-import { EXIT } from './schedule.js';
+import { EXIT, REPLAN_MARGIN } from './schedule.js';
 
 export const VIEW_SPAN = 64;   // seconds across a lane (design: ~24 s countdown = 37 % of the width)
 export const NOW_AT = 0.1;     // NOW sits 10 % in from the left when nothing is being mixed
@@ -93,6 +93,33 @@ export function mixTag(kind, label, length, bar, live) {
 }
 
 export const isBeatmatched = (kind) => BEATMATCHED.has(kind);
+
+/** The beat of the transition moment (design plxFh) a plan is in at ctx time t:
+ * planned (effect still changeable) -> locked (inside the replan margin, picker read-only)
+ * -> mixing (T0, the downbeat) -> handover (midpoint: ON AIR moves to the incoming). null =
+ * no plan. Settle is the plan going away (swap), which the caller sees as plan -> null.
+ * Same boundaries the audio side uses (canReplan, T0), so the visuals can't drift from it. */
+export function mixBeat(t, p, margin = REPLAN_MARGIN) {
+  if (!p) return null;
+  if (t < p.T0 - margin) return 'planned';
+  if (t < p.T0) return 'locked';
+  return t < p.T0 + p.length / 2 ? 'mixing' : 'handover';
+}
+
+/** What the status live region says when the moment enters `beat` (design plxFh rule: every
+ * change is announced, e.g. "Mixing into Walking The Wire, bass swap"). `effect` = its label.
+ * 'settle' = the mix just ended, `title` is then the song now on air. */
+export function mixAnnouncement(beat, title, effect = '') {
+  const fx = effect.toLowerCase();
+  switch (beat) {
+    case 'planned': return `Next mix: ${title}, ${fx}`;
+    case 'locked': return `${effect} locked for ${title}`;
+    case 'mixing': return `Mixing into ${title}, ${fx}`;
+    case 'handover': return `${title} is on air`;
+    case 'settle': return `Mix done. Now playing ${title}`;
+    default: return '';
+  }
+}
 /** Exit effects start the incoming only after the outgoing's effect: its lane starts later. */
 export const incomingStart = (p) => (EXIT.has(p.kind) ? p.T0 + p.length : p.T0);
 
@@ -151,8 +178,11 @@ export class Lane {
    * `mix` = null or { plan, inDeck, label, bar, live } for the scheduled transition,
    * `marks` = { end, start } rendered seconds to label (END on the outgoing, START on the incoming),
    * `nowTag` = draw the NOW tag at the bottom of this lane.
+   * `ghost` = the previous mix window, drawn at alpha 1 - k while `mix` comes in at k: the 240 ms
+   * cross-fade of a replan and the settle fade of the red tint (canvas alpha, so it costs nothing
+   * extra: the lane is redrawn every frame anyway).
    */
-  draw(d, view, mix, marks = {}, nowTag = false) {
+  draw(d, view, mix, marks = {}, nowTag = false, ghost = null, k = 1) {
     const g = this.g, W = this.w, H = this.h, r = this.dpr;
     if (!W) return;
     g.setTransform(r, 0, 0, r, 0, 0);
@@ -204,7 +234,9 @@ export class Lane {
     const nx = Math.round(X(view.now));
     g.fillStyle = COL.text;
     g.fillRect(nx - 1, 0, 2, H);
-    if (mix) this.drawMix(mix, X, W, H);
+    if (ghost) { g.globalAlpha = 1 - k; this.drawMix(ghost, X, W, H); }
+    if (mix) { g.globalAlpha = ghost ? k : 1; this.drawMix(mix, X, W, H); }
+    g.globalAlpha = 1;
     if (nowTag) this.tag('NOW', nx, H - 22, COL.bg, COL.text, 'center');
   }
 

@@ -2,9 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { laneLeft, xAt, gainAt, mixBars, mixProgress, overview, mixesWith, mixTag, incomingStart,
-  VIEW_SPAN, NOW_AT, MIX_AT, NOW_MAX } from './lanes.js';
-import { plan, bassMid, BASS_CUT } from './schedule.js';
+  VIEW_SPAN, NOW_AT, MIX_AT, NOW_MAX, mixBeat, mixAnnouncement } from './lanes.js';
 import { FX_LABEL, FX_SHAPE } from './ui.js';
+import { plan, bassMid, BASS_CUT, REPLAN_MARGIN } from './schedule.js';
 
 const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -67,6 +67,27 @@ test('overview strip and the mixes check', () => {
   [['intro', 0, 0.1], ['main', 0.1, 0.9], ['outro', 0.9, 1]]);
   assert.deepEqual(overview([], 100), []);
   assert.ok(mixesWith(120, 124) && mixesWith(120, 61) && !mixesWith(120, 135) && !mixesWith(120, null));
+});
+
+test('mixBeat: planned -> locked at the replan margin -> mixing at T0 -> handover at the midpoint', () => {
+  const p = { T0: 100, length: 16 };
+  assert.equal(mixBeat(50, null), null);
+  assert.equal(mixBeat(100 - REPLAN_MARGIN - 0.01, p), 'planned');
+  assert.equal(mixBeat(100 - REPLAN_MARGIN, p), 'locked');
+  assert.equal(mixBeat(100, p), 'mixing');
+  assert.equal(mixBeat(107.99, p), 'mixing');
+  assert.equal(mixBeat(108, p), 'handover');
+  // An instant swap (cut) has no mixing beat: it hands over on the downbeat.
+  assert.equal(mixBeat(100, { T0: 100, length: 0 }), 'handover');
+});
+
+test('mixAnnouncement: one line per beat, as the board words it', () => {
+  assert.equal(mixAnnouncement('mixing', 'Walking The Wire', 'Bass swap'), 'Mixing into Walking The Wire, bass swap');
+  assert.equal(mixAnnouncement('planned', 'Walking The Wire', 'Bass swap'), 'Next mix: Walking The Wire, bass swap');
+  assert.equal(mixAnnouncement('locked', 'Walking The Wire', 'Bass swap'), 'Bass swap locked for Walking The Wire');
+  assert.equal(mixAnnouncement('handover', 'Walking The Wire'), 'Walking The Wire is on air');
+  assert.equal(mixAnnouncement('settle', 'Walking The Wire'), 'Mix done. Now playing Walking The Wire');
+  assert.equal(mixAnnouncement(null, 'x'), '');
 });
 
 test('every effect has a shape thumbnail with an A-out and a B-in curve', () => {
