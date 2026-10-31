@@ -112,24 +112,39 @@ Spotify normalize to), so transitions don't jump in volume. Real libraries span 
 LUFS). Songs are never boosted into clipping: a quiet master with loud peaks is raised only as far
 as its peaks allow.
 
+## Sources & suggestions
+
+**Playing from** says where the next songs come from. One source at a time: the **Vibe** dropdown
+(Any, a genre or a mood) or the **Party** dropdown (Off, Hits, Oldies, Latino). Picking a party flavor
+resets Vibe to Any; picking a genre or mood turns Party off (Off doesn't bring the old vibe back).
+
+The **Suggestions** tab (first of Suggestions · Played · Pairs · Library) is a draft from that source,
+not the queue: a mood drafts its songs that aren't in Up next yet, best-voted first ("in 5 of 6
+playlists"); a genre its ready songs not in Up next; a party flavor songs you don't have (below).
+**✓** puts a song in Up next (it shows "kept from Balkan party" there until it plays); **Add all N**
+keeps the rest in the order shown; **✕** means "never suggest this for this source" (Undo for a few
+seconds). Excludes are saved per source in `<library>/rejected.json` (`{"mood:Balkan party": […],
+"party:Hits": […]}`; the old flat list became a `"party"` bucket every flavor reads). With Vibe Any and
+Party Off there's no draft.
+
 ## Moods
 
-Type a theme under **Mood** ("Balkan party", "Greek taverna", "90s eurodance") and press **Build**.
+Type a theme under **Mood** (Vibe → **+ Build a mood**) ("Balkan party", "Greek taverna", "90s eurodance") and press **Build**.
 autodeck reads the top public YouTube playlists for it (and Deezer's, as a second vote), ranks songs
 by how many of those playlists include them — the crowd's picks — imports the top 30, adds the mood
-as a button next to the genres and switches to it. Its songs download first. **↻** on a mood adds
-more songs from the playlists; **✕** deletes the mood (songs stay). Stored in `<library>/moods.json`.
+to the Vibe dropdown and switches to it. Its songs download first. **↻** on a mood adds
+more songs from the playlists; **✕** deletes the mood (songs stay). Stored in `<library>/moods.json` (playlist votes in `mood-votes.json`).
 A song keeps its own genre and can be in several moods.
 
 ## Party mode
 
-Pick **Hits**, **Oldies** or **Latino** under *Party* (*Off* returns to the genre buttons):
+Pick **Hits**, **Oldies** or **Latino** in the *Party* dropdown (*Off* returns to the whole library):
 - The queue plays only library songs that fit the flavor, crowd-pleasers first and energy building,
   still beat/key matched. Facts come from Last.fm (listener counts, track and artist tags), looked
   up in the background for every song (~10 min for 500 songs, cached a week).
 - **Suggestions** lists songs you don't have that people play with the current song, plus the
-  flavor's top chart. **✓ Accept** finds it on YouTube, preps it and plays it next; **✕** hides it
-  for good (`<library>/rejected.json`).
+  flavor's top chart. **✓** finds it on YouTube, preps it and plays it next; **✕** hides it for that
+  flavor (see Sources & suggestions).
 - Each suggestion shows its **BPM** (from Deezer's free API; `?` when Deezer doesn't know it) and
   a ✓ when it beat-matches the current song; those are listed first. Library songs also get a
   **danceability** score measured from the audio (shown in the queue), which party mode favors.
@@ -150,7 +165,8 @@ playing and how many bars are left. Below it, both decks share one time axis: th
 transition window with each deck's gain curve, and the vertical crossfader. Before the first song the
 lamp is the **PLAY** button (Space plays): it holds the song to resume after a reload, or the first in
 Up next; **Or start with** loads another one. **Library** shows why a song failed, with **Retry**.
-On a phone (≤ 600 px wide) the same page splits into Now / Vibe / Queue / Search tabs.
+On a phone (≤ 600 px wide) the same page splits into Now / Vibe / Queue / Search tabs (the Vibe
+tab keeps genre, mood and party buttons; Suggestions is in the Queue tab).
 
 ## Pair memory
 
