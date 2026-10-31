@@ -115,8 +115,9 @@ as its peaks allow.
 ## Sources & suggestions
 
 **Playing from** says where the next songs come from. One source at a time: the **Vibe** dropdown
-(Any, a genre or a mood) or the **Party** dropdown (Off, Hits, Oldies, Latino). Picking a party flavor
-resets Vibe to Any; picking a genre or mood turns Party off (Off doesn't bring the old vibe back).
+(Any, a genre or a mood), the **Party** dropdown (Off, Hits, Oldies, Latino) or the **Playlist**
+dropdown (None or a saved playlist). Picking one resets the others to Any / Off / None (Off and None
+don't bring the old one back). The active source is remembered across restarts (`session.json`).
 
 The **Suggestions** tab (first of Suggestions · Played · Pairs · Library) is a draft from that source,
 not the queue: a mood drafts its songs that aren't in Up next or played tonight, best-voted first ("in 5 of 6
@@ -133,6 +134,33 @@ anything you drag into place, in your order (saved across restarts). When fewer 
 are lined up, autodeck adds **Auto** picks from the active source (best mix from the end of the
 list; any genre, with a notice, if the source has nothing ready) so the music never stops; ✓ on an
 Auto row keeps it. The first two rows lock once the next mix is planned.
+
+## Saved playlists
+
+**Playlist → + Add a YouTube playlist**: paste a playlist link (`youtube.com/playlist?list=…`), optionally
+**Treat songs as** one genre (written as each song's import genre; owner-set genres still win), **Save**.
+It's listed at once while it's read, then "48 songs found, 31 new to the library. Downloading from the
+top.": its songs join the library like any other and download top first. Saving the same playlist again
+opens the saved one. A watch link carrying `list=` is one song (offered as **Add this song**); private
+lists and Liked Music use the YouTube login from Settings.
+
+Picking a playlist makes the Suggestions tab the playlist itself: played songs fade, the playing one
+says its deck, the next one too; songs still downloading are skipped, never waited for. **✕** skips a
+song in this playlist from now on (Undo for a few seconds), **✓** keeps it in Up next. **Playlist order**
+plays top to bottom; **Mix order** lets the planner reorder the rest for smoother tempo and key changes
+("#7 → 3rd · same key"). **At the end**: *Keep going* (default) continues with similar library songs
+seeded by the last one, then hands over to Vibe: Any; *Repeat playlist* starts again from #1; *Stop
+after last* fades out and ON AIR turns off. A notice warns when the last song is next.
+
+**↻** re-reads it from YouTube (also on its own when picked and the last sync is over a day old): new
+songs land at their YouTube position, removed ones leave the playlist only. **⋯**: Rename, Treat songs
+as…, Sync now, Open on YouTube, Remove playlist (no confirm: songs stay; if it was playing, the source
+falls back to Vibe: Any without a gap). Songs YouTube won't serve are listed once, then skipped quietly
+(Retry is in Library). Stored in `<library>/playlists.json`: per list id its `name`, `song_ids` (YouTube
+order), `genre`, `order` (`playlist`/`mix`), `at_end` (`keep_going`/`repeat`/`stop`), `excluded`,
+`synced_at`, `saved_at`. API: `GET/POST /api/playlists`, `POST /api/playlist {id}` (pick, null = None),
+`POST /api/playlists/{id}/sync`, `PATCH /api/playlists/{id}` (name, genre, order, at_end),
+`POST /api/playlists/{id}/exclude|unexclude {id}`, `DELETE /api/playlists/{id}`.
 
 ## Moods
 
@@ -213,7 +241,8 @@ Register it with Claude Code:
 
 Tools: now_playing, list_library, get_history, search_songs, get_suggestions (read-only);
 play_next, mix_now, set_next_effect, set_genre, start_party, stop_party, set_beat_to_beat,
-accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs, love_pair, avoid_pair. autodeck itself must be
+accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs, love_pair, avoid_pair,
+list_playlists (read-only), save_playlist, play_from_playlist, sync_playlist, remove_playlist. autodeck itself must be
 running (`AUTODECK_URL`, default http://127.0.0.1:8765). The forced next effect and "mix now" live on
 the server, so the page, the API and the assistant stay in sync.
 
