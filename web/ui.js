@@ -261,7 +261,9 @@ function openSheet(p) {
     top: ['Move to top', 'arrow-up-to-line', () => reorder(ids(), song.id, last.queue_locked ?? 0)],
     // Pin = the owner placed it here: it stops being an auto pick and keeps its spot.
     pin: ['Pin here', 'pin', () => reorder(ids(), song.id, ids().indexOf(song.id))],
-    remove: ['Remove from Up next', 'x', () => act(`/api/song/${song.id}`, 'DELETE'), 'danger'],
+    // Same as the row's ✕: drops it from the library (files stay, re-adding is instant). The board
+    // says "Remove from Up next", but there's no queue-only removal, so the label says what happens.
+    remove: ['Remove from library', 'x', () => act(`/api/song/${song.id}`, 'DELETE'), 'danger'],
   };
   const sub = [song.channel, song.bpm ? `${Math.round(song.bpm)} BPM` : null, song.status ? cap(song.status) : null].filter(Boolean).join(' · ');
   dlg.replaceChildren(el('div', { className: 'sheet-head' }, thumb(song),
