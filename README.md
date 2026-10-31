@@ -17,6 +17,43 @@ yt-dlp warns and some formats are missing.
 
 Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
 
+## Mac app
+
+Two ways to get an `autodeck.app`:
+
+**Thin launcher (dev, this Mac):** `scripts/make_mac_app.sh [--notarize] [--install]` builds a tiny
+app that runs `uv run python -m autodeck.desktop` in this repo, so it always runs the current code.
+It needs the repo, uv and the Homebrew tools on the Mac.
+
+**Standalone app / DMG (any Apple Silicon Mac, nothing installed):**
+
+    scripts/build_standalone.sh                 # dist/autodeck.app + dist/autodeck-<version>.dmg, notarized
+    scripts/build_standalone.sh --no-notarize   # signed only, for quick iterations
+
+Users open the DMG, drag autodeck to Applications and open it. Build requirements (build Mac only):
+uv, Xcode command line tools, `brew install ffmpeg rubberband deno dylibbundler`, the Developer ID
+Application certificate (`AUTODECK_SIGN_ID`, SHA-1, defaults to ours) and notarytool credentials
+under the keychain profile `autodeck` (`AUTODECK_NOTARY_PROFILE`):
+`xcrun notarytool store-credentials autodeck --apple-id <apple id> --team-id HRP3W3WRHZ`.
+
+- **What's inside:** a PyInstaller build of `autodeck.desktop` (Python 3.12, torch, essentia,
+  onnxruntime, CTranslate2, librosa/numba, pywebview, yt-dlp), the web UI, the models (beat_this
+  checkpoint, Discogs-EffNet, Whisper tiny: first launch downloads nothing) and ffmpeg, ffprobe,
+  rubberband and deno in `Contents/Resources/bin`, relinked to dylibs inside the app. Every Mach-O
+  file is signed with the hardened runtime; the only entitlements are
+  `allow-unsigned-executable-memory` for the app (numba's JIT) and `allow-jit` for deno (V8), see
+  `scripts/standalone/*.plist`. About 1.3 GB installed, ~550 MB DMG.
+- **Data:** same places as the dev version: library and settings in
+  `~/Library/Application Support/autodeck/`, re-fetchable caches (numba, lookups) in
+  `~/Library/Caches/autodeck/`, log in `~/Library/Logs/autodeck.log`. Nothing is written inside the app.
+- **yt-dlp updates itself:** YouTube breaks old yt-dlp within weeks, so once a day (in the
+  background) the app asks PyPI for a newer yt-dlp and the yt-dlp-ejs version it pins, checks the
+  sha256 and unpacks both into `~/Library/Application Support/autodeck/pylib/<version>/`. The next
+  launch uses it; the two newest are kept and one that won't import is dropped.
+- **First run:** pick where your YouTube login comes from in **Settings → YouTube login from**
+  (Chrome by default; Safari needs Full Disk Access for autodeck; "none" = public videos only).
+  macOS asks once for Keychain access to the browser's cookies: click Always Allow.
+
 ## First run
 
 - **Model downloads, about 100–170 MB in total, once:** the beat_this checkpoint (~77 MB, torch hub
@@ -26,8 +63,9 @@ Set `AUTODECK_NO_BROWSER=1` to skip opening the tab.
 - **Keychain prompt:** yt-dlp reads your YouTube login from Chrome, and macOS asks for Keychain
   access to "Chrome Safe Storage". Click **Always Allow**, or it asks again on every download.
   Cookies are read live by yt-dlp and never written to disk or logged by autodeck.
-- **`AUTODECK_BROWSER`** picks the browser to read cookies from (default `chrome`; also e.g.
-  `firefox`, `safari`, `brave`). `AUTODECK_BROWSER=none` uses no cookies at all, which works for
+- **Settings → YouTube login from** picks the browser to read cookies from (Chrome, Safari,
+  Firefox, Brave, Edge or none; default Chrome; saved in `settings.json` in the app's data folder).
+  The **`AUTODECK_BROWSER`** env var overrides it (any yt-dlp browser name). `AUTODECK_BROWSER=none` uses no cookies at all, which works for
   public videos and playlists but not for Liked Music. Use `none` for unattended runs and tests, since
   the Keychain prompt blocks them.
 - **`AUTODECK_LIBRARY`** moves the library cache (default `~/Library/Application Support/autodeck/library/`). It holds one folder per
