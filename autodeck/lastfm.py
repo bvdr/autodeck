@@ -1,8 +1,8 @@
 """Last.fm lookups for party mode: tags, listener counts, similar tracks, tag charts.
 
 Free API key (personal, non-commercial use per the Last.fm API terms), read from the env var
-LASTFM_API_KEY or ~/.config/autodeck/lastfm.env, never from the repo. Responses are cached
-on disk for a week (<library>/lastfm-cache/): the terms ask for caching, and party mode asks
+LASTFM_API_KEY or ~/Library/Application Support/autodeck/lastfm.env (old: ~/.config/autodeck/), never
+from the repo. Responses are cached on disk for a week (~/Library/Caches/autodeck/lastfm-cache/): the terms ask for caching, and party mode asks
 the same questions every few minutes. Every call returns empty results instead of raising
 when Last.fm is unreachable or no key is set: party mode degrades, playback never breaks.
 """
@@ -21,7 +21,8 @@ from . import config
 log = logging.getLogger(__name__)
 
 API = "https://ws.audioscrobbler.com/2.0/"
-KEY_FILE = Path.home() / ".config" / "autodeck" / "lastfm.env"
+# The Mac app's data folder first; ~/.config is where the key was saved before 2026-10-31.
+KEY_FILES = (config.APP_SUPPORT / "lastfm.env", Path.home() / ".config" / "autodeck" / "lastfm.env")
 CACHE_TTL = 7 * 24 * 3600
 TIMEOUT = 10
 _MIN_GAP = 0.25  # s between live calls: well under Last.fm's rate limit
@@ -31,18 +32,19 @@ _last_call = 0.0
 def api_key() -> str | None:
     if os.environ.get("LASTFM_API_KEY"):
         return os.environ["LASTFM_API_KEY"].strip()
-    try:
-        for line in KEY_FILE.read_text().splitlines():
-            if line.startswith("LASTFM_API_KEY="):
-                return line.split("=", 1)[1].strip() or None
-    except OSError:
-        pass
+    for f in KEY_FILES:
+        try:
+            for line in f.read_text().splitlines():
+                if line.startswith("LASTFM_API_KEY="):
+                    return line.split("=", 1)[1].strip() or None
+        except OSError:
+            continue
     return None
 
 
 def _cache_file(params: dict) -> Path:
     h = hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:20]
-    return config.library_root() / "lastfm-cache" / f"{h}.json"
+    return config.cache_root() / "lastfm-cache" / f"{h}.json"
 
 
 def _call(method: str, **params) -> dict:

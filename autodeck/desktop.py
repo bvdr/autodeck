@@ -17,6 +17,7 @@ from pathlib import Path
 import uvicorn
 import webview
 
+from . import config
 from .server import create_app
 
 # 8765 like the browser version: the DJ MCP endpoint (/mcp) is registered at that address.
@@ -55,6 +56,9 @@ def _brand_process() -> None:
 def main() -> None:
     server = None
     if not _already_running():
+        moved = config.migrate_legacy_library()  # one-time move to ~/Library/Application Support
+        if moved:
+            print(moved, flush=True)
         # A second launch (or the browser version already running) just opens another window on
         # the existing engine instead of failing on a busy port.
         server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=PORT, log_level="warning"))
