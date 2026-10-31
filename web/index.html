@@ -61,6 +61,10 @@
     <symbol id="i-waves" viewBox="0 0 24 24"><path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/> <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/> <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/></symbol>
     <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M12 20h.01"/> <path d="M8.5 16.429a5 5 0 0 1 7 0"/> <path d="M5 12.859a10 10 0 0 1 5.17-2.69"/> <path d="M19 12.859a10 10 0 0 0-2.007-1.523"/> <path d="M2 8.82a15 15 0 0 1 4.177-2.643"/> <path d="M22 8.82a15 15 0 0 0-11.288-3.764"/> <path d="m2 2 20 20"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/> <path d="m6 6 12 12"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/> <circle cx="6" cy="18" r="3"/> <circle cx="18" cy="16" r="3"/></symbol>
+    <symbol id="i-list-checks" viewBox="0 0 24 24"><path d="M13 5h8"/> <path d="M13 12h8"/> <path d="M13 19h8"/> <path d="m3 17 2 2 4-4"/> <path d="m3 7 2 2 4-4"/></symbol>
+    <symbol id="i-list-plus" viewBox="0 0 24 24"><path d="M16 5H3"/> <path d="M11 12H3"/> <path d="M16 19H3"/> <path d="M18 9v6"/> <path d="M21 12h-6"/></symbol>
+    <symbol id="i-undo-2" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/> <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/> <circle cx="12" cy="12" r="3"/></symbol>
     <symbol id="i-external-link" viewBox="0 0 24 24"><path d="M15 3h6v6"/> <path d="M10 14 21 3"/> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
@@ -337,11 +341,29 @@
     </section>
 
     <div class="right">
-      <!-- Vibe: genres + moods (a theme turned into a song set from public playlists) + party. -->
+      <!-- Sources (design az4EM): one of Vibe (genres + moods) or Party plays at a time; the
+           dropdowns say which. The phone's Vibe tab keeps its chips (not redesigned yet). -->
       <section id="vibe" class="panel vibe" aria-labelledby="vibe-h">
-        <h2 id="vibe-h" class="label">Vibe</h2>
+        <div class="src-head desk-only">
+          <h2 id="vibe-h" class="label">Playing from</h2>
+          <p id="src-line" aria-live="polite"></p>
+        </div>
+        <div class="src-row desk-only">
+          <div class="src-wrap">
+            <button id="src-vibe" type="button" class="src-select" aria-haspopup="true" aria-expanded="false" aria-controls="vibe-menu">
+              <span class="k">Vibe</span><span class="v"><i class="dot" aria-hidden="true"></i><span></span></span>
+              <svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+            <div id="vibe-menu" class="pop src-menu" role="group" aria-label="Vibe" hidden></div>
+          </div>
+          <div class="src-wrap">
+            <button id="src-party" type="button" class="src-select" aria-haspopup="true" aria-expanded="false" aria-controls="party-menu">
+              <span class="k">Party</span><span class="v"><i class="dot" aria-hidden="true"></i><span></span></span>
+              <svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+            <div id="party-menu" class="pop src-menu" role="group" aria-label="Party" hidden></div>
+          </div>
+        </div>
         <p class="label phone-only sub-label">Genre</p>
-        <div id="genres" class="chips" role="group" aria-label="Genre"></div>
+        <div id="genres" class="chips phone-only" role="group" aria-label="Genre"></div>
         <form id="mood-form" class="composer" hidden>
           <div class="row-fields">
             <label class="field"><svg class="i"><use href="#i-sparkles"/></svg>
@@ -361,30 +383,36 @@
         <p class="label phone-only sub-label">Moods</p>
         <div id="mood-list" class="chips" role="group" aria-label="Moods"></div>
         <p id="mood-msg" class="report" role="status" aria-live="polite" hidden></p>
-        <div class="party-row">
+        <div class="party-row phone-only">
           <h3 id="party-h" class="label">Party</h3>
           <div id="party-btns" class="segmented" role="group" aria-labelledby="party-h"></div>
           <p id="party-hint" class="hint"></p>
         </div>
-        <!-- Party mode: suggestions are songs you don't have, accept or reject. -->
-        <div id="sugg-wrap" hidden>
-          <div class="panel-head">
-            <h3 class="label">Suggestions</h3>
-            <button id="sugg-refresh" type="button" class="icon-btn" title="Refresh suggestions" aria-label="Refresh suggestions">
-              <svg class="i"><use href="#i-refresh-cw"/></svg></button>
-          </div>
-          <p id="sugg-msg" class="dim small" role="status" aria-live="polite"></p>
-          <ul id="sugg" class="list"></ul>
-        </div>
       </section>
 
-      <section id="logs" class="panel logs" aria-label="Played, pairs and library">
+      <section id="logs" class="panel logs" aria-label="Suggestions, played, pairs and library">
         <div class="tabs" role="tablist">
-          <button type="button" role="tab" id="tab-played" aria-controls="pane-played" aria-selected="true">Played</button>
+          <button type="button" role="tab" id="tab-sugg" aria-controls="pane-sugg" aria-selected="true">Suggestions <span class="n"></span></button>
+          <button type="button" role="tab" id="tab-played" aria-controls="pane-played" aria-selected="false" tabindex="-1">Played</button>
           <button type="button" role="tab" id="tab-pairs" aria-controls="pane-pairs" aria-selected="false" tabindex="-1">Pairs <span class="n"></span></button>
           <button type="button" role="tab" id="tab-library" aria-controls="pane-library" aria-selected="false" tabindex="-1">Library <span class="n"></span></button>
         </div>
-        <div id="pane-played" role="tabpanel" aria-labelledby="tab-played">
+        <!-- The draft (design TTMRy 04/05/08): a proposal from the active source, not the queue.
+             ✓ puts a song in Up next, ✕ never suggests it for this source again (Undo for a few s). -->
+        <div id="pane-sugg" role="tabpanel" aria-labelledby="tab-sugg">
+          <div class="draft-head">
+            <p id="sugg-msg" class="dim small" role="status" aria-live="polite"></p>
+            <button id="sugg-all" type="button" class="btn" hidden><svg class="i"><use href="#i-list-plus"/></svg><span></span></button>
+          </div>
+          <ul id="sugg" class="list"></ul>
+          <div id="sugg-done" class="empty-state done" hidden>
+            <svg class="i"><use href="#i-list-checks"/></svg>
+            <p class="t"></p>
+            <p class="d"></p>
+            <button type="button" class="btn"></button>
+          </div>
+        </div>
+        <div id="pane-played" role="tabpanel" aria-labelledby="tab-played" hidden>
           <ol id="history" class="list"></ol>
           <div id="history-empty" class="empty-state" hidden>
             <svg class="i"><use href="#i-history"/></svg>

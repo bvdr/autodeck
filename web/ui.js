@@ -1,5 +1,5 @@
-// Everything that isn't audio: API calls, the vibe panel (genres, moods, party), Up next,
-// Played / Pairs / Library, search, "Or start with", add-by-link, notices and phone tabs.
+// Everything that isn't audio: API calls, the sources panel (Vibe / Party dropdowns; the phone's
+// genre, mood and party chips), Up next, Suggestions / Played / Pairs / Library, search, "Or start with", add-by-link, notices and phone tabs.
 import { sortable } from './sortable.js';
 const $ = (sel) => document.querySelector(sel);
 // Queue-row drags carry this type so the URL drop zone can ignore them.
@@ -113,7 +113,7 @@ function queueRow(song, i, s, ids, prevId) {
     el('span', { className: 'text' },
       el('span', { className: 't' }, song.title, loved ? ' ' : null, loved ? icon('flame') : null),
       loved ? el('span', { className: 's why', textContent: `You loved it after ${titleOf(prevId)}` })
-        : el('span', { className: 's', textContent: song.channel })),
+        : el('span', { className: 's', textContent: [song.channel, song.kept_from ? `kept from ${song.kept_from}` : null].filter(Boolean).join(' · ') })),
     el('span', { className: 'meta', textContent: songMeta(song), title: 'BPM  key  danceability' }),
     loved ? badge('loved', 'Loved after this') : pair === 'avoided' ? badge('avoided', 'Avoided pair')
       : locked ? badge('locked', 'Locked in') : pinned ? badge('pinned') : badge(song.status, cap(song.status), song.error),
@@ -136,7 +136,8 @@ function renderQueue(s) {
   $('#requested').replaceChildren(...(s.requested ?? []).map((q) => el('li', { className: 'row' },
     el('span', { className: 'lead' }, icon('list-start')),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: q.title }),
-      el('span', { className: q.status === 'failed' ? 's err' : 's', textContent: q.error || 'Plays next once ready' })),
+      el('span', { className: q.status === 'failed' ? 's err' : 's', textContent: q.error
+        || ['Plays next once ready', q.kept_from ? `kept from ${q.kept_from}` : null].filter(Boolean).join(' · ') })),
     badge(q.status, cap(q.status), q.error),
     el('span', { className: 'acts' }, iconBtn('x', `Remove ${q.title}`, () => act(`/api/song/${q.id}`, 'DELETE'), 'remove')))));
   $('#queue-empty').hidden = s.queue.length + (s.requested?.length ?? 0) > 0;
@@ -156,6 +157,7 @@ function render(s) {
   $('#b2b').setAttribute('aria-checked', String(!!s.beat_to_beat));
   renderParty(s);
   renderMoods(s, moods);
+  renderSources(s);
   const notice = $('#notice');
   notice.hidden = !s.notice;
   notice.querySelector('span').textContent = s.notice ?? '';
@@ -264,6 +266,12 @@ async function buildMood(theme, typed = theme) {
   }
 }
 
+async function deleteMood(s, name, n) {
+  const wasOn = s.genre === name;
+  await act(`/api/mood/${encodeURIComponent(name)}`, 'DELETE');
+  moodReport('info', `Removed ${name}. Its ${n} songs stay in your library.${wasOn ? ' Back to Any.' : ''}`);
+}
+
 function renderMoods(s, m) {
   const chips = Object.entries(m).filter(([name]) => !building.has(name)).map(([name, n]) => {
     const on = s.genre === name && !s.party;
@@ -271,19 +279,16 @@ function renderMoods(s, m) {
       el('button', { type: 'button', className: 'name', 'aria-pressed': String(on),
         onclick: () => act('/api/genre', 'POST', { genre: name }) }, name, el('span', { className: 'n', textContent: String(n) })),
       iconBtn('refresh-cw', `Refresh mood ${name}: add more songs from the playlists`, () => buildMood(name)),
-      iconBtn('x', `Delete mood ${name} (songs stay)`, async () => {
-        const wasOn = s.genre === name;
-        await act(`/api/mood/${encodeURIComponent(name)}`, 'DELETE');
-        moodReport('info', `Removed ${name}. Its ${n} songs stay in your library.${wasOn ? ' Back to Any.' : ''}`);
-      }));
+      iconBtn('x', `Delete mood ${name} (songs stay)`, () => deleteMood(s, name, n)));
   });
   const progress = [...building.keys()].map((name) => el('span', { className: 'mood-chip building', role: 'status' },
     icon('loader', 'spin'), name, el('small', { textContent: 'reading playlists…' })));
   $('#mood-list').replaceChildren(...progress, ...chips);
 }
 
-// --- played / pairs / library ----------------------------------------------------------
-let logTab = 'played', histFor, pairsFor, pairFilter = 'all', libFilter = 'all';
+// --- suggestions / played / pairs / library ---------------------------------------------
+const TABS = ['sugg', 'played', 'pairs', 'library'];
+let logTab = 'sugg', histFor, pairsFor, pairFilter = 'all', libFilter = 'all';
 
 function renderLogs(s) {
   $('#tab-pairs .n').textContent = String(Object.keys(s.pairs ?? {}).length);
@@ -296,7 +301,7 @@ function renderLogs(s) {
 
 function showTab(name) {
   logTab = name;
-  for (const t of ['played', 'pairs', 'library']) {
+  for (const t of TABS) {
     const on = t === name;
     $(`#tab-${t}`).setAttribute('aria-selected', String(on));
     $(`#tab-${t}`).tabIndex = on ? 0 : -1;
@@ -376,65 +381,233 @@ function renderLibrary(s) {
 
 // --- party mode ---------------------------------------------------------------
 const FLAVOR_LABEL = { hits: 'Hits', oldies: 'Oldies', latino: 'Latino' };
-let suggFor = null; // "playing|party" the suggestions list was loaded for
+
+// --- sources (Vibe / Party dropdowns, design mNazX) ------------------------------------
+/** "Playing from" sentence for state.source (null = Any with party off). */
+export function sourceSentence(src) {
+  if (!src) return 'Next songs come from your whole library, auto-ordered.';
+  if (src.kind === 'party') return 'Party is on: crowd-pleasers, energy building.';
+  return `Next songs come from the ${src.name} ${src.kind}.`;
+}
+/** What each dropdown shows. The active one (the source that's on) gets the outline and red dot;
+ * the other shows its default (Any / Off) dimmed. */
+export function sourceSelects(s) {
+  const party = s.party ?? null;
+  return {
+    vibe: { value: party ? 'Any' : s.genre, active: !party && s.genre !== 'Any' },
+    party: { value: party ? FLAVOR_LABEL[party] ?? cap(party) : 'Off', active: !!party },
+  };
+}
+/** The line over the draft. */
+export function draftNote(src) {
+  if (!src) return 'Pick a mood, genre or party to get suggestions';
+  if (src.kind === 'party') return `Drafted by Party: ${src.label}. ✓ adds to Up next, ✕ never suggests it in ${src.label} again.`;
+  return `Drafted from ${src.label}. ✓ adds to Up next, ✕ never suggests it here again.`;
+}
+// Party copy is the design's (TTMRy 02). Off's: "Vibe or playlist decides" until playlists ship.
+const PARTY_OPTS = [[null, 'Off', 'Vibe decides'], ['hits', 'Hits', 'Big songs everyone knows'],
+  ['oldies', 'Oldies', '60s to 90s classics'], ['latino', 'Latino', 'Reggaeton, salsa, bachata']];
+
+function renderSources(s) {
+  const sel = sourceSelects(s);
+  for (const k of ['vibe', 'party']) {
+    const b = $(`#src-${k}`);
+    b.classList.toggle('on', sel[k].active);
+    b.querySelector('.v span').textContent = sel[k].value;
+  }
+  $('#src-line').textContent = sourceSentence(s.source);
+  // An open menu is rebuilt so a mood that finished building (or was deleted) shows up.
+  if (!$('#vibe-menu').hidden) buildVibeMenu(s);
+}
+
+function option(label, desc, on, onclick, extra = []) {
+  return el('div', { className: `opt${on ? ' on' : ''}` },
+    el('button', { type: 'button', className: 'pick', 'aria-pressed': String(on), onclick },
+      el('span', { className: 'ot' }, el('b', { textContent: label }), desc ? el('small', { textContent: desc }) : null)),
+    ...extra, on ? icon('check', 'check') : null);
+}
+const pick = (path, body) => () => { closeMenus(); act(path, 'POST', body); };
+
+function buildVibeMenu(s) {
+  const moods = s.moods ?? {}, on = (g) => !s.party && s.genre === g;
+  const plain = s.genres.filter((g) => !(g in moods));
+  $('#vibe-menu').replaceChildren(
+    option('Any', 'Whole library, auto-ordered', on('Any'), pick('/api/genre', { genre: 'Any' })),
+    plain.length ? el('p', { className: 'label grp', textContent: 'Genres' }) : null,
+    ...plain.map((g) => option(g, '', on(g), pick('/api/genre', { genre: g }))),
+    Object.keys(moods).length || building.size ? el('p', { className: 'label grp', textContent: 'Moods' }) : null,
+    ...[...building.keys()].map((name) => el('div', { className: 'opt building', role: 'status' },
+      icon('loader', 'spin'), el('b', { textContent: name }), el('small', { textContent: 'reading playlists…' }))),
+    ...Object.entries(moods).filter(([name]) => !building.has(name)).map(([name, n]) => option(name, '', on(name),
+      pick('/api/genre', { genre: name }), [el('span', { className: 'n', textContent: String(n) }),
+        iconBtn('refresh-cw', `Refresh mood ${name}: add more songs from the playlists`, () => { closeMenus(); buildMood(name); }, 'hov'),
+        iconBtn('x', `Delete mood ${name} (songs stay)`, () => { closeMenus(); deleteMood(s, name, n); }, 'hov remove')])),
+    el('button', { type: 'button', className: 'opt-add', onclick: () => { closeMenus(); openComposer(); } }, icon('plus'), 'Build a mood'));
+}
+function buildPartyMenu(s) {
+  $('#party-menu').replaceChildren(...PARTY_OPTS.map(([f, label, desc]) =>
+    option(label, desc, (s.party ?? null) === f, pick('/api/party', { flavor: f }))));
+}
+function toggleMenu(name, open) {
+  const menu = $(`#${name}-menu`), btn = $(`#src-${name}`);
+  open ??= menu.hidden;
+  if (open) { closeMenus(); (name === 'vibe' ? buildVibeMenu : buildPartyMenu)(last); }
+  menu.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open) (menu.querySelector('.opt.on .pick') ?? menu.querySelector('.pick'))?.focus();
+}
+function closeMenus() {
+  for (const n of ['vibe', 'party']) { $(`#${n}-menu`).hidden = true; $(`#src-${n}`).setAttribute('aria-expanded', 'false'); }
+}
+
+// --- draft (Suggestions tab, design j2Exi) -------------------------------------------------
+export const UNDO_MS = 5000;
+/** Draft rows: {x, state: 'new' | 'working' | 'kept' | 'excluded', until}. An excluded row shows
+ * Undo until `until`, then leaves the list. Pure, so the timer logic is testable. */
+export function sweepDraft(rows, now) {
+  return rows.filter((r) => !(r.state === 'excluded' && r.until <= now));
+}
+/** Add all N: the rows nobody has decided on yet, in the order shown. */
+export const pendingRows = (rows) => rows.filter((r) => r.state === 'new');
+/** Every row decided (kept, or excluded and its Undo ran out): the "all reviewed" state. */
+export const allReviewed = (rows, total) => total > 0 && rows.every((r) => r.state === 'kept');
+
+let draft = { for: null, src: null, rows: [], total: 0, kept: 0, excluded: 0, loading: false, error: null };
+let sweepTimer = 0;
+const draftKey = (s) => (s.source ? `${s.source.key}|${s.source.kind === 'party' ? s.playing : s.moods?.[s.source.name] ?? ''}` : '');
 
 function renderParty(s) {
+  // Phone's Vibe tab: the segmented control, as before.
   $('#party-btns').replaceChildren(...[null, ...(s.flavors ?? [])].map((f) => el('button', {
     type: 'button', textContent: f ? FLAVOR_LABEL[f] ?? f : 'Off', 'aria-pressed': String((s.party ?? null) === f),
     onclick: () => act('/api/party', 'POST', { flavor: f }),
   })));
-  // Desktop has room for a short caption; the phone's Vibe tab explains a bit more (design).
-  $('#party-hint').replaceChildren(
-    el('span', { className: 'desk-only', textContent: s.party ? 'Crowd-pleasers first, energy building' : 'Crowd-pleasers first' }),
-    el('span', { className: 'phone-only', textContent: s.party
-      ? 'Crowd-pleasers first, energy building. Genres and moods are paused while Party is on.'
-      : 'Off: your genre or mood picks the songs. Hits, Oldies and Latino play crowd-pleasers and pause genres and moods.' }));
-  $('#sugg-wrap').hidden = !s.party;
-  const k = `${s.playing}|${s.party}`;
-  if (s.party && k !== suggFor) { suggFor = k; loadSuggestions(); }
-  if (!s.party) suggFor = null;
+  $('#party-hint').replaceChildren(el('span', { className: 'phone-only', textContent: s.party
+    ? 'Crowd-pleasers first, energy building. Genres and moods are paused while Party is on.'
+    : 'Off: your genre or mood picks the songs. Hits, Oldies and Latino play crowd-pleasers and pause genres and moods.' }));
+  const k = draftKey(s);
+  if (k !== draft.for) { draft.for = k; loadDraft(); }
 }
 
-function suggRow(x) {
-  const body = { artist: x.artist, title: x.title };
-  const accept = el('button', { type: 'button', className: 'btn primary', 'aria-label': `Accept ${x.title}`,
-    title: 'Add it and play it soon', onclick: async () => {
-      // In place: the button becomes a working state while YouTube is searched.
-      accept.replaceWith(working);
-      try {
-        setState(await api('/api/suggestions/accept', 'POST', body));
-        $('#sugg-msg').textContent = `${x.title}: preparing, plays next.`;
-        working.closest('li')?.remove();
-      } catch (err) { working.replaceWith(accept); $('#sugg-msg').textContent = err.message; }
-    } }, icon('check'), 'Accept');
-  const working = el('span', { className: 'badge working' }, icon('loader', 'spin'), 'Finding on YouTube…');
-  return el('li', { className: 'row sugg-row' },
+async function loadDraft() {
+  const want = draft.for;
+  draft = { ...draft, src: last?.source ?? null, rows: [], total: 0, kept: 0, excluded: 0, loading: !!last?.source, error: null };
+  renderDraft();
+  if (!last?.source) return;
+  try {
+    const r = await api('/api/suggestions');
+    if (draft.for !== want) return; // the source changed while Last.fm was answering
+    draft = { ...draft, src: r.source, rows: r.suggestions.map((x) => ({ x, state: 'new' })), total: r.suggestions.length, loading: false };
+  } catch (e) { draft = { ...draft, loading: false, error: e.message }; }
+  renderDraft();
+}
+
+const thumb = (x) => {
+  const t = el('span', { className: 'thumb', 'aria-hidden': 'true' }, icon('music'));
+  if (x.id) {
+    // No id = a Last.fm pick not on YouTube yet: the music-note tile stays.
+    const img = el('img', { src: `https://i.ytimg.com/vi/${x.id}/mqdefault.jpg`, alt: '', loading: 'lazy' });
+    img.onerror = () => img.remove();
+    t.append(img);
+  }
+  return t;
+};
+
+function draftRow(r) {
+  const { x } = r, src = draft.src;
+  const kept = r.state === 'kept', out = r.state === 'excluded', working = r.state === 'working';
+  const why = kept ? ['In Up next', x.artist].filter(Boolean).join(' · ')
+    : out ? 'Won’t be suggested for this source again'
+      : [x.artist, x.year, x.why, x.status && x.status !== 'ready' ? x.status : null].filter(Boolean).join(' · ');
+  const body = { id: x.id ?? null, artist: x.artist, title: x.title, source: src?.key };
+  const keep = async () => {
+    r.state = 'working'; renderDraft();
+    try {
+      setState(await api('/api/suggestions/accept', 'POST', body));
+      r.state = 'kept'; draft.kept++;
+    } catch (e) { r.state = 'new'; report(e); }
+    renderDraft();
+  };
+  const exclude = async () => {
+    try { await api('/api/suggestions/reject', 'POST', body); } catch (e) { report(e); return; }
+    r.state = 'excluded'; r.until = Date.now() + UNDO_MS; draft.excluded++;
+    renderDraft();
+    clearTimeout(sweepTimer);
+    sweepTimer = setTimeout(sweep, UNDO_MS + 50);
+  };
+  const undo = async () => {
+    try { await api('/api/suggestions/unreject', 'POST', body); } catch (e) { report(e); return; }
+    r.state = 'new'; draft.excluded--; renderDraft();
+  };
+  const bpm = el('span', { className: `meta${x.mixes ? ' mixes' : ''}`, textContent: x.bpm ? x.bpm.toFixed(1) : '–',
+    title: x.mixes ? 'BPM · beat-matches the current song' : x.bpm ? 'BPM' : 'Tempo unknown' });
+  return el('li', { className: `row draft-row ${r.state}` }, thumb(x),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: x.title }),
-      el('span', { className: 's', textContent: [x.artist, x.year, x.reason].filter(Boolean).join(' · ') })),
-    // BPM comes from Deezer (no audio yet); "mixes" = beat-matchable with what's playing.
-    el('span', { className: 'meta', textContent: x.bpm ? `${x.bpm.toFixed(1)} BPM` : '? BPM',
-      title: x.mixes ? 'Beat-matches the current song' : x.bpm ? 'Tempo too far to beat-match' : 'Tempo unknown' }),
-    x.mixes ? badge('mixes', 'mixes') : null,
-    el('span', { className: 'acts' },
-      iconBtn('x', `Never suggest ${x.title} again`, async () => {
-        try { showSugg((await api('/api/suggestions/reject', 'POST', body)).suggestions); } catch (err) { report(err); }
-      }, 'remove'), accept));
+      el('span', { className: 's', textContent: why })),
+    bpm, x.mixes && !kept && !out ? el('span', { className: 'sr-only', textContent: 'mixes with what’s playing' }) : null,
+    out ? el('button', { type: 'button', className: 'btn undo', onclick: undo }, icon('undo-2'), 'Undo')
+      : el('span', { className: 'acts' },
+        working ? el('span', { className: 'badge working' }, icon('loader', 'spin'), x.id ? 'Adding…' : 'Finding on YouTube…')
+          : el('button', { type: 'button', className: `icon-btn keep${kept ? ' on' : ''}`, disabled: kept,
+            'aria-label': kept ? `${x.title} is in Up next` : `Keep ${x.title}: add it to Up next`, title: kept ? 'In Up next' : 'Add to Up next', onclick: keep }, icon('check')),
+        kept || working ? null : el('button', { type: 'button', className: 'icon-btn excl', title: 'Never suggest it for this source',
+          'aria-label': `Never suggest ${x.title} for ${src?.label ?? 'this source'}`, onclick: exclude }, icon('x'))));
 }
 
-function showSugg(list) {
-  $('#sugg').replaceChildren(...list.map(suggRow));
-  if (list.length) { $('#sugg-msg').textContent = ''; return; }
-  if (last?.lastfm) { $('#sugg-msg').textContent = 'No suggestions right now.'; return; }
-  // No Last.fm key: a setup hint instead of an empty list (party ordering still works).
-  $('#sugg-msg').replaceChildren(el('span', { className: 'key-hint' },
-    el('b', {}, icon('key-round'), ' Suggestions need a free Last.fm API key'),
-    el('button', { type: 'button', className: 'btn', onclick: () => togglePop('settings', true) }, icon('settings'), 'Add it in Settings'),
-    el('a', { href: 'https://www.last.fm/api/account/create', target: '_blank', rel: 'noopener' }, 'Get a key at last.fm/api')));
+function sweep() {
+  draft.rows = sweepDraft(draft.rows, Date.now());
+  renderDraft();
 }
 
-async function loadSuggestions() {
-  $('#sugg-msg').textContent = 'Finding suggestions…';
-  try { showSugg((await api('/api/suggestions')).suggestions); } catch (e) { $('#sugg-msg').textContent = e.message; }
+async function addAll() {
+  const todo = pendingRows(draft.rows);
+  if (!todo.length) return;
+  for (const r of todo) r.state = 'working';
+  renderDraft();
+  try {
+    setState(await api('/api/suggestions/accept_all', 'POST', { items: todo.map((r) => ({ id: r.x.id ?? null, artist: r.x.artist, title: r.x.title })) }));
+    for (const r of todo) r.state = 'kept';
+    draft.kept += todo.length;
+  } catch (e) { for (const r of todo) if (r.state === 'working') r.state = 'new'; report(e); }
+  renderDraft();
+}
+
+function renderDraft() {
+  const { src, rows } = draft, n = pendingRows(rows).length;
+  const done = $('#sugg-done'), all = $('#sugg-all');
+  all.hidden = !n;
+  all.querySelector('span').textContent = `Add all ${n}`;
+  const msg = $('#sugg-msg');
+  if (draft.loading) msg.textContent = src?.kind === 'party' ? 'Finding suggestions…' : 'Drafting…';
+  else if (draft.error) msg.textContent = draft.error;
+  else msg.textContent = draftNote(src);
+  const reviewed = allReviewed(rows, draft.total);
+  const empty = !!src && !draft.loading && !draft.error && (reviewed || !rows.length);
+  $('#tab-sugg .n').textContent = src ? String(empty ? 0 : rows.length) : '';
+  $('#sugg').replaceChildren(...(empty ? [] : rows.map(draftRow)));
+  done.hidden = !empty;
+  msg.hidden = empty;
+  if (!empty) return;
+  if (src.kind === 'party' && !last?.lastfm && !draft.total) {
+    // No Last.fm key: a setup hint instead of an empty list (party ordering still works).
+    done.hidden = true; msg.hidden = false;
+    msg.replaceChildren(el('span', { className: 'key-hint' },
+      el('b', {}, icon('key-round'), ' Suggestions need a free Last.fm API key'),
+      el('button', { type: 'button', className: 'btn', onclick: () => togglePop('settings', true) }, icon('settings'), 'Add it in Settings'),
+      el('a', { href: 'https://www.last.fm/api/account/create', target: '_blank', rel: 'noopener' }, 'Get a key at last.fm/api')));
+    return;
+  }
+  const [title, detail] = reviewed
+    ? [`All ${draft.total} ${src.label} picks reviewed`, `${draft.kept} kept, ${draft.excluded} excluded. `]
+    : [`Nothing new from ${src.label}`, src.kind === 'party' ? 'Every pick so far is in Up next or excluded. ' : `Every ${src.label} song is in Up next or excluded. `];
+  // The one useful next step for the source (design TTMRy 08).
+  const next = src.kind === 'mood' ? ['Refresh the mood to read the playlists again for new picks.', `Refresh ${src.label}`, () => buildMood(src.name)]
+    : src.kind === 'party' ? ['New picks come as the music changes.', 'Find more', () => { draft.for = null; renderParty(last); }]
+      : ['Build a mood to draft songs from public playlists.', 'Build a mood', () => openComposer()];
+  done.querySelector('.t').textContent = title;
+  done.querySelector('.d').textContent = detail + next[0];
+  done.querySelector('.btn').replaceChildren(icon(src.kind === 'genre' ? 'plus' : 'refresh-cw'), next[1]);
+  done.querySelector('.btn').onclick = next[2];
 }
 
 // --- search -----------------------------------------------------------------
@@ -616,7 +789,7 @@ async function saveKey(key) {
   try {
     showSettings(await api('/api/settings/lastfm', 'PUT', { key }));
     $('#lastfm-key').value = ''; // never keep the key in the page once saved
-    suggFor = null; // suggestions may work now (or stop): reload them on the next state
+    draft.for = null; // suggestions may work now (or stop): reload them on the next state
     setState(await api('/api/state'));
   } catch (e) {
     err.textContent = e.message; // the server's 400 {error}: bad format or Last.fm said no
@@ -636,7 +809,12 @@ export function toTab(name) {
 export function initUi(stateCb, h = {}) {
   onState = stateCb;
   hooks = { ...hooks, ...h };
-  $('#sugg-refresh').addEventListener('click', loadSuggestions);
+  // Sources: Vibe / Party dropdowns (one open at a time; Esc or a click outside closes).
+  for (const n of ['vibe', 'party']) {
+    $(`#src-${n}`).addEventListener('click', () => toggleMenu(n));
+    $(`#${n}-menu`).addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenus(); $(`#src-${n}`).focus(); } });
+  }
+  $('#sugg-all').addEventListener('click', addAll);
   // Mood composer
   $('#mood-theme').addEventListener('input', checkMood);
   $('#mood-form').addEventListener('submit', (e) => {
@@ -648,7 +826,7 @@ export function initUi(stateCb, h = {}) {
   $('#mood-close').addEventListener('click', () => { closeComposer(); $('#genres .build')?.focus(); });
   for (const b of document.querySelectorAll('.ideas .chip')) b.addEventListener('click', () => { $('#mood-theme').value = b.textContent; checkMood(); $('#mood-theme').focus(); });
   // Played / Pairs / Library tabs (arrow keys move between them, per the ARIA tabs pattern).
-  const tabs = ['played', 'pairs', 'library'];
+  const tabs = TABS;
   for (const t of tabs) $(`#tab-${t}`).addEventListener('click', () => showTab(t));
   $('.tabs').addEventListener('keydown', (e) => {
     const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
@@ -674,6 +852,7 @@ export function initUi(stateCb, h = {}) {
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest('#search-panel, #search-form') && !matchMedia('(max-width: 600px)').matches) panel.hidden = true;
     if (!e.target.closest('.pop, #add-btn, #menu-btn, #settings-btn')) closePops();
+    if (!e.target.closest('.src-wrap')) closeMenus();
   });
   // Openers
   for (const b of document.querySelectorAll('[data-op]')) b.addEventListener('click', () => { opTab = b.dataset.op; $('#op-find').value = ''; renderOpeners(last); });
