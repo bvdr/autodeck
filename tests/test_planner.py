@@ -327,3 +327,29 @@ def test_dropswap_is_never_picked_automatically():
     a, b = make_song(150), make_song(90, body_at=None)
     assert pick_transition(a, b).kind == "echo"
     assert pick_transition(a, b, force="dropswap").kind == "dropswap"
+
+
+def test_order_loved_pair_wins_and_avoided_pair_is_never_adjacent():
+    cur = make_song(122, "8A", id="cur")
+    near, far = make_song(123, "9A", id="near"), make_song(118, "3B", id="far")
+    assert order(cur, [near, far], {}, "Any")[0].id == "near"
+    # Loved cur -> far outweighs a better tempo/key match.
+    assert order(cur, [near, far], {}, "Any", pairs={"cur>far": "loved"})[0].id == "far"
+    # Loved the other way round counts half: enough between two equal matches.
+    twin = make_song(118, "3B", id="twin")
+    assert order(cur, [twin, far], {}, "Any", pairs={"far>cur": "loved"})[0].id == "far"
+    assert order(cur, [far, twin], {}, "Any", pairs={"twin>cur": "loved"})[0].id == "twin"
+    # Avoided cur -> near: near is not next, even though it mixes best.
+    res = order(cur, [near, far], {}, "Any", pairs={"cur>near": "avoided"})
+    assert [s.id for s in res] == ["far", "near"]
+
+
+def test_order_avoided_pair_used_only_when_nothing_else_is_left():
+    cur, only = make_song(122, id="cur"), make_song(122, id="only")
+    assert [s.id for s in order(cur, [only], {}, "Any", pairs={"cur>only": "avoided"})] == ["only"]
+
+
+def test_order_pins_beat_pair_memory():
+    cur, a, b = make_song(122, id="cur"), make_song(122, id="a"), make_song(122, id="b")
+    res = order(cur, [a, b], {0: "a"}, "Any", pairs={"cur>a": "avoided", "cur>b": "loved"})
+    assert res[0].id == "a"

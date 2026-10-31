@@ -45,13 +45,37 @@ def score_pair(a: Song, b: Song) -> float:
             + 0.2 * (1 - abs(_energy(a) - _energy(b))))
 
 
+# Pair memory (owner's 🔥/👎 on a hand-over, <library>/pairs.json): a loved a->b adds this to the
+# mix score, b->a half of it (songs that blend one way usually blend the other way too). The
+# score_pair range is 0..1, so a loved pair wins against all but a much better tempo/key match.
+LOVED_BONUS = 0.6
+
+
+def pair_key(a: str, b: str) -> str:
+    """Directional key of a hand-over a -> b in pairs.json."""
+    return f"{a}>{b}"
+
+
 def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: str,
-          bonus=None) -> list[Song]:
+          bonus=None, pairs: dict[str, str] | None = None) -> list[Song]:
     """Greedy set order: each next song is the best mix from the previous one.
 
     `bonus(prev, s) -> float` is added to the mix score (party mode: popularity and rising
     energy), so it only reorders songs that mix about equally well.
+    `pairs` (pair_key -> "loved" | "avoided") is the owner's pair memory: a loved pair gets
+    LOVED_BONUS, and an avoided pair is never placed back to back unless nothing else is left.
+    Pins still win over both.
     """
+    pairs = pairs or {}
+
+    def score(prev: Song, s: Song) -> float:
+        v = score_pair(prev, s) + (bonus(prev, s) if bonus else 0.0)
+        if pairs.get(pair_key(prev.id, s.id)) == "loved":
+            v += LOVED_BONUS
+        elif pairs.get(pair_key(s.id, prev.id)) == "loved":
+            v += LOVED_BONUS / 2
+        return v
+
     ready = [s for s in candidates if s.status == "ready" and s.analysis and s.id != current.id]
     pool = [s for s in ready if genre == ANY_GENRE or s.effective_genre() == genre]
     by_id = {s.id: s for s in ready}
@@ -69,7 +93,9 @@ def order(current: Song, candidates: list[Song], pinned: dict[int, str], genre: 
         if i in pins:
             nxt = pins[i]
         else:
-            nxt = max(rest, key=lambda s: score_pair(prev, s) + (bonus(prev, s) if bonus else 0.0))
+            # Avoided successors only when every remaining song is one (never go silent).
+            ok = [s for s in rest if pairs.get(pair_key(prev.id, s.id)) != "avoided"] or rest
+            nxt = max(ok, key=lambda s: score(prev, s))
             rest.remove(nxt)
         out.append(nxt)
         prev = nxt
