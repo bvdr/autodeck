@@ -198,8 +198,8 @@ Pick **Hits**, **Oldies** or **Latino** in the *Party* dropdown (*Off* returns t
 
 ## Played log
 
-**Played** (next to *Pairs* and *Library*) lists every song that started, newest first, with time,
-BPM, genre and the effect it came in with. Stored as JSON Lines in `<library>/history.jsonl`.
+**Played** (next to *Pairs* and *Library*) lists every song that started, newest first, with time, the song it was
+mixed in from and the effect it came in with. Stored as JSON Lines in `<library>/history.jsonl`.
 
 ## Screen
 
@@ -213,12 +213,26 @@ tab keeps genre, mood and party buttons; Suggestions is in the Queue tab).
 
 ## Pair memory
 
-Rate a hand-over with **🔥** (nailed it) or **👎** (didn't work): on its Played row, or on the sign's
-"How was that mix?" question that shows for 30 s after each mix. Tap again to undo. Verdicts are
-directional (A → B) and stored in `<library>/pairs.json` (`{"A>B": "loved" | "avoided"}`), written on
-every rating. The planner gives a loved pair a bonus (half of it for B → A) and never places an
-avoided pair back to back unless nothing else is ready. **Pairs** lists them: *Play pair* queues
-both songs next, ✕ forgets the pair.
+Rate a hand-over with **🔥** (nailed it) or **👎** (didn't work): on its Played row (which rates the
+mix *into* that song), or on the sign's "How was that mix?" question that shows for 30 s after each
+mix and then goes by itself (on a phone it has a ✕). Tapping the pressed one again undoes your last
+rating. A 👎 asks one optional question, "What was off?": *These songs don't go together* or *Wrong
+effect for them*.
+
+Pairs are directional (A → B) and stored in `<library>/pairs.json`, written on every rating:
+`{"A>B": {"effect": "bass_swap", "loved": 3, "avoided": 0, "why": null, "last": "2026-10-25T22:14:00+0300"}}`.
+🔥 adds one; 👎 resets the pair to avoided (`why`: `"songs"`, `"effect"` or null). Files from the first
+pair memory (`"loved"` / `"avoided"`) are read as one 🔥 / a 👎. Songs removed from the library keep
+their pairs, so adding the link again brings the memory back.
+
+The planner adds a bonus to a loved A → B (+0.6, +0.1 per extra 🔥, at most +0.9; half of that for
+B → A), and never places an avoided pair (reason *songs* or none) back to back unless nothing else is
+ready. It only reorders ready songs that haven't played yet; pins still win. *Wrong effect* only
+drops that effect from Auto for the pair. Auto replays the effect you loved for a pair ("Auto · Bass
+swap (you loved it)"), the sign says "Next mix 🔥 a pair you loved", Up next says why ("You loved it
+after Despacito · Bass swap · 3×", "Tequila moved 3 later: you 👎 it right after Despacito").
+**Pairs** lists them (All / Loved / Avoided, most loved first): *Play pair* puts both songs next, in
+order; ✕ forgets the pair.
 
 ## Search
 
@@ -249,7 +263,8 @@ Register it with Claude Code:
 
 Tools: now_playing, list_library, get_history, search_songs, get_suggestions (read-only);
 play_next, mix_now, set_next_effect, set_genre, start_party, stop_party, set_beat_to_beat,
-accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs, love_pair, avoid_pair,
+accept_suggestion, reject_suggestion, set_song_genre, remove_song, add_songs, love_pair, avoid_pair (optional
+`why`: songs / effect), list_pairs (read-only), forget_pair,
 list_playlists (read-only), save_playlist, play_from_playlist, sync_playlist, remove_playlist. autodeck itself must be
 running (`AUTODECK_URL`, default http://127.0.0.1:8765). The forced next effect and "mix now" live on
 the server, so the page, the API and the assistant stay in sync.
