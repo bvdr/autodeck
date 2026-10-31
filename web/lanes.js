@@ -30,9 +30,16 @@ export const xAt = (t, left, width, span = VIEW_SPAN) => ((t - left) / span) * w
 /** Value of a deck's `gain` at ctx time t, from schedule.plan() events (the same events the
  * deck's AudioParam got), so the drawn curve is exactly what is heard. Web Audio semantics:
  * a linear/exp ramp runs from the previous event's time and value. exp is drawn as linear. */
+// A plan's events never change, and the lanes sample each curve ~65 times a frame: filter and
+// sort the gain events once per events array, not once per sample.
+const gainCache = new WeakMap();
 export function gainAt(events, t) {
   let lastT = -Infinity, lastV = 0;
-  const gains = events.filter((e) => e.param === 'gain').sort((a, b) => a.time - b.time);
+  let gains = gainCache.get(events);
+  if (!gains) {
+    gains = events.filter((e) => e.param === 'gain').sort((a, b) => a.time - b.time);
+    gainCache.set(events, gains);
+  }
   for (const e of gains) {
     if (e.type === 'set') {
       if (e.time > t) return lastV;

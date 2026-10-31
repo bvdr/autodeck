@@ -25,6 +25,7 @@ const M = {
   force: null,     // owner's forced effect for the current song's exit (null = app's pick)
   fxPlan: null,    // the plan the effect picker was last built for
   rate: null,      // { from, to, title, until } the hand-over the sign asks about
+  on: false,       // live mode (see live() / setLive())
   lastPlan: null,  // the plan that just finished: keeps the lane view steady through the swap
 };
 // Reload resumes where you were: the playing song + position, saved about once a second.
@@ -60,7 +61,10 @@ const status = (t, sticky = false) => {
 const at = (ctxTime, fn) => M.timers.push(setTimeout(fn, Math.max(0, ctxTime - now()) * 1000));
 const clearTimers = () => { M.timers.forEach(clearTimeout); M.timers = []; };
 const curId = () => M.decks[M.cur].info?.id;
-const live = () => !!M.ctx && M.decks.some((d) => d.busy);
+// Live = the mixer owns the screen (from the first song starting until it stops for good).
+// One explicit flag, not "is a deck busy": during an auto-restart gap no deck is busy, and the
+// idle UI (opener, lane note) must not flash in and leave stale state behind.
+const live = () => M.on;
 
 // --- transitions ------------------------------------------------------------
 /** Ask the server for the transition out of `deck`'s song. `after` = rendered seconds. */
@@ -182,14 +186,36 @@ function songEnded(deck) {
     // start the next queued song straight away. Only a truly empty queue stops the music.
     const next = getState()?.queue.find((q) => q.id !== deck.info?.id);
     if (next) {
-      startSong(next).catch((e) => { status(e.message); });
+      restart(next);
       return;
     }
     status('Stopped — end of queue. Add songs and press Play to start again.', true);
-    document.body.classList.replace('live', 'idle');
-    $('#play').disabled = false;
+    stopLive();
   }
   tryApply(); // a slot just freed: a waiting plan may now be scheduled
+}
+
+/** Auto-restart after a missed mix. The server may be restarting (that's often why the mix was
+ * missed), so retry a few times; if it still fails the music has stopped: back to the PLAY
+ * lamp, never a silent page that still says ON AIR. */
+const RESTART_TRIES = 3;
+function restart(song, tries = 1) {
+  startSong(song).catch((e) => {
+    if (tries < RESTART_TRIES) {
+      status(`Couldn't start ${song.title} (${e.message}) — retrying…`, true);
+      setTimeout(() => { if (live() && !M.decks.some((d) => d.busy)) restart(song, tries + 1); }, 3000);
+      return;
+    }
+    status(`Stopped: couldn't start ${song.title} (${e.message}). Press Play to try again.`, true);
+    stopLive();
+  });
+}
+
+/** The music stopped for good: idle UI (PLAY lamp, opener) again. */
+function stopLive() {
+  setLive(false);
+  const s = getState();
+  if (s) pickOpener(s);
 }
 
 // --- poll + replan ------------------------------------------------------------
@@ -276,9 +302,11 @@ function renderIdle() {
   const ready = c.ready ?? 0, coming = (c.queued ?? 0) + (c.downloading ?? 0) + (c.analyzing ?? 0);
   const empty = !s?.pool.length;
   document.body.classList.toggle('empty', empty);
-  const help = $('#side-help');
-  $('#side-idle').hidden = empty || !O.id;
-  help.hidden = !(empty || !O.id);
+  // Through show(): the live sign reuses these panels, and its cache must see every write.
+  for (const sel of ['#side-next', '#side-mix', '#side-rate']) show(sel, false);
+  show('.sign-side', true);
+  show('#side-idle', !(empty || !O.id));
+  show('#side-help', empty || !O.id);
   if (empty) {
     setText('#sign-kicker', 'First launch');
     setText('#sign-title', "Let's get some music in");
@@ -298,11 +326,12 @@ function renderIdle() {
   setText('#sign-kicker', r ? 'Resume where you left off' : coming && ready < 10 ? `${ready} songs ready · more on the way` : 'Ready to start with');
   setText('#sign-title', O.title);
   const stopped = r ? new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-  setText('#sign-sub', [O.channel, r ? `from ${fmt(O.at ?? 0)}` : 'first in Up next',
+  setText('#sign-sub', [O.channel, r ? (O.at != null ? `from ${fmt(O.at)}` : 'from the top') : 'first in Up next',
     r ? `stopped at ${stopped}` : null].filter(Boolean).join('  ·  '));
   const alt = $('#alt-btn');
   alt.innerHTML = '';
-  if (r) alt.append(icon(O.at != null ? 'rotate-ccw' : 'history'), O.at != null ? 'Start it at 0:00' : `Resume at ${fmt(r.pos)}`);
+  // "From the top" = the song's trimmed start (firstOffset), not literal 0:00 of the render.
+  if (r) alt.append(icon(O.at != null ? 'rotate-ccw' : 'history'), O.at != null ? 'Start from the top' : `Resume at ${fmt(r.pos)}`);
   else alt.append(icon('repeat'), 'Pick another opener');
   // Lane A: the opener, loaded; lane B: what follows it, still empty.
   setRole(0, r ? 'loaded · resumes here' : 'loaded · starts at 0:00', 'loaded');
@@ -315,7 +344,7 @@ function renderIdle() {
   $('#deck1 .title').textContent = nxt?.title ?? '—';
   $('#deck1 .artist').textContent = nxt ? `${nxt.channel} · loads next` : '';
   $('#deck1 .metaline').textContent = nxt ? [nxt.genre, nxt.bpm?.toFixed(1), nxt.camelot].filter(Boolean).join('  ') : '';
-  $('#lane-note').hidden = !nxt;
+  show('#lane-note', !!nxt);
   $('#lane-note span').textContent = nxt ? `Deck B stays empty until A is on air, then ${nxt.title} loads here` : '';
   setText('#xf-tag', 'READY');
 }
@@ -349,24 +378,37 @@ async function play() {
     await M.ctx.resume();
     const s = await api('/api/state');
     setState(s);
+    // Pressed before the first poll arrived: pick the opener (saved resume point first) now.
+    if (!O.id) pickOpener(s);
     // The opener on the PLAY lamp: the song that was playing before the reload (at its
     // position: the server's session still holds its time map, so /api/deck returns the
     // same render), or the first queued song, or one the owner loaded from "Or start with".
     const first = O.id ? { id: O.id, title: O.title } : s.queue[0];
     if (!first) throw new Error('Nothing ready to play yet — add songs first.');
     await startSong(first, O.id ? O.at : null, O.id === first.id ? O.info : null);
-    goLive();
   } catch (e) {
     status(e.message, true);
     $('#play').disabled = false;
   }
 }
 
-function goLive() {
-  document.body.classList.replace('idle', 'live');
-  $('#lane-note').hidden = true;
-  for (const el of ['#xfader', '#live-filter', '#live-echo']) $(el).disabled = false;
-  O.id = null; O.chosen = false; O.resume = null;
+/** Switch between the idle screen (PLAY lamp, opener) and the live one. Both share the sign
+ * and lanes, so the write caches are dropped on every switch: nothing written in one mode is
+ * trusted in the other (a stale cache once left idle buttons visible during live countdowns). */
+function setLive(on) {
+  M.on = on;
+  document.body.classList.toggle('live', on);
+  document.body.classList.toggle('idle', !on);
+  textCache.clear();
+  shown.clear();
+  idleKey = '';
+  $('#play').disabled = on;
+  for (const el of ['#xfader', '#live-filter', '#live-echo']) $(el).disabled = !on;
+  if (on) {
+    show('#lane-note', false);
+    show('#side-idle', false);
+    O.id = null; O.chosen = false; O.resume = null;
+  }
 }
 
 /** Start `song` from scratch on deck 0 (Play, Resume, or recovering from a missed mix).
@@ -388,6 +430,7 @@ async function startSong(song, at = null, info = null) {
   const offset = at != null ? Math.min(Math.max(at, 0), info.duration_rendered - 5) : S.firstOffset(info);
   d.start(track, now() + 0.1, Math.max(offset, 0), songEnded);
   status('');
+  if (!live()) setLive(true); // first Play, or Play after the music stopped
   onStarted(0);
 }
 
@@ -509,14 +552,19 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 function frame(ts) {
   const dt = Math.min(0.1, (ts - (lastTs || ts)) / 1000);
   lastTs = ts;
-  if (M.ctx && live()) liveFrame(dt); else idleFrame();
+  if (live()) liveFrame(dt); else idleFrame();
   requestAnimationFrame(frame);
 }
 
-/** Before Play: lane A shows the opener at its start (or resume) point, static. */
+/** Before Play: lane A shows the opener at its start (or resume) point, static, so it's drawn
+ * only when something it shows changes (opener, start point, lane size), not 60 times a second. */
+let idleKey = '';
 function idleFrame() {
   const info = O.info;
   const startAt = O.at ?? (info ? S.firstOffset(info) : 0);
+  const key = [info?.id, startAt, lanes[0].w, lanes[0].h, lanes[1].w, lanes[1].h].join('|');
+  if (key === idleKey) return;
+  idleKey = key;
   const view = { now: 0, left: laneLeft(0) };
   lanes[0].setInfo(info);
   lanes[0].draw({ zero: -startAt, startAt: null }, view, null, info ? { end: info.duration_rendered } : {});
@@ -597,10 +645,15 @@ function updateSign(t, p, mixing, inc, onAir, label) {
     const g = mixProgress(t, p.T0, p.length, p.bar);
     setText('#mix-name', label);
     setText('#mix-progress', g.bars ? `bar ${g.bar} of ${g.bars}  ·  ${fmt(g.left)} left` : `${fmt(g.left)} left`);
-    const bars = $('#mix-bars');
-    if (bars.childElementCount !== Math.min(g.bars, 16)) bars.replaceChildren(...Array.from({ length: Math.min(g.bars, 16) }, () => document.createElement('i')));
-    [...bars.children].forEach((b, k) => { b.className = k < g.bar - 1 ? 'done' : k === g.bar - 1 ? 'now' : ''; });
-    $('#mix-icon').setAttribute('href', `#i-${FX_ICON[p.kind] ?? 'blend'}`);
+    // Bar segments and icon change once per bar / per mix: rewrite only then, not every frame.
+    const bars = $('#mix-bars'), n = Math.min(g.bars, 16), bk = `${n}|${g.bar}`;
+    if (bars.dataset.k !== bk) {
+      bars.dataset.k = bk;
+      if (bars.childElementCount !== n) bars.replaceChildren(...Array.from({ length: n }, () => document.createElement('i')));
+      [...bars.children].forEach((b, k) => { b.className = k < g.bar - 1 ? 'done' : k === g.bar - 1 ? 'now' : ''; });
+    }
+    const href = `#i-${FX_ICON[p.kind] ?? 'blend'}`;
+    if (textCache.get('mix-icon') !== href) { textCache.set('mix-icon', href); $('#mix-icon').setAttribute('href', href); }
     side = 'mix';
   } else {
     const rest = s?.queue.filter((q) => q.id !== cur?.id) ?? [];
@@ -792,8 +845,12 @@ $('#b2b').addEventListener('click', async () => {
   const on = $('#b2b').getAttribute('aria-checked') !== 'true';
   try { setState(await api('/api/mode', 'POST', { beat_to_beat: on })); } catch (e) { report(e); }
 });
-$('#choose-btn').addEventListener('click', () => { const f = $('#op-find'); f.scrollIntoView({ block: 'center' }); f.focus(); });
+$('#choose-btn').addEventListener('click', () => {
+  if (live()) return;
+  const f = $('#op-find'); f.scrollIntoView({ block: 'center' }); f.focus();
+});
 $('#alt-btn').addEventListener('click', () => {
+  if (live()) return; // opener actions only exist before Play; never touch deck A while it plays
   if (O.resume) { O.at = O.at != null ? null : Math.max(0, O.resume.pos - 1); renderIdle(); return; }
   // Next song in Up next after the current opener (wraps around).
   const q = getState()?.queue ?? [];
@@ -803,12 +860,14 @@ $('#alt-btn').addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   const typing = e.target.closest?.('input, select, textarea, button, [role="listbox"], [contenteditable]');
   // Space plays (before the first song), "/" jumps to search: the design's keyboard hints.
-  if (e.key === ' ' && !typing && document.body.classList.contains('idle') && O.id) { e.preventDefault(); play(); }
+  if (e.key === ' ' && !typing && !live() && O.id) { e.preventDefault(); play(); }
   if (e.key === '/' && !e.target.closest?.('input, textarea, select')) { e.preventDefault(); focusSearch(); }
 });
 initUi(onState, {
   loadOpener: (song) => { if (!live()) loadOpener(song, null, true); },
   isLive: live,
 });
+// Canvas text (NOW tag, END/START) is drawn in Plex Mono: redraw the idle lanes once it has loaded.
+document.fonts?.ready.then(() => { idleKey = ''; });
 requestAnimationFrame(frame);
 poll();
