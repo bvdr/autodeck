@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime exceptions for the autodeck app process (Contents/MacOS/autodeck).
+     Keep this list minimal; every entry weakens the runtime's protection.
+
+     allow-unsigned-executable-memory: numba (librosa's onset/beat helpers) compiles functions
+       with LLVM at runtime and maps that machine code executable without MAP_JIT (llvmlite's
+       own memory manager), and reloads compiled functions from NUMBA_CACHE_DIR the same way.
+       Under the hardened runtime that mapping is refused without this entitlement and librosa
+       crashes on first use. (allow-jit alone is not enough: it only covers MAP_JIT memory.)
+
+     Deliberately NOT here:
+       disable-library-validation: every dylib/.so in the bundle is signed with our own
+         Developer ID, so library validation passes; the self-updated yt-dlp is pure Python.
+       allow-jit: nothing in this process allocates MAP_JIT memory (torch/onnxruntime/
+         ctranslate2 run precompiled kernels; WebKit's JS JIT runs in its own XPC process). -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+</dict>
+</plist>

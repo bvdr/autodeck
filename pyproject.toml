@@ -40,3 +40,8 @@ markers = [
     "slow: heavy tests (real audio analysis / rendering)",
     "network: tests that hit the real network (YouTube)",
 ]
+
+[dependency-groups]
+build = [
+    "pyinstaller>=6.22.3",
+]

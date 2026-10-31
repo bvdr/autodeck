@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime exception for the bundled deno (yt-dlp runs it to solve YouTube's JS
+     challenges). V8 compiles JavaScript into MAP_JIT memory, so it needs allow-jit; nothing else. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+</dict>
+</plist>
