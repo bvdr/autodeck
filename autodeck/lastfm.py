@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -21,8 +22,60 @@ from . import config
 log = logging.getLogger(__name__)
 
 API = "https://ws.audioscrobbler.com/2.0/"
-# The Mac app's data folder first; ~/.config is where the key was saved before 2026-10-31.
-KEY_FILES = (config.APP_SUPPORT / "lastfm.env", Path.home() / ".config" / "autodeck" / "lastfm.env")
+# ~/.config is where the key was saved before Settings existed (2026-10-31); still read.
+LEGACY_KEY_FILE = Path.home() / ".config" / "autodeck" / "lastfm.env"
+
+
+def key_file() -> Path:
+    """Where Settings saves the key: the app's data folder (beside a test library when
+    AUTODECK_LIBRARY is set, so tests never touch the real one)."""
+    base = config.library_root() if os.environ.get("AUTODECK_LIBRARY") else config.APP_SUPPORT
+    return base / "lastfm.env"
+
+
+def key_source() -> str | None:
+    """'env', 'settings', 'legacy' or None: where api_key() found the key."""
+    if os.environ.get("LASTFM_API_KEY"):
+        return "env"
+    for name, f in (("settings", key_file()), ("legacy", LEGACY_KEY_FILE)):
+        if _read_key(f):
+            return name
+    return None
+
+
+def _read_key(f: Path) -> str | None:
+    try:
+        for line in f.read_text().splitlines():
+            if line.startswith("LASTFM_API_KEY="):
+                return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return None
+
+
+def save_key(key: str | None) -> None:
+    """Store (or with None, remove) the key from Settings: owner-only file, atomic write."""
+    f = key_file()
+    if not key:
+        f.unlink(missing_ok=True)
+        return
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(f"LASTFM_API_KEY={key}\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, f)
+
+
+def check_key(key: str) -> bool:
+    """True if Last.fm accepts the key (one uncached call). Error 10 = invalid API key."""
+    url = API + "?" + urllib.parse.urlencode({"method": "chart.getTopTracks", "limit": "1",
+                                               "format": "json", "api_key": key})
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "autodeck/1 (personal DJ app)"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return "error" not in json.loads(r.read())
+    except urllib.error.HTTPError:
+        return False  # Last.fm answers an invalid key with HTTP 403
 CACHE_TTL = 7 * 24 * 3600
 TIMEOUT = 10
 _MIN_GAP = 0.25  # s between live calls: well under Last.fm's rate limit
@@ -32,14 +85,7 @@ _last_call = 0.0
 def api_key() -> str | None:
     if os.environ.get("LASTFM_API_KEY"):
         return os.environ["LASTFM_API_KEY"].strip()
-    for f in KEY_FILES:
-        try:
-            for line in f.read_text().splitlines():
-                if line.startswith("LASTFM_API_KEY="):
-                    return line.split("=", 1)[1].strip() or None
-        except OSError:
-            continue
-    return None
+    return _read_key(key_file()) or _read_key(LEGACY_KEY_FILE)
 
 
 def _cache_file(params: dict) -> Path:
