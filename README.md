@@ -269,6 +269,22 @@ list_playlists (read-only), save_playlist, play_from_playlist, sync_playlist, re
 running (`AUTODECK_URL`, default http://127.0.0.1:8765). The forced next effect and "mix now" live on
 the server, so the page, the API and the assistant stay in sync.
 
+The **MCP** button in the top bar (next to ⋯ on a phone) shows what assistants do: a grey dot when
+nobody called in the last 10 minutes, green when one did, a blue pulse naming the command while it
+runs ("Claude · playing next"), and a red dot with the reason when a command failed (until you open
+the settings). When a command lands, a card under the button says what changed, and the thing it
+changed carries a blue "via MCP" tag (the Up next row, the Vibe / Party / Playlist select, the next
+effect) until the song plays or you change it yourself. The button opens the MCP settings:
+- **Let assistants DJ** turns the endpoint off. An assistant that tries then gets "MCP is turned off
+  in autodeck" and nothing else happens.
+- **Assistants can: Steer the session / Only read.** Only read keeps the read-only tools (what's
+  playing, library, history, suggestions, playlists, pairs) and refuses every other tool with a reason
+  the assistant can pass on.
+- **Activity**: the last 50 calls since autodeck started, newest first, one plain sentence each; reads
+  are folded into one line. Before any assistant has ever connected, this is where the setup command is.
+
+Both switches are saved in `settings.json` (default: on, Steer the session).
+
 ## Tests
 
     uv run pytest                                    # everything except network (default addopts)
