@@ -126,6 +126,10 @@ input[type="url"] { height: var(--target); border: 1px solid var(--line); border
 .badge.failed { color: var(--failed); background: #FF7B6B1a; }
 .badge.mixes { color: var(--ready); background: #6EE7A81a; }
 .badge.loved { color: var(--loved); background: #FF7AB81f; }
+.badge.auto { color: var(--text-3); background: transparent; border: 1px dashed var(--line); }
+/* Auto picks are the engine's, not the owner's: quieter than kept rows until kept with ✓. */
+.row.auto:not(.locked) .t { color: var(--text-2); }
+.row.auto .acts .keep { color: var(--text); }
 .badge.avoided, .badge.queued, .badge.pinned, .badge.locked { color: var(--text-2); background: var(--raised); }
 
 /* --- header -------------------------------------------------------------------------- */

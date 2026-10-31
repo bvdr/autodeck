@@ -1,7 +1,7 @@
 // node --test web/sources.test.mjs — the sources panel and the draft (pure helpers in ui.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allReviewed, draftNote, pendingRows, sourceSelects, sourceSentence, sweepDraft, UNDO_MS } from './ui.js';
+import { allReviewed, draftNote, upNextNote, pendingRows, sourceSelects, sourceSentence, sweepDraft, UNDO_MS } from './ui.js';
 
 const mood = { kind: 'mood', name: 'Balkan party', key: 'mood:Balkan party', label: 'Balkan party' };
 const hits = { kind: 'party', name: 'hits', key: 'party:Hits', label: 'Hits' };
@@ -41,4 +41,14 @@ test('all reviewed once every row left is kept', () => {
   assert.equal(allReviewed([], 2), true); // all excluded
   assert.equal(allReviewed([{ state: 'kept' }, { state: 'excluded', until: 1 }], 2), false); // Undo still showing
   assert.equal(allReviewed([], 0), false); // nothing was drafted: not "reviewed"
+});
+
+test('Up next: kept rows say where they came from, auto picks say which source fills in', () => {
+  const s = { source: mood, notice: null };
+  assert.deepEqual(upNextNote({ kept: true, channel: 'Goran', kept_from: 'Balkan party' }, s),
+    { auto: false, sub: 'Goran · kept from Balkan party' });
+  assert.deepEqual(upNextNote({ kept: true, channel: 'Goran', kept_from: null }, s), { auto: false, sub: 'Goran' });
+  assert.equal(upNextNote({ kept: false, channel: 'c' }, s).badge, 'Auto · Balkan party');
+  assert.equal(upNextNote({ kept: false, channel: 'c' }, { source: null }).badge, 'Auto · whole library');
+  assert.equal(upNextNote({ kept: false, channel: 'c' }, { source: mood, notice: 'No ready…' }).badge, 'Auto · any genre');
 });

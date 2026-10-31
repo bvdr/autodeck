@@ -82,7 +82,7 @@ const cap = (t) => t[0].toUpperCase() + t.slice(1);
 function badge(kind, text = cap(kind), title = '') {
   const spin = kind === 'analyzing' || kind === 'downloading';
   return el('span', { className: `badge ${kind}`, title: title || text },
-    icon(STATUS_ICON[kind] ?? { pinned: 'pin', locked: 'lock', loved: 'flame', avoided: 'thumbs-down', mixes: 'check' }[kind] ?? 'info', spin ? 'spin' : ''), text);
+    icon(STATUS_ICON[kind] ?? { auto: 'sparkles', pinned: 'pin', locked: 'lock', loved: 'flame', avoided: 'thumbs-down', mixes: 'check' }[kind] ?? 'info', spin ? 'spin' : ''), text);
 }
 const songMeta = (s) => [s.bpm ? s.bpm.toFixed(1) : '–', s.camelot ?? '–',
   s.danceability != null ? `${Math.round(s.danceability * 100)}%` : '–'].join('  ');
@@ -101,30 +101,40 @@ function nudge(id, delta) {
 const titleOf = (id) => last?.pool.find((p) => p.id === id)?.title ?? id;
 
 // --- Up next --------------------------------------------------------------------
+/** Up next row kind: the owner's (kept) or an auto pick, with the note under the title. Pure. */
+export function upNextNote(song, s) {
+  if (song.kept) return { auto: false, sub: [song.channel, song.kept_from ? `kept from ${song.kept_from}` : null].filter(Boolean).join(' · ') };
+  const from = s.notice ? 'any genre' : s.source?.label ?? 'whole library';
+  return { auto: true, badge: `Auto · ${from}`, sub: song.channel };
+}
+
 function queueRow(song, i, s, ids, prevId) {
   const locked = i < (s.queue_locked ?? 0);
-  const pinned = (s.pinned ?? []).includes(song.id);
+  const note = upNextNote(song, s);
   const pair = prevId ? s.pairs?.[`${prevId}>${song.id}`] : null;
   const loved = pair === 'loved';
-  const li = el('li', { className: `row${locked ? ' locked' : ''}${loved ? ' loved' : ''}` },
+  const li = el('li', { className: `row${locked ? ' locked' : ''}${loved ? ' loved' : ''}${note.auto ? ' auto' : ''}` },
     // Locked rows (already planned) have a lock instead of a grip: sortable.js only lifts grips.
     locked ? el('span', { className: 'lead', title: 'Locked in: already planned' }, icon('lock'), el('span', { className: 'sr-only', textContent: 'Locked in.' }))
       : el('span', { className: 'lead grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, icon('grip-vertical')),
     el('span', { className: 'text' },
       el('span', { className: 't' }, song.title, loved ? ' ' : null, loved ? icon('flame') : null),
       loved ? el('span', { className: 's why', textContent: `You loved it after ${titleOf(prevId)}` })
-        : el('span', { className: 's', textContent: [song.channel, song.kept_from ? `kept from ${song.kept_from}` : null].filter(Boolean).join(' · ') })),
+        // A locked auto pick shows the Locked badge, so its "Auto · …" note moves under the title.
+        : el('span', { className: 's', textContent: [note.sub, note.auto && locked ? note.badge : null].filter(Boolean).join(' · ') })),
     el('span', { className: 'meta', textContent: songMeta(song), title: 'BPM  key  danceability' }),
     loved ? badge('loved', 'Loved after this') : pair === 'avoided' ? badge('avoided', 'Avoided pair')
-      : locked ? badge('locked', 'Locked in') : pinned ? badge('pinned') : badge(song.status, cap(song.status), song.error),
+      : locked ? badge('locked', 'Locked in') : note.auto ? badge('auto', note.badge, 'Fills in so the music never stops') : badge(song.status, cap(song.status), song.error),
     genreSelect(song, s.genres, `Genre for ${song.title}`),
     el('span', { className: 'acts' },
+      // ✓ keeps an auto pick: it becomes the owner's, noted as kept from the active source.
+      note.auto ? iconBtn('check', `Keep ${song.title} in Up next`, () => act('/api/suggestions/accept', 'POST', { id: song.id, artist: '', title: song.title }), 'keep') : null,
       // Buttons too: drag-and-drop alone is not keyboard accessible.
       locked ? null : iconBtn('arrow-up', `Move ${song.title} up`, () => nudge(song.id, -1)),
       locked ? null : iconBtn('arrow-down', `Move ${song.title} down`, () => nudge(song.id, 1)),
       iconBtn('x', `Remove ${song.title}`, () => act(`/api/song/${song.id}`, 'DELETE'), 'remove')));
   li.dataset.id = song.id;
-  const [up, down] = li.querySelectorAll('.acts .icon-btn');
+  const [up, down] = li.querySelectorAll('.acts .icon-btn:not(.keep)');
   if (!locked) { up.disabled = i <= (s.queue_locked ?? 0); down.disabled = i === ids.length - 1; }
   return li;
 }
@@ -141,6 +151,8 @@ function renderQueue(s) {
     badge(q.status, cap(q.status), q.error),
     el('span', { className: 'acts' }, iconBtn('x', `Remove ${q.title}`, () => act(`/api/song/${q.id}`, 'DELETE'), 'remove')))));
   $('#queue-empty').hidden = s.queue.length + (s.requested?.length ?? 0) > 0;
+  $('#queue-empty').textContent = s.pool_counts?.ready ? 'Nothing left to play. Keep songs from Suggestions or search.'
+    : 'Nothing is ready yet. Songs join Up next as they finish preparing.';
   const c = s.pool_counts, working = (c.analyzing ?? 0) + (c.downloading ?? 0);
   const what = s.party ? `${cap(s.party)} party` : s.genre;
   $('#queue-count').textContent = [what, `${c.ready ?? 0} ready`, working ? `${working} analyzing` : null,
@@ -474,7 +486,9 @@ export const allReviewed = (rows, total) => total > 0 && rows.every((r) => r.sta
 
 let draft = { for: null, src: null, rows: [], total: 0, kept: 0, excluded: 0, loading: false, error: null };
 let sweepTimer = 0;
-const draftKey = (s) => (s.source ? `${s.source.key}|${s.source.kind === 'party' ? s.playing : s.moods?.[s.source.name] ?? ''}` : '');
+// Reloaded when the source changes, a song starts (it left Up next / joined Played; party picks
+// follow what's playing) or a mood is refreshed.
+const draftKey = (s) => (s.source ? `${s.source.key}|${s.playing}|${s.moods?.[s.source.name] ?? ''}` : '');
 
 function renderParty(s) {
   // Phone's Vibe tab: the segmented control, as before.
@@ -626,7 +640,7 @@ function resultRow(r, inLibrary) {
         [r.channel, mmss(r.duration)].filter(Boolean).join(' · '))),
     el('button', { type: 'button', className: 'btn', title: 'Prepare now and play it next', 'aria-label': `Play ${r.title} next`,
       onclick: async () => {
-        await act('/api/request', 'POST', { id: r.id, title: r.title, channel: r.channel || '', duration: r.duration || 0 });
+        await act('/api/request', 'POST', { id: r.id, title: r.title, channel: r.channel || '', duration: r.duration || 0, source: 'search' });
         $('#search-msg').textContent = r.status === 'ready' ? `${r.title} plays next.` : `Preparing "${r.title}"… it plays next once ready.`;
       } }, icon('list-start'), el('span', { textContent: 'Play next' })));
   return li;
@@ -669,7 +683,7 @@ function renderOpeners(s) {
   const list = q ? localMatches(q, 12).filter((p) => p.status === 'ready')
     : opTab === 'loved' ? ready.filter((p) => lovedFrom.has(p.id))
       : opTab === 'recent' ? [...ready].reverse().slice(0, 12)
-        : s.queue.slice(0, 12);
+        : [...s.queue, ...ready.filter((p) => !s.queue.some((q) => q.id === p.id))].slice(0, 12);
   const why = (p) => (opTab === 'loved' && !q ? 'You loved what came after it' : [p.genre, p.bpm ? `${p.bpm.toFixed(1)} BPM` : null,
     p.camelot, p.danceability != null ? `${Math.round(p.danceability * 100)}% danceable` : null].filter(Boolean).join(' · '));
   $('#op-list').replaceChildren(...list.map((p) => el('li', { className: 'row op-row' },
