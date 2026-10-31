@@ -236,7 +236,7 @@ function moodReport(kind, text) {
   m.hidden = false;
 }
 
-async function buildMood(theme) {
+async function buildMood(theme, typed = theme) {
   const name = moodName(theme), before = last?.moods?.[name];
   building.set(name, true);
   closeComposer();
@@ -255,7 +255,7 @@ async function buildMood(theme) {
     building.delete(name);
     renderMoods(last, last.moods ?? {});
     // Errors stay in the composer, next to what was typed, so fixing one is a single edit.
-    openComposer(theme);
+    openComposer(typed); // exactly what the owner typed, so fixing it is one edit
     const err = $('#mood-err');
     err.className = 'field-msg bad';
     err.replaceChildren(icon('circle-alert'), e.message.startsWith('No playlists')
@@ -607,7 +607,7 @@ export function initUi(stateCb, h = {}) {
   $('#mood-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const t = checkMood();
-    if (t) buildMood(t);
+    if (t) buildMood(t, $('#mood-theme').value);
   });
   $('#mood-form').addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeComposer(); $('#genres .build')?.focus(); } });
   $('#mood-close').addEventListener('click', () => { closeComposer(); $('#genres .build')?.focus(); });
