@@ -11,10 +11,12 @@ def test_heavy_deps_import():
     import essentia.standard  # noqa: F401
     import faster_whisper  # noqa: F401
     import onnxruntime  # noqa: F401
+    import imageio_ffmpeg  # noqa: F401
     import pyrubberband  # noqa: F401
     import yt_dlp  # noqa: F401
 
     assert shutil.which("rubberband")
+    assert shutil.which("deno")  # the deno wheel's binary, in the venv's bin
 
 
 def _analysis(version=library.ANALYSIS_VERSION, guess=None):

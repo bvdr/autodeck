@@ -3,7 +3,9 @@ name = "autodeck"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "beat-this",
+    # From PyPI, not git: the standalone app installs with `uv sync` on Macs that have no git.
+    "beat-this==1.1.0",
+    "deno>=2.9.8",  # official deno binary as a wheel: yt-dlp's YouTube challenge solver
     "essentia==2.1b6.dev1389",
     "fastapi>=0.162.0",
     "faster-whisper>=1.2.1",
@@ -11,17 +13,16 @@ dependencies = [
     "mcp>=1.10",
     "onnxruntime>=1.31.1",
     "pyloudnorm>=0.2.0",
+    "imageio-ffmpeg>=0.7.0",  # static ffmpeg binary as a wheel: yt-dlp remux + audio decode fallback
+    # Calls the rubberband CLI. pylibrb (in-process) can't pass a keyframe map (its binding rejects
+    # every dict), and render's blend-then-ease needs one; the standalone app ships the official CLI.
     "pyrubberband>=0.4.0",
-    "pytest>=9.2.0",
     "pywebview>=6.2.1",
     "soundfile>=0.14.0",
     "uvicorn>=0.54.0",
     "yt-dlp>=2026.10.26",
     "yt-dlp-ejs>=0.8.0",
 ]
-
-[tool.uv.sources]
-beat-this = { git = "https://github.com/CPJKU/beat_this" }
 
 [tool.uv]
 # Anaconda's python is first on PATH here; its builds break essentia wheel selection. Use uv-managed CPython only.
@@ -42,6 +43,7 @@ markers = [
 ]
 
 [dependency-groups]
-build = [
-    "pyinstaller>=6.22.3",
-]
+dev = ["pytest>=9.2.0"]
+# Installed first by the standalone app's setup (autodeck/standalone.py): just enough to
+# open the "Setting up autodeck" window before the ~1 GB of the rest.
+ui = ["pywebview>=6.2.1"]
