@@ -1,7 +1,6 @@
 """Paths and spec constants. Everything tunable lives here."""
 import json
 import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -67,12 +66,23 @@ def data_dir() -> Path:
     return library_root() if os.environ.get("AUTODECK_LIBRARY") else APP_SUPPORT
 
 
-def bundled_model(name: str) -> Path | None:
-    """A model shipped inside the standalone app (PyInstaller puts data under sys._MEIPASS),
-    so first launch needs no downloads. None in dev (not frozen): callers then download as before."""
-    base = getattr(sys, "_MEIPASS", None)
-    p = Path(base) / "models" / name if base else None
-    return p if p is not None and p.exists() else None
+def app_home() -> Path:
+    """The standalone app's own files: runtime/ (Python + packages), models/, setup marker.
+    AUTODECK_HOME moves it (clean-machine tests); read live so tests can monkeypatch it."""
+    return Path(os.environ.get("AUTODECK_HOME") or APP_SUPPORT)
+
+
+def caches_dir() -> Path:
+    """Re-downloadable caches of the standalone app (uv's package cache, numba, pycache).
+    AUTODECK_CACHES moves it, for the same reason as AUTODECK_HOME."""
+    return Path(os.environ.get("AUTODECK_CACHES") or CACHES)
+
+
+def installed_model(name: str) -> Path | None:
+    """A model the standalone app's setup downloaded (models/ in app_home()), so analysis never
+    downloads at song time. None when absent (dev): callers then download as before."""
+    p = app_home() / "models" / name
+    return p if p.exists() else None
 
 
 # Module-level alias requested by the spec; resolved at import time, so code that

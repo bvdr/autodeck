@@ -1,21 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Hardened-runtime exceptions for the autodeck app process (Contents/MacOS/autodeck).
-     Keep this list minimal; every entry weakens the runtime's protection.
+<!-- Hardened-runtime exceptions for the bundled Python interpreter (Contents/Resources/python/
+     bin/python3.12, also used from its copy in runtime/ and through the venv). The only signed
+     process that needs any. Every entry weakens the runtime's protection, so each is justified:
+
+     disable-library-validation: first launch installs packages with uv (torch, numpy, essentia,
+       onnxruntime, pyobjc, ...). Their .so/.dylib files are signed by their builders or ad hoc,
+       not by our team, and the hardened runtime refuses to load such libraries into a process
+       with library validation. There is no way to sign them at build time: they don't exist yet.
 
      allow-unsigned-executable-memory: numba (librosa's onset/beat helpers) compiles functions
-       with LLVM at runtime and maps that machine code executable without MAP_JIT (llvmlite's
-       own memory manager), and reloads compiled functions from NUMBA_CACHE_DIR the same way.
-       Under the hardened runtime that mapping is refused without this entitlement and librosa
-       crashes on first use. (allow-jit alone is not enough: it only covers MAP_JIT memory.)
+       with LLVM at runtime and maps that code executable without MAP_JIT (llvmlite's own memory
+       manager), and reloads compiled functions from NUMBA_CACHE_DIR the same way. allow-jit
+       covers only MAP_JIT memory, so it isn't enough.
 
-     Deliberately NOT here:
-       disable-library-validation: every dylib/.so in the bundle is signed with our own
-         Developer ID, so library validation passes; the self-updated yt-dlp is pure Python.
-       allow-jit: nothing in this process allocates MAP_JIT memory (torch/onnxruntime/
-         ctranslate2 run precompiled kernels; WebKit's JS JIT runs in its own XPC process). -->
+     Not here: allow-jit (nothing in the process uses MAP_JIT; WebKit's JS JIT runs in its own
+     XPC process, and deno is a separate binary from its PyPI wheel, signed by its makers),
+     allow-dyld-environment-variables, any sandbox or device entitlement. -->
 <plist version="1.0">
 <dict>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
 </dict>
 </plist>

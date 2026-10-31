@@ -137,6 +137,13 @@
         <p id="yt-state" class="key-state"></p>
         <p id="yt-err" class="field-msg bad" role="alert"></p>
       </div>
+      <!-- Standalone app: what setup installed, and a way to reinstall it (autodeck/standalone.py). -->
+      <div class="settings-block">
+        <label>Installation</label>
+        <p id="rt-state" class="key-state"></p>
+        <p class="settings-links"><button id="rt-repair" type="button" class="link-btn" hidden>Repair installation</button></p>
+        <p id="rt-err" class="field-msg bad" role="alert"></p>
+      </div>
       <p class="settings-block storage"><svg class="i"><use href="#i-folder"/></svg>
         <span>Your library (songs, moods, pairs, history) is stored in <code id="lib-path">~/Library/Application Support/autodeck</code></span></p>
     </div>

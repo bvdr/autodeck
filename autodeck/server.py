@@ -99,6 +99,23 @@ def _id(sid: str) -> str:
     return sid
 
 
+def relaunch() -> None:
+    """Quit and reopen the standalone app (used by Repair): a detached `open` after we're gone,
+    then close the window, which stops the engine (desktop.main)."""
+    import subprocess
+    import threading
+
+    from . import standalone
+    app_path = standalone.resources().parent.parent  # .../autodeck.app
+    subprocess.Popen(["/bin/sh", "-c", f'sleep 2; /usr/bin/open "{app_path}"'], start_new_session=True)
+
+    def close():
+        import webview
+        for w in list(webview.windows):
+            w.destroy()
+    threading.Timer(0.5, close).start()
+
+
 def create_app(engine: Engine | None = None) -> FastAPI:
     """Factory so tests can inject an Engine built on a temp library."""
     eng = engine or Engine()
@@ -229,6 +246,12 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.put("/api/settings/youtube")
     def put_youtube(req: BrowserReq):
         return eng.set_youtube_browser(req.browser)
+
+    @app.post("/api/setup/repair")
+    def repair():
+        r = eng.repair_install()
+        relaunch()
+        return r
 
     @app.post("/api/mode")
     def mode(req: ModeReq):

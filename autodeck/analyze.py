@@ -32,8 +32,8 @@ def _beats(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         from beat_this.inference import Audio2Beats
 
         # dbn=False: the DBN post-processor needs madmom; plain peak picking is enough.
-        # The standalone app ships the checkpoint; dev downloads "final0" to the torch hub cache.
-        ckpt = config.bundled_model("beat_this-final0.ckpt")
+        # The standalone app's setup installs the checkpoint; dev downloads "final0" to the torch hub cache.
+        ckpt = config.installed_model("beat_this-final0.ckpt")
         _beat_model = Audio2Beats(checkpoint_path=str(ckpt) if ckpt else "final0", dbn=False)
     b, d = _beat_model(y, SR)
     return np.asarray(b, dtype=float), np.asarray(d, dtype=float)

@@ -571,6 +571,17 @@ export function browserNote(yt) {
   if (yt.browser === 'safari') return 'Uses your Safari login. autodeck needs Full Disk Access (System Settings → Privacy & Security) to read it';
   return `Uses your ${name} login. macOS asks once for Keychain access: click Always Allow`;
 }
+/** The Installation line in Settings, from GET /api/settings' `runtime`. */
+export function runtimeNote(rt) {
+  if (!rt?.standalone) return { text: `Running from the repo (Python ${rt?.python ?? '?'})`, repair: false };
+  const gb = (rt.size / 1e9).toFixed(1);
+  return { text: `autodeck ${rt.app_version ?? '?'} · Python ${rt.python} · ${gb} GB installed`, repair: true };
+}
+async function repairInstall() {
+  if (!confirm('Repair reinstalls autodeck\'s packages and re-checks its models (a large download), then restarts the app. Continue?')) return;
+  try { await api('/api/setup/repair', 'POST'); $('#rt-state').textContent = 'Restarting to repair…'; }
+  catch (e) { $('#rt-err').textContent = e.message; }
+}
 function showSettings(st) {
   const k = lastfmState(st.lastfm);
   const el = $('#lastfm-state');
@@ -578,6 +589,11 @@ function showSettings(st) {
   el.replaceChildren(icon(k.cls === 'set' ? 'circle-check' : 'info'), k.text);
   $('#lastfm-remove').hidden = !k.removable;
   if (st.library) $('#lib-path').textContent = st.library;
+  if (st.runtime) {
+    const r = runtimeNote(st.runtime);
+    $('#rt-state').replaceChildren(icon('info'), r.text);
+    $('#rt-repair').hidden = !r.repair;
+  }
   if (st.youtube) {
     $('#yt-browser').value = st.youtube.browser;
     $('#yt-browser').disabled = st.youtube.from_env; // the env var wins; changing it here would do nothing
@@ -691,6 +707,7 @@ export function initUi(stateCb, h = {}) {
   $('#menu-add').addEventListener('click', () => togglePop('add', true));
   $('#menu-settings').addEventListener('click', () => togglePop('settings', true));
   $('#yt-browser').addEventListener('change', (e) => saveBrowser(e.target.value));
+  $('#rt-repair').addEventListener('click', repairInstall);
   for (const [name, p] of Object.entries(POPS)) {
     $(p.pop).addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;

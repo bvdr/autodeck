@@ -539,3 +539,9 @@ def test_youtube_login_browser_is_a_setting(client, monkeypatch):
     assert json.loads((config.library_root() / "settings.json").read_text()) == {"youtube_browser": "brave"}
     monkeypatch.setenv("AUTODECK_BROWSER", "none")
     assert client.get("/api/settings").json()["youtube"] == {"browser": "none", "from_env": True}
+
+
+def test_installation_status_and_repair_outside_the_standalone_app(client):
+    rt = client.get("/api/settings").json()["runtime"]
+    assert rt["standalone"] is False and rt["python"].startswith("3.12")
+    assert client.post("/api/setup/repair").status_code == 409  # dev: nothing to repair, never relaunches

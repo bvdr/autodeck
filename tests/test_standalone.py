@@ -1,140 +1,131 @@
-"""yt-dlp self-update for the frozen app: version picking, PyPI parsing, the download itself (faked)."""
+"""First-launch setup of the standalone app: when it runs, progress parsing, resumable downloads."""
 import hashlib
 import io
-import json
-import zipfile
+import threading
 
 import pytest
 
 from autodeck import standalone as st
 
-
-def test_versions_compare_numerically():
-    assert st.parse_version("2026.10.26") == (2026, 10, 26)
-    assert st.parse_version("2026.10.26.1") > st.parse_version("2026.10.26")
-    assert st.parse_version("2026.11.2") > st.parse_version("2026.10.26")  # not a string compare
-    assert st.parse_version("0.10.0") > st.parse_version("0.9.9")
+WANT = st.expected("0.2.0", "lockhash", "3.12.9")
 
 
-def test_ejs_pin_is_read_from_requires_dist():
-    reqs = ['brotli; extra == "default"', 'yt-dlp-ejs==0.8.0; extra == "default"', 'yt-dlp-ejs==0.8.0; extra == "pin"']
-    assert st.ejs_pin(reqs) == "0.8.0"
-    assert st.ejs_pin(["yt-dlp-ejs>=0.5"]) is None and st.ejs_pin(None) is None
+def test_setup_runs_until_a_complete_marker_matches():
+    assert st.setup_reasons(None, WANT, venv_ok=False, models_ok=False) == ["first run"]
+    assert st.setup_reasons(dict(WANT), WANT, True, True) == []
+    # A new app version with the same lock needs no reinstall.
+    assert st.setup_reasons({**WANT, "app_version": "0.1.0"}, WANT, True, True) == []
+    assert st.setup_reasons({**WANT, "lock": "old"}, WANT, True, True) == ["packages changed"]
+    assert st.setup_reasons({**WANT, "python": "3.12.8"}, WANT, True, True) == ["Python changed"]
+    # Something deleted behind our back (or a half-finished first run that left an old marker).
+    assert st.setup_reasons(dict(WANT), WANT, False, False) == ["packages missing", "models missing"]
+    assert st.setup_reasons({**WANT, "repair": True}, WANT, True, True) == ["repair requested"]
 
 
-def test_only_the_pure_python_wheel_is_picked():
-    rel = {"urls": [{"packagetype": "sdist", "filename": "yt_dlp-1.tar.gz", "url": "s", "digests": {"sha256": "a"}},
-                    {"packagetype": "bdist_wheel", "filename": "yt_dlp-1-py3-none-any.whl", "url": "w", "digests": {"sha256": "b"}}]}
-    assert st.pick_wheel(rel) == ("w", "b")
-    assert st.pick_wheel({"urls": rel["urls"][:1]}) is None
+def test_reasons_reads_the_marker_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTODECK_HOME", str(tmp_path))
+    monkeypatch.setattr(st, "want", lambda: WANT)
+    assert st.reasons() == ["first run"]
+    st.marker_file().parent.mkdir(parents=True)
+    st.marker_file().write_text("{broken")
+    assert st.reasons() == ["first run"]  # a corrupt marker is no marker
+    st.marker_file().write_text('{"app_version": "0.2.0", "lock": "lockhash", "python": "3.12.9"}')
+    assert "first run" not in st.reasons() and "models missing" in st.reasons()
+    st.request_repair()
+    assert st.read_marker()["repair"] is True and st.read_marker()["lock"] == "lockhash"
 
 
-def _version_dir(pylib, v, complete=True):
-    d = pylib / v
-    d.mkdir(parents=True)
-    if complete:
-        (d / st.DONE).write_text(v)
-    return d
+def test_uv_lines_are_parsed():
+    assert st.parse_uv_line("Downloading torch (70.2MiB)\n") == ("start", "torch", 70.2 * 2**20)
+    assert st.parse_uv_line("   Downloading pyobjc-core (6.4MiB)") == ("start", "pyobjc-core", 6.4 * 2**20)
+    assert st.parse_uv_line(" Downloaded torch\n") == ("done", "torch", 0.0)
+    assert st.parse_uv_line("      Built proxy-tools==0.1.0") == ("done", "proxy-tools", 0.0)
+    assert st.parse_uv_line("Prepared 10 packages in 1.52s")[0] == "prepared"
+    assert st.parse_uv_line("Installed 10 packages in 23ms")[0] == "installed"
+    assert st.parse_uv_line(" + torch==2.15.0") is None
 
 
-def test_candidates_are_newer_than_bundled_complete_and_newest_first(tmp_path):
-    for v in ("2026.9.1", "2026.11.2", "2026.12.1"):
-        _version_dir(tmp_path, v)
-    _version_dir(tmp_path, "2027.1.1", complete=False)  # half-downloaded: never used
-    (tmp_path / ".2027.2.2.tmp").mkdir()
-    assert [p.name for p in st.candidates(tmp_path, "2026.10.26")] == ["2026.12.1", "2026.11.2"]
-    assert st.candidates(tmp_path / "missing", "2026.10.26") == []
+def test_dry_run_lists_what_will_be_installed():
+    out = "Would download 2 packages\nWould install 2 packages\n + torch==2.15.0\n + yt-dlp==2026.10.26\n - old==1\n"
+    assert st.would_install(out) == {"torch", "yt-dlp"}
 
 
-def _wheel(files: dict) -> bytes:
-    b = io.BytesIO()
-    with zipfile.ZipFile(b, "w") as z:
-        for name, text in files.items():
-            z.writestr(name, text)
-    return b.getvalue()
+def test_lock_sizes_pick_the_wheel_for_this_mac():
+    lock = '''
+[[package]]
+name = "torch"
+version = "2.15.0"
+wheels = [
+    { url = "https://x/torch-2.15.0-cp312-cp312-manylinux_2_28_x86_64.whl", size = 900 },
+    { url = "https://x/torch-2.15.0-cp312-none-macosx_11_0_arm64.whl", size = 70 },
+    { url = "https://x/torch-2.15.0-cp313-none-macosx_11_0_arm64.whl", size = 71 },
+]
+
+[[package]]
+name = "six"
+version = "1"
+sdist = { url = "https://x/six-1.tar.gz", size = 5 }
+wheels = [{ url = "https://x/six-1-py2.py3-none-any.whl", size = 3 }]
+
+[[package]]
+name = "proxy-tools"
+version = "0.1.0"
+sdist = { url = "https://x/proxy_tools-0.1.0.tar.gz", size = 2 }
+'''
+    assert st.lock_sizes(lock) == {"torch": 70, "six": 3, "proxy-tools": 2}
 
 
-@pytest.fixture
-def pypi(monkeypatch):
-    """Fake PyPI: yt-dlp 2026.11.2 pinning yt-dlp-ejs 0.9.0."""
-    wheels = {"yt.whl": _wheel({"yt_dlp/__init__.py": "", "yt_dlp/version.py": "__version__ = '2026.11.2'"}),
-              "ejs.whl": _wheel({"yt_dlp_ejs/__init__.py": ""})}
-    meta = {
-        "https://pypi.org/pypi/yt-dlp/json": {
-            "info": {"name": "yt-dlp", "version": "2026.11.2", "requires_dist": ['yt-dlp-ejs==0.9.0; extra == "default"']},
-            "urls": [{"packagetype": "bdist_wheel", "filename": "yt_dlp-2026.11.2-py3-none-any.whl", "url": "yt.whl",
-                      "digests": {"sha256": hashlib.sha256(wheels["yt.whl"]).hexdigest()}}]},
-        "https://pypi.org/pypi/yt-dlp-ejs/0.9.0/json": {
-            "info": {"name": "yt-dlp-ejs", "version": "0.9.0"},
-            "urls": [{"packagetype": "bdist_wheel", "filename": "yt_dlp_ejs-0.9.0-py3-none-any.whl", "url": "ejs.whl",
-                      "digests": {"sha256": hashlib.sha256(wheels["ejs.whl"]).hexdigest()}}]},
-    }
-    calls = []
-
-    def get(url):
-        calls.append(url)
-        return json.dumps(meta[url]).encode() if url in meta else wheels[url]
-    monkeypatch.setattr(st, "_get", get)
-    return {"wheels": wheels, "meta": meta, "calls": calls}
+def test_progress_is_weighted_by_bytes():
+    p = st.Progress([("Python packages", 900.0), ("AI models", 100.0), ("Finishing", 1.0)])
+    p.step(0, status="running", done=450.0, detail="Downloading torch")
+    snap = p.snapshot()
+    assert snap["percent"] == pytest.approx(45.0, abs=0.1) and snap["steps"][0]["percent"] == 50
+    p.step(0, status="done")
+    p.step(1, status="running", done=500.0)  # clamped to the step's own size
+    assert p.snapshot()["percent"] == pytest.approx(99.9, abs=0.1)
 
 
-def test_update_downloads_both_wheels_then_waits_a_day(tmp_path, pypi):
-    assert st.update(tmp_path, "2026.10.26", now=1000.0) == "2026.11.2"
-    d = tmp_path / "2026.11.2"
-    assert (d / "yt_dlp" / "version.py").exists() and (d / "yt_dlp_ejs" / "__init__.py").exists()
-    assert [p.name for p in st.candidates(tmp_path, "2026.10.26")] == ["2026.11.2"]
-    n = len(pypi["calls"])
-    assert st.update(tmp_path, "2026.10.26", now=1000.0 + 3600) is None and len(pypi["calls"]) == n  # throttled
-    # A day later PyPI is asked again, but 2026.11.2 is already here: nothing downloaded.
-    assert st.update(tmp_path, "2026.10.26", now=1000.0 + st.CHECK_EVERY + 1) is None
-    assert pypi["calls"][n:] == ["https://pypi.org/pypi/yt-dlp/json"]
+class _Resp(io.BytesIO):
+    def __init__(self, data, status):
+        super().__init__(data)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
-def test_update_skips_when_bundled_is_current(tmp_path, pypi):
-    assert st.update(tmp_path, "2026.11.2", now=1.0) is None
-    assert st.installed(tmp_path) == []
+def test_download_resumes_a_part_file_and_checks_the_hash(tmp_path, monkeypatch):
+    data = bytes(range(256)) * 40
+    sha = hashlib.sha256(data).hexdigest()
+    dest = tmp_path / "m" / "model.bin"
+    dest.parent.mkdir()
+    (dest.parent / "model.bin.part").write_bytes(data[:1000])  # an interrupted earlier run
+    seen = {}
+
+    def urlopen(req, timeout):
+        seen["range"] = req.get_header("Range")
+        return _Resp(data[1000:], 206)
+    monkeypatch.setattr(st.urllib.request, "urlopen", urlopen)
+    got = []
+    st.download("https://x/model.bin", dest, sha, len(data), got.append, threading.Event())
+    assert seen["range"] == "bytes=1000-" and dest.read_bytes() == data and got[-1] == len(data)
+    assert not (dest.parent / "model.bin.part").exists()
 
 
-def test_bad_checksum_leaves_nothing_behind(tmp_path, pypi):
-    pypi["wheels"]["yt.whl"] = b"tampered"
+def test_download_rejects_a_corrupt_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(st.urllib.request, "urlopen", lambda req, timeout: _Resp(b"x" * 10, 200))
     with pytest.raises(RuntimeError, match="sha256"):
-        st.update(tmp_path, "2026.10.26", now=1.0)
-    assert [p.name for p in tmp_path.iterdir()] == ["last-check"]
+        st.download("https://x/m", tmp_path / "m", "0" * 64, 10, lambda n: None, threading.Event())
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_old_versions_are_pruned_keeping_the_last_good_one(tmp_path, pypi):
-    for v in ("2026.10.30", "2026.11.1"):
-        _version_dir(tmp_path, v)
-    st.update(tmp_path, "2026.10.26", now=1.0)
-    assert [p.name for _, p in st.installed(tmp_path)] == ["2026.11.2", "2026.11.1"]
-
-
-def test_a_version_that_does_not_import_is_dropped(tmp_path, monkeypatch):
-    bad = _version_dir(tmp_path, "2099.1.1")
-    (bad / "yt_dlp").mkdir()
-    (bad / "yt_dlp" / "__init__.py").write_text("raise ImportError('broken release')")
-    import sys
-    saved = {k: v for k, v in sys.modules.items() if k == "yt_dlp" or k.startswith(("yt_dlp.", "yt_dlp_ejs"))}
-    for k in saved:
-        del sys.modules[k]
-    try:
-        assert st.activate(tmp_path, "2026.10.26") is None
-        assert not bad.exists() and str(bad) not in sys.path
-    finally:
-        sys.modules.update(saved)
-
-
-def test_bundled_version_is_read_without_importing(monkeypatch):
-    import yt_dlp.version
-    assert st.bundled_ytdlp_version() == yt_dlp.version.__version__
-
-
-def test_bundled_model_is_only_found_inside_a_frozen_app(tmp_path, monkeypatch):
-    import sys
-    from autodeck import config
-    (tmp_path / "models").mkdir()
-    (tmp_path / "models" / "m.onnx").write_bytes(b"x")
-    assert config.bundled_model("m.onnx") is None  # dev: not frozen, callers download as before
-    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
-    assert config.bundled_model("m.onnx") == tmp_path / "models" / "m.onnx"
-    assert config.bundled_model("other.onnx") is None
+def test_download_can_be_cancelled_and_keeps_the_part(tmp_path, monkeypatch):
+    monkeypatch.setattr(st.urllib.request, "urlopen", lambda req, timeout: _Resp(b"x" * (3 << 20), 200))
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(st.Cancelled):
+        st.download("https://x/m", tmp_path / "m", "0" * 64, 3 << 20, lambda n: None, stop)
+    assert (tmp_path / "m.part").exists()  # Retry / next launch continues from here
