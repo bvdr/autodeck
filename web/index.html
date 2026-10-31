@@ -20,6 +20,7 @@
     <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14"/> <path d="m19 12-7 7-7-7"/></symbol>
     <symbol id="i-arrow-left-right" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4"/> <path d="M4 7h16"/> <path d="m16 21 4-4-4-4"/> <path d="M20 17H4"/></symbol>
     <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/> <path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="i-arrow-up-to-line" viewBox="0 0 24 24"><path d="M5 3h14"/> <path d="m18 13-6-6-6 6"/> <path d="M12 7v14"/></symbol>
     <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/> <path d="M12 19V5"/></symbol>
     <symbol id="i-audio-lines" viewBox="0 0 24 24"><path d="M2 10v3"/> <path d="M6 6v11"/> <path d="M10 3v18"/> <path d="M14 8v7"/> <path d="M18 5v13"/> <path d="M22 10v3"/></symbol>
     <symbol id="i-audio-waveform" viewBox="0 0 24 24"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/></symbol>
@@ -336,6 +337,7 @@
         <p class="hint desk-only">Your picks, topped up automatically</p>
       </div>
       <div id="queue-progress" class="progress phone-only" aria-hidden="true"><i class="r"></i><i class="w"></i></div>
+      <p id="pick-note" class="banner pick" role="status" hidden></p>
       <ol id="requested" class="list"></ol>
       <ol id="queue" class="list"></ol>
       <p id="queue-empty" class="empty-note" hidden>Nothing queued yet.</p>
@@ -469,6 +471,9 @@
   </nav>
 
   <div id="drop-overlay" class="drop-overlay" hidden><p><svg class="i"><use href="#i-link"/></svg>Drop to add this link</p></div>
+
+  <!-- Phone: a row's actions (long-press or ⋯), built by ui.js openSheet. Native dialog: Esc, focus trap, backdrop. -->
+  <dialog id="sheet" class="sheet" aria-label="Song actions"></dialog>
 
   <script type="module" src="app.js"></script>
 </body>

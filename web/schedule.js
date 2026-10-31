@@ -209,6 +209,18 @@ export const canReplan = (now, T0, margin = REPLAN_MARGIN) => now < T0 - margin;
 export const tooSoon = (T0, now) => T0 < now + MIN_LEAD;
 
 /**
+ * The deck a "play next" pick lands on (design yA49d), 0 = A. Normally the idle one; once the
+ * planned mix can no longer be replanned (inside the margin, or audible) both decks are busy
+ * and the pick plays right after this mix, on the deck that frees up when it ends. Before the
+ * first song nothing plays: Play starts on A.
+ */
+export function pickDeck({ live, cur, plan, now }) {
+  if (!live) return { deck: 0, afterMix: false };
+  if (plan && !canReplan(now, plan.T0)) return { deck: 1 - plan.inDeck, afterMix: true };
+  return { deck: 1 - cur, afterMix: false };
+}
+
+/**
  * Poll-driven replan check (contract: latest response wins, never after T0 - margin).
  * Only a change of the song that would come next can change the transition
  * (pick_transition depends on (a, b, after, entered)), so we skip the multi-second

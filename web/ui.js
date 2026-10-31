@@ -123,6 +123,7 @@ function queueRow(song, i, s, ids, prevId) {
     // Locked rows (already planned) have a lock instead of a grip: sortable.js only lifts grips.
     locked ? el('span', { className: 'lead', title: 'Locked in: already planned' }, icon('lock'), el('span', { className: 'sr-only', textContent: 'Locked in.' }))
       : el('span', { className: 'lead grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, icon('grip-vertical')),
+    thumb(song),
     el('span', { className: 'text' },
       el('span', { className: 't' }, song.title, loved ? ' ' : null, loved ? icon('flame') : null),
       loved ? el('span', { className: 's why', textContent: `You loved it after ${titleOf(prevId)}` })
@@ -132,15 +133,18 @@ function queueRow(song, i, s, ids, prevId) {
     loved ? badge('loved', 'Loved after this') : pair === 'avoided' ? badge('avoided', 'Avoided pair')
       : locked ? badge('locked', 'Locked in') : note.auto ? badge('auto', note.badge, 'Fills in so the music never stops') : badge(song.status, cap(song.status), song.error),
     genreSelect(song, s.genres, `Genre for ${song.title}`),
+    i ? deckBtn(song) : null, // the first row is already next
     el('span', { className: 'acts' },
       // ✓ keeps an auto pick: it becomes the owner's, noted as kept from the active source.
       note.auto ? iconBtn('check', `Keep ${song.title} in Up next`, () => act('/api/suggestions/accept', 'POST', { id: song.id, artist: '', title: song.title }), 'keep') : null,
       // Buttons too: drag-and-drop alone is not keyboard accessible.
       locked ? null : iconBtn('arrow-up', `Move ${song.title} up`, () => nudge(song.id, -1)),
       locked ? null : iconBtn('arrow-down', `Move ${song.title} down`, () => nudge(song.id, 1)),
-      iconBtn('x', `Remove ${song.title}`, () => act(`/api/song/${song.id}`, 'DELETE'), 'remove')));
+      iconBtn('x', `Remove ${song.title}`, () => act(`/api/song/${song.id}`, 'DELETE'), 'remove'),
+      moreBtn(song)));
   li.dataset.id = song.id;
-  const [up, down] = li.querySelectorAll('.acts .icon-btn:not(.keep)');
+  li.pick = { song, list: 'queue', ctx: { i, locked: s.queue_locked ?? 0, kept: song.kept } };
+  const [up, down] = li.querySelectorAll('.acts .icon-btn:not(.keep, .more)');
   if (!locked) { up.disabled = i <= (s.queue_locked ?? 0); down.disabled = i === ids.length - 1; }
   return li;
 }
@@ -151,6 +155,7 @@ function renderQueue(s) {
   // "Play next" picks still downloading / analysing: shown first, not draggable yet.
   $('#requested').replaceChildren(...(s.requested ?? []).map((q) => el('li', { className: 'row' },
     el('span', { className: 'lead' }, icon('list-start')),
+    thumb(q),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: q.title }),
       el('span', { className: q.status === 'failed' ? 's err' : 's', textContent: q.error
         || ['Plays next once ready', q.kept_from ? `kept from ${q.kept_from}` : null].filter(Boolean).join(' · ') })),
@@ -168,6 +173,107 @@ function renderQueue(s) {
   $('#queue-progress .w').style.width = `${(working / total) * 100}%`;
 }
 
+// --- play next on deck B (design yA49d) ------------------------------------------------
+// The deck a pick lands on right now ({deck: 0|1, afterMix}), kept current by app.js (setPick).
+let pickAt = { deck: 1, afterMix: false };
+const letter = () => 'AB'[pickAt.deck];
+/** app.js, every frame: relabel the deck buttons when the target deck changes (swap, a mix
+ * starting). Touches the DOM only on a change. */
+export function setPick(p) {
+  if (p.deck === pickAt.deck && p.afterMix === pickAt.afterMix) return;
+  pickAt = p;
+  for (const b of document.querySelectorAll('.deck-btn')) paintDeckBtn(b);
+}
+function paintDeckBtn(b) {
+  const d = letter();
+  b.replaceChildren(el('span', { className: `letter ${d.toLowerCase()}`, 'aria-hidden': 'true', textContent: d }),
+    el('span', { className: 'lbl', textContent: 'Play next' }));
+  b.setAttribute('aria-label', `Play ${b.dataset.title} next on deck ${d}`);
+  b.title = pickAt.afterMix ? `Plays right after this mix, on deck ${d}` : `Next on deck ${d}`;
+}
+/** The deck button: a tile in the target deck's colour + "Play next". Same everywhere. */
+function deckBtn(song, where = 'list') {
+  const b = el('button', { type: 'button', className: `deck-btn ${where}` });
+  b.dataset.title = song.title;
+  b.onclick = () => playNext(song, b);
+  paintDeckBtn(b);
+  return b;
+}
+// Phone: the row's actions live in a sheet (long-press, or this button).
+const moreBtn = (song) => iconBtn('ellipsis', `More for ${song.title}`, (e) => openSheet(e.currentTarget.closest('li').pick), 'more');
+
+/** The one line above Up next after a pick. Pure. */
+export function pickNote({ title, deck, afterMix = false, ready, planned }) {
+  if (!ready) return `${title} goes on deck ${deck} once it’s analysed.${planned ? ` Until then ${planned} stays planned.` : ''}`;
+  if (afterMix) return `${title} plays after this mix, on deck ${deck}.`;
+  return `${title} is next on deck ${deck}.${planned ? ` ${planned} moved back to the top of Up next.` : ''}`;
+}
+// The note above Up next, in the target deck's colour (blue while the pick is still being prepared).
+let picked = null; // {id, wait, kind: 'a' | 'b' | 'working', text, until}
+async function playNext(song, btn = null) {
+  const at = { ...pickAt }, d = letter();
+  // A search hit not in the library yet is fetched first: a spinner in place of the tile.
+  const search = btn?.classList.contains('search');
+  if (search && !song.status) btn.replaceChildren(icon('loader', 'spin'));
+  try {
+    const r = await api('/api/play_next', 'POST', { id: song.id, title: song.title, channel: song.channel || '',
+      duration: song.duration || 0, source: search ? 'search' : null });
+    const { ready, planned } = r.play_next;
+    // ready = it's first in Up next. Not ready waits (no time limit) until it leaves `requested`.
+    picked = { id: song.id, wait: !ready, kind: ready ? d.toLowerCase() : 'working', until: Date.now() + 12000,
+      text: pickNote({ title: song.title, deck: d, afterMix: at.afterMix, ready, planned: planned && titleOf(planned) }) };
+    if (search) {
+      $('#search-msg').textContent = ready ? `${song.title} is next on deck ${d}.` : `Preparing "${song.title}"… it plays next once ready.`;
+    }
+    setState(r);
+    renderPickNote(r); // shows even when the state didn't change (the pick was next already)
+    setTimeout(() => last && renderPickNote(last), 12500);
+  } catch (e) { report(e); if (btn) paintDeckBtn(btn); }
+}
+function renderPickNote(s) {
+  const n = $('#pick-note');
+  // Waiting: gone once it swaps in (or was removed). Done: gone after a while (the next render).
+  if (picked && (picked.wait ? !s.requested?.some((q) => q.id === picked.id) : Date.now() > picked.until)) picked = null;
+  n.hidden = !picked;
+  if (!picked) return;
+  n.className = `banner pick ${picked.kind}`;
+  n.replaceChildren(icon(picked.wait ? 'loader' : 'circle-check', picked.wait ? 'spin' : ''), el('span', { textContent: picked.text }));
+}
+
+/** The phone action sheet's actions for a row: only what applies to that list. Pure. */
+export function sheetActions(list, { i = 0, locked = 0, kept = false } = {}) {
+  const out = [];
+  if (list !== 'queue' || i > 0) out.push({ id: 'next' }); // the first row is already next
+  if (list === 'queue') {
+    if (i > locked) out.push({ id: 'top' });
+    if (i >= locked && !kept) out.push({ id: 'pin' });
+    out.push({ id: 'remove' });
+  }
+  return out;
+}
+function openSheet(p) {
+  if (!p) return;
+  const { song, list, ctx } = p, dlg = $('#sheet');
+  const close = () => dlg.close();
+  const ids = () => last.queue.map((q) => q.id);
+  const ACT = {
+    next: [`Play next on deck ${letter()}`, null, () => playNext(song), 'deck'],
+    top: ['Move to top', 'arrow-up-to-line', () => reorder(ids(), song.id, last.queue_locked ?? 0)],
+    // Pin = the owner placed it here: it stops being an auto pick and keeps its spot.
+    pin: ['Pin here', 'pin', () => reorder(ids(), song.id, ids().indexOf(song.id))],
+    remove: ['Remove from Up next', 'x', () => act(`/api/song/${song.id}`, 'DELETE'), 'danger'],
+  };
+  const sub = [song.channel, song.bpm ? `${Math.round(song.bpm)} BPM` : null, song.status ? cap(song.status) : null].filter(Boolean).join(' · ');
+  dlg.replaceChildren(el('div', { className: 'sheet-head' }, thumb(song),
+    el('span', { className: 'text' }, el('b', { textContent: song.title }), el('small', { textContent: sub }))),
+  ...sheetActions(list, ctx).map(({ id }) => {
+    const [label, ic, fn, cls = ''] = ACT[id];
+    return el('button', { type: 'button', className: `mi sheet-act ${cls}`, onclick: () => { close(); fn(); } },
+      ic ? icon(ic) : el('span', { className: `letter ${letter().toLowerCase()}`, textContent: letter() }), el('span', { textContent: label }));
+  }));
+  dlg.showModal();
+}
+
 // --- render -------------------------------------------------------------------------
 function render(s) {
   const moods = s.moods ?? {};
@@ -182,6 +288,7 @@ function render(s) {
   // While a playlist plays its notices (the end is near, songs still downloading) sit in its panel.
   notice.hidden = !s.notice || s.source?.kind === 'playlist';
   notice.querySelector('span').textContent = s.notice ?? '';
+  renderPickNote(s);
   renderQueue(s);
   renderLogs(s);
   renderOpeners(s);
@@ -347,14 +454,19 @@ async function loadHistory() {
         b.setAttribute('aria-pressed', String(v === kind));
         return b;
       };
-      return el('li', { className: 'logrow' },
+      const li = el('li', { className: 'logrow' },
         el('span', { className: 'at', textContent: (h.at || '').slice(11, 16) }),
+        thumb(h),
         el('span', { className: 't', textContent: h.title }),
         el('span', { className: 'meta', textContent: [h.bpm ? h.bpm.toFixed(1) : null, h.genre].filter(Boolean).join(' · ') }),
         el('span', { className: 'fx' }, h.effect ? [icon(FX_ICON[h.effect] ?? 'blend'), FX_LABEL[h.effect] ?? h.effect] : 'Started'),
         // A row rates the hand-over INTO this song; a song started from scratch has none.
         h.from ? rateBtn('loved', FLAME, `Nailed it: the mix from ${titleOf(h.from)} into ${h.title}`) : el('span', { className: 'rate' }),
-        h.from ? rateBtn('avoided', THUMB, `Didn't work: the mix from ${titleOf(h.from)} into ${h.title}`) : el('span', { className: 'rate' }));
+        h.from ? rateBtn('avoided', THUMB, `Didn't work: the mix from ${titleOf(h.from)} into ${h.title}`) : el('span', { className: 'rate' }),
+        // Not for the playing song (always the newest row): it can't be next as well.
+        h.id === last?.playing ? null : [deckBtn(h), moreBtn(h)]);
+      if (h.id !== last?.playing) li.pick = { song: h, list: 'played', ctx: {} };
+      return li;
     }));
     $('#history-empty').hidden = history.length > 0;
   } catch (e) { report(e); }
@@ -391,13 +503,22 @@ function renderLibrary(s) {
     'aria-pressed': String(libFilter === k), onclick: () => { libFilter = k; renderLibrary(last); } }, `${cap(k)} ${n[k]}`)));
   const rows = s.pool.filter((p) => libFilter === 'all' || (libFilter === 'failed' ? p.status === 'failed' : working(p)));
   rows.sort((a, b) => (b.status === 'failed') - (a.status === 'failed')); // failed first: they need the owner
-  $('#pool').replaceChildren(...rows.map((p) => el('li', { className: 'logrow' },
+  $('#pool').replaceChildren(...rows.map((p) => libRow(p, s)));
+}
+function libRow(p, s) {
+  // A failed song can't play: Retry is its action. The playing song is already on a deck.
+  const can = p.status !== 'failed' && p.id !== s.playing;
+  const li = el('li', { className: 'logrow' }, thumb(p),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: p.title }),
       el('span', { className: p.status === 'failed' ? 's err' : 's', textContent: p.status === 'failed' ? p.error || 'Failed' : p.channel })),
     badge(p.status, cap(p.status), p.error),
     p.status === 'failed' ? el('button', { type: 'button', className: 'btn', onclick: () => act(`/api/song/${p.id}/retry`, 'POST') }, icon('rotate-ccw'), 'Retry')
       : genreSelect(p, s.genres, `Genre for ${p.title}`),
-    iconBtn('x', `Remove ${p.title}`, () => act(`/api/song/${p.id}`, 'DELETE'), 'remove'))));
+    can ? deckBtn(p) : null,
+    iconBtn('x', `Remove ${p.title}`, () => act(`/api/song/${p.id}`, 'DELETE'), 'remove'),
+    can ? moreBtn(p) : null);
+  if (can) li.pick = { song: p, list: 'library', ctx: {} };
+  return li;
 }
 
 // --- party mode ---------------------------------------------------------------
@@ -1003,22 +1124,17 @@ const localMatches = (q, n = 10) => {
   return (last?.pool ?? []).filter((s) => words.every((w) => fold(`${s.title} ${s.channel}`).includes(w))).slice(0, n);
 };
 
-function resultRow(r, inLibrary) {
-  const li = el('li', { className: 'row res-row' },
+function resultRow(r) {
+  return el('li', { className: 'row res-row' }, thumb(r),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: r.title }),
       el('span', { className: 's' }, r.status ? badge(r.status) : null,
         [r.channel, mmss(r.duration)].filter(Boolean).join(' · '))),
-    el('button', { type: 'button', className: 'btn', title: 'Prepare now and play it next', 'aria-label': `Play ${r.title} next`,
-      onclick: async () => {
-        await act('/api/request', 'POST', { id: r.id, title: r.title, channel: r.channel || '', duration: r.duration || 0, source: 'search' });
-        $('#search-msg').textContent = r.status === 'ready' ? `${r.title} plays next.` : `Preparing "${r.title}"… it plays next once ready.`;
-      } }, icon('list-start'), el('span', { textContent: 'Play next' })));
-  return li;
+    r.id === last?.playing ? null : deckBtn(r, 'search'));
 }
 
 function showLocal(q) {
   const local = localMatches(q);
-  $('#res-lib').replaceChildren(...local.map((s) => resultRow(s, true)));
+  $('#res-lib').replaceChildren(...local.map((s) => resultRow(s)));
   $('#res-lib-h').hidden = !q;
   $('#res-lib-h').textContent = `In your library ${local.length} · instant`;
   return local;
@@ -1034,7 +1150,7 @@ async function search(q) {
     const { results } = await api(`/api/search?${new URLSearchParams({ q })}`);
     const have = new Set(local.map((s) => s.id));
     const yt = results.filter((r) => !have.has(r.id));
-    $('#res-yt').replaceChildren(...yt.map((r) => resultRow(r, false)));
+    $('#res-yt').replaceChildren(...yt.map((r) => resultRow(r)));
     $('#res-yt-h').hidden = false;
     $('#res-yt-h').textContent = `YouTube ${yt.length}`;
     msg.textContent = local.length + yt.length ? '' : 'No results.';
@@ -1261,6 +1377,26 @@ export function initUi(stateCb, h = {}) {
       reorder(ids, id, index);
     },
   });
+  // Phone: long-press a row (Up next, Played, Library) for its action sheet. Touch/pen only, and
+  // not on the drag grip (that's sortable's). The click that follows the press is swallowed.
+  let press = 0, pressAt = null, pressed = false;
+  const unpress = () => { clearTimeout(press); pressAt = null; };
+  for (const id of ['#queue', '#history', '#pool']) {
+    const list = $(id);
+    list.addEventListener('pointerdown', (e) => {
+      pressed = false; // a long-press often ends without a click: never swallow the next tap
+      const li = e.target.closest('li');
+      if (e.pointerType === 'mouse' || !li?.pick || e.target.closest('.grip, button, select')) return;
+      pressAt = [e.clientX, e.clientY];
+      press = setTimeout(() => { pressed = true; unpress(); openSheet(li.pick); }, 500);
+    });
+    list.addEventListener('pointermove', (e) => { if (pressAt && Math.hypot(e.clientX - pressAt[0], e.clientY - pressAt[1]) > 8) unpress(); });
+    list.addEventListener('pointerup', unpress);
+    list.addEventListener('pointercancel', unpress);
+    list.addEventListener('click', (e) => { if (pressed) { pressed = false; e.preventDefault(); e.stopPropagation(); } }, true);
+    list.addEventListener('contextmenu', (e) => { if (e.target.closest('li')?.pick && matchMedia('(max-width: 600px)').matches) e.preventDefault(); });
+  }
+  $('#sheet').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }); // the backdrop
   // A select closing (or losing focus) releases a deferred render.
   document.addEventListener('focusout', (e) => { if (e.target.tagName === 'SELECT') setTimeout(flush); });
 

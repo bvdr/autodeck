@@ -5,7 +5,7 @@
 import * as S from './schedule.js';
 import { Deck, loadTrack, laneText } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
-import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab } from './ui.js';
+import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -561,6 +561,8 @@ function setRole(i, text, cls) {
   el.className = `role ${cls}`;
 }
 
+const pickNow = () => S.pickDeck({ live: live(), cur: M.cur, plan: M.plan, now: M.ctx ? now() : 0 });
+
 const lanes = [0, 1].map((i) => new Lane($(`#deck${i} canvas`), i));
 // Lane view offset (left edge - now), eased toward its target over ~the handover token
 // (600 ms) so the view pans after a mix instead of jumping. Reduced motion: it jumps.
@@ -571,6 +573,10 @@ function frame(ts) {
   const dt = Math.min(0.1, (ts - (lastTs || ts)) / 1000);
   lastTs = ts;
   if (live()) liveFrame(dt); else idleFrame();
+  // The deck buttons name the deck a pick lands on; it flips at each swap and when a mix
+  // passes the replan margin, neither of which is a server state change. setPick is a no-op
+  // unless it changed.
+  setPick(pickNow());
   requestAnimationFrame(frame);
 }
 
@@ -888,7 +894,8 @@ initUi((s) => { renderOnboard(s); onState(s); }, {
   // Playlist rows say "now playing on A" / "next on deck B".
   decks: {
     of: (id) => { const i = live() ? M.decks.findIndex((d) => d.busy && d.info?.id === id) : -1; return i < 0 ? null : 'AB'[i]; },
-    next: () => (!live() ? null : 'AB'[M.plan ? M.plan.inDeck : 1 - M.cur]),
+    // Server's next song = where a pick lands: the idle deck, or after a running mix the one that frees up.
+    next: () => (!live() ? null : 'AB'[pickNow().deck]),
   },
 });
 // Canvas text (NOW tag, END/START) is drawn in Plex Mono: redraw the idle lanes once it has loaded.

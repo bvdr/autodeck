@@ -550,6 +550,42 @@ body.live .openers, body:not(.live) .upnext { display: none; }
 .search-panel .label { padding: 8px 6px 2px; }
 .res-row .badge { margin-right: 4px; }
 
+/* Play next on deck B (design yA49d): a tile in the target deck's colour + "Play next", the same
+   button in every list. Shown on hover / focus where there's hover; touch screens always show it. */
+.deck-btn { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 4px; flex: none; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); color: var(--text); font: 600 13px var(--body);
+  transition: opacity var(--quick), border-color var(--quick); }
+.deck-btn:hover { border-color: var(--text-3); }
+.deck-btn .letter { width: 22px; height: 22px; font-size: 12px; }
+.deck-btn .i { width: 16px; height: 16px; margin: 0 4px; color: var(--working); }
+@media (hover: hover) {
+  :is(.row, .logrow):not(:hover, :focus-within) .deck-btn { opacity: 0; }
+}
+.logrow:hover, .logrow:focus-within { background: #ffffff06; }
+.logrow .thumb, .row .thumb { width: 36px; height: 36px; }
+.icon-btn.more { display: none; }
+.banner.pick { margin: 0 0 8px; background: #A98BFF14; border: 1px solid #A98BFF33; color: var(--deck-b); }
+.banner.pick.a { background: #C8F25A0f; border-color: #C8F25A33; color: var(--deck-a); }
+.banner.pick.working { background: #7CC4FF0d; border-color: #7CC4FF33; color: var(--working); }
+.banner.pick[hidden] { display: none; }
+
+/* Phone action sheet: slides up from the bottom, song header then its actions. */
+.sheet { margin: auto 0 0; width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px 12px calc(16px + env(safe-area-inset-bottom));
+  border: 1px solid var(--line); border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--surface); color: var(--text); }
+.sheet[open] { display: grid; gap: 4px; }
+.sheet::before { content: ""; justify-self: center; width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin-bottom: 8px; }
+.sheet::backdrop { background: #000a; }
+.sheet-head { display: flex; gap: 12px; align-items: center; padding: 4px 4px 10px; }
+.sheet-head .thumb { width: 44px; height: 44px; }
+.sheet-head .text { display: grid; gap: 2px; min-width: 0; }
+.sheet-head b { font: 600 22px/1.1 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-head small { font-size: 13px; color: var(--text-2); }
+.sheet-act { align-items: center; min-height: 48px; font: 600 15px var(--body); }
+.sheet-act .letter { width: 22px; height: 22px; font-size: 12px; }
+.sheet-act.deck { border: 1px solid var(--line); background: var(--raised); }
+.sheet-act.danger, .sheet-act.danger .i { color: var(--failed); }
+.sheet-act .i { margin-top: 0; }
+
 /* drop anywhere */
 .drop-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #0D0C10cc;
   border: 2px dashed var(--text-2); pointer-events: none; }
@@ -677,7 +713,7 @@ body.live .openers, body:not(.live) .upnext { display: none; }
   .row .meta { display: none; }
   .row select { display: none; }
   .row .acts { opacity: 1; }
-  .row:not(:focus-within) .acts .icon-btn:not(.keep) { display: none; }
+  .row:not(:focus-within) .acts .icon-btn:not(.keep, .more) { display: none; }
   .draft-row:not(:focus-within) .acts .icon-btn.excl { display: inline-grid; }  /* ✓ and ✕ are the row */
   .upnext .panel-head { padding: 0 0 8px; }
   .upnext .panel-head .label { flex: none; }
@@ -694,6 +730,14 @@ body.live .openers, body:not(.live) .upnext { display: none; }
   .logrow .meta { display: none; }
   .search-panel { position: static; width: auto; max-height: none; border: 0; box-shadow: none; padding: 0; }
   .res-row .btn span { display: none; }
+  /* Lists: the row's actions are in the sheet (⋯ / long-press); Search keeps the bare B tile. */
+  :is(#queue, #history, #pool) .deck-btn { display: none; }
+  .row .acts .icon-btn.more, .logrow .icon-btn.more { display: inline-grid; }
+  #queue .icon-btn.keep { display: none; }  /* the sheet's "Pin here" keeps an auto pick; the title needs the room */
+  :is(#queue, #history, #pool) li { -webkit-touch-callout: none; user-select: none; }
+  .deck-btn.search { width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .deck-btn.search .lbl { display: none; }
+  .deck-btn.search .letter { width: 26px; height: 26px; font-size: 14px; }
 
   .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: grid; grid-template-columns: repeat(4, 1fr);
     background: var(--surface); border-top: 1px solid var(--line); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
