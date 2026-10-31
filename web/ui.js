@@ -179,7 +179,7 @@ export function pairWhen(iso, now = new Date()) {
 export const pairSub = (p, now) => [p.avoided ? pairReason(p) : p.effect ? fx(p.effect) : null, pairWhen(p.last, now)]
   .filter(Boolean).join(' · ');
 /** Effect picker: Auto's label, and an effect the owner 👎'd for this pair. */
-export const autoLabel = (kind, lovedFx, short = false) => `Auto · ${fx(lovedFx || kind)}${lovedFx && !short ? ' (you loved it)' : ''}`;
+export const autoLabel = (kind, lovedFx, short = false) => `Auto · ${fx(kind)}${lovedFx && !short ? ' (you loved it)' : ''}`;
 export const fxOptionLabel = (k, avoidFx) => (k === avoidFx ? `${fx(k)} · you 👎 it here` : fx(k));
 /** Copy with 👎 in it, as DOM nodes: the emoji drawn as the outline icon the design uses. */
 export const withThumbs = (text) => text.split('👎').flatMap((part, i) => (i ? [icon('thumbs-down', 'thumb-i'), part] : [part]));

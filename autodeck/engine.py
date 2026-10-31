@@ -1578,7 +1578,9 @@ class Engine:
             if not kind and avoid_fx and pair_effect(tr.kind) == avoid_fx:
                 alt = next((k for k in options if k != avoid_fx), None)
                 tr = plan(alt) if alt else tr
-            loved_fx = None if kind else loved_fx
+            # Only claim "you loved it" when that is what was planned: the label must name the
+            # effect that will actually play, never the remembered one.
+            loved_fx = None if kind or pair_effect(tr.kind) != loved_fx else loved_fx
             # ponytail: outgoing=None, b's own exit isn't planned yet; the planner keeps
             # exits after the ease when it can, so the ease is rarely cut short.
             tm_b = time_map_for(b, tr)
