@@ -32,6 +32,7 @@ server = MCPServer(
         "You are DJing the owner's autodeck session. The browser plays the music; these tools "
         "read and steer it. Start with now_playing. Prefer play_next for 'play X' requests "
         "(search_songs first if you only have a name), set_genre / set_party to change the vibe, "
+        "play_from_playlist to play a saved YouTube playlist (list_playlists), "
         "set_next_effect to choose how the next transition sounds, mix_now to move on early. "
         "Songs must be 'ready' (downloaded + analysed) to play; play_next preps them first."
     ),
@@ -82,6 +83,7 @@ def _summary(s: dict) -> dict:
                     for q in s.get("queue", [])[:10]],
         "genre": s.get("genre"), "genres": s.get("genres"), "moods": s.get("moods"),
         "party": s.get("party"), "party_flavors": s.get("flavors"),
+        "playlist": _pl(s["playlist"]) if s.get("playlist") else None,
         "beat_to_beat": s.get("beat_to_beat"),
         "next_effect": s.get("next_effect") or "auto", "effects": s.get("effects"),
         "notice": s.get("notice"), "library_counts": s.get("pool_counts"),
@@ -221,6 +223,57 @@ def add_songs(url: str, genre: str = "") -> dict:
     """Add a YouTube / YouTube Music song or playlist URL to the library (optionally 'import as' a
     genre). Purely additive: songs are queued for download; nothing playing changes."""
     return _api("/api/add", "POST", {"url": url, "genre": genre or None})
+
+
+# --- saved playlists ------------------------------------------------------------------
+def _pl(p: dict) -> dict:
+    keep = ("id", "name", "count", "ready", "failed", "order", "at_end", "genre", "url")
+    return {k: p.get(k) for k in keep}
+
+
+@tool("List saved playlists", read_only=True, destructive=False)
+def list_playlists() -> list[dict]:
+    """Saved YouTube playlists, newest first: id, name, song count, how many are ready, order
+    (playlist / mix) and what happens at the end (keep_going / repeat / stop)."""
+    return [_pl(p) for p in _api("/api/playlists")["playlists"]]
+
+
+@tool("Save a YouTube playlist", destructive=False, open_world=True)
+def save_playlist(url: str, genre: str = "") -> dict:
+    """Save a YouTube / YouTube Music playlist link (youtube.com/playlist?list=…) so it can be
+    played from later; its songs are added to the library and download from the top. `genre`
+    treats every song as that genre (owner-set genres still win). Saving one that's saved
+    already returns it (existing=true). Purely additive; doesn't change what's playing."""
+    r = _api("/api/playlists", "POST", {"url": url, "genre": genre or None})
+    return {**{k: r[k] for k in ("existing", "found", "added") if k in r}, "playlist": _pl(r["playlist"])}
+
+
+@tool("Play from a saved playlist", open_world=True)
+def play_from_playlist(playlist_id: str) -> dict:
+    """Make a saved playlist (id from list_playlists) the source: Up next follows it, Vibe goes to
+    Any and Party to Off. Re-reads it from YouTube first if the last sync is over a day old."""
+    pl = next((p for p in _api("/api/playlists")["playlists"] if p["id"] == playlist_id), None)
+    if pl is None:
+        raise ToolError(f"No saved playlist {playlist_id}. See list_playlists.")
+    if pl.get("stale"):
+        _api(f"/api/playlists/{playlist_id}/sync", "POST", {})
+    return _summary(_api("/api/playlist", "POST", {"id": playlist_id}))
+
+
+@tool("Sync a saved playlist", open_world=True)
+def sync_playlist(playlist_id: str) -> dict:
+    """Re-read a saved playlist on YouTube. New songs are added at their YouTube position; songs
+    removed there leave the playlist (they stay in the library). Returns the new positions."""
+    r = _api(f"/api/playlists/{playlist_id}/sync", "POST", {})
+    return {"added_at": r["added"], "removed": r["removed"], "playlist": _pl(r["playlist"])}
+
+
+@tool("Remove a saved playlist")
+def remove_playlist(playlist_id: str) -> dict:
+    """Forget a saved playlist (its songs stay in the library). If it was playing, the source
+    falls back to Vibe: Any and the music keeps going."""
+    r = _api(f"/api/playlists/{playlist_id}", "DELETE")
+    return {"removed": r["name"], "songs_kept": r["count"], "was_playing": r["was_playing"]}
 
 
 @tool("Love a pair")

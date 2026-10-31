@@ -34,6 +34,16 @@ def test_read_only_tools_are_not_destructive_and_writes_are():
         assert by[name].open_world_hint  # reach YouTube / Last.fm
 
 
+def test_playlist_tool_hints():
+    by = {t.name: t.annotations for t in _tools()}
+    assert by["list_playlists"].read_only_hint and not by["list_playlists"].destructive_hint
+    assert not by["list_playlists"].open_world_hint
+    assert by["save_playlist"].open_world_hint and not by["save_playlist"].destructive_hint  # additive
+    assert by["sync_playlist"].open_world_hint and by["sync_playlist"].destructive_hint  # drops removed ids
+    assert by["play_from_playlist"].destructive_hint and not by["play_from_playlist"].read_only_hint
+    assert by["remove_playlist"].destructive_hint and not by["remove_playlist"].open_world_hint
+
+
 def test_no_action_switch_parameters():
     # One tool per operation: no generic action/mode enum parameters.
     for t in _tools():
