@@ -56,13 +56,15 @@ export function icon(name, cls = '') {
   return s;
 }
 
-function el(tag, props = {}, ...kids) {
+export function el(tag, props = {}, ...kids) {
   const n = document.createElement(tag);
   // aria-* / data-* keys are attributes, not properties.
   for (const [k, v] of Object.entries(props)) k.includes('-') ? n.setAttribute(k, v) : (n[k] = v);
   n.append(...kids.flat().filter((k) => k != null && k !== false));
   return n;
 }
+/** "via MCP": an assistant changed this (design m6p10); gone once it plays or the owner changes it. */
+const mcpTag = () => el('span', { className: 'badge mcp', title: 'An assistant changed this over MCP' }, icon('bot'), 'via MCP');
 const iconBtn = (name, label, onclick, cls = '') => el('button', { type: 'button', className: `icon-btn ${cls}`.trim(),
   title: label, 'aria-label': label, onclick }, icon(name));
 
@@ -159,7 +161,8 @@ function queueRow(song, i, s, ids, prevId) {
   const note = upNextNote(song, s);
   const pair = pairOf(s.pairs, prevId, song.id);
   const loved = isLoved(pair);
-  const li = el('li', { className: `row${locked ? ' locked' : ''}${loved ? ' loved' : ''}${note.auto ? ' auto' : ''}` },
+  const mcp = song.by === 'mcp';
+  const li = el('li', { className: `row${locked ? ' locked' : ''}${loved ? ' loved' : ''}${note.auto ? ' auto' : ''}${mcp ? ' mcp' : ''}` },
     // Locked rows (already planned) have a lock instead of a grip: sortable.js only lifts grips.
     locked ? el('span', { className: 'lead', title: 'Locked in: already planned' }, icon('lock'), el('span', { className: 'sr-only', textContent: 'Locked in.' }))
       : el('span', { className: 'lead grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, icon('grip-vertical')),
@@ -170,7 +173,7 @@ function queueRow(song, i, s, ids, prevId) {
         // A locked auto pick shows the Locked badge, so its "Auto · …" note moves under the title.
         : el('span', { className: 's', textContent: [note.sub, note.auto && locked ? note.badge : null].filter(Boolean).join(' · ') })),
     el('span', { className: 'meta', textContent: songMeta(song), title: 'BPM  key  danceability' }),
-    loved ? badge('loved', 'Loved after this') : isAvoided(pair) ? badge('avoided', 'Avoided pair')
+    mcp ? mcpTag() : loved ? badge('loved', 'Loved after this') : isAvoided(pair) ? badge('avoided', 'Avoided pair')
       : locked ? badge('locked', 'Locked in') : note.auto ? badge('auto', note.badge, 'Fills in so the music never stops') : badge(song.status, cap(song.status), song.error),
     genreSelect(song, s.genres, `Genre for ${song.title}`),
     i ? deckBtn(song) : null, // the first row is already next
@@ -200,12 +203,13 @@ function renderQueue(s) {
   }
   $('#queue').replaceChildren(...rows);
   // "Play next" picks still downloading / analysing: shown first, not draggable yet.
-  $('#requested').replaceChildren(...(s.requested ?? []).map((q) => el('li', { className: 'row' },
+  $('#requested').replaceChildren(...(s.requested ?? []).map((q) => el('li', { className: `row${q.by === 'mcp' ? ' mcp' : ''}` },
     el('span', { className: 'lead' }, icon('list-start')),
     thumb(q),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: q.title }),
       el('span', { className: q.status === 'failed' ? 's err' : 's', textContent: q.error
         || ['Plays next once ready', q.kept_from ? `kept from ${q.kept_from}` : null].filter(Boolean).join(' · ') })),
+    q.by === 'mcp' ? mcpTag() : null,
     badge(q.status, cap(q.status), q.error),
     el('span', { className: 'acts' }, iconBtn('x', `Remove ${q.title}`, () => act(`/api/song/${q.id}`, 'DELETE'), 'remove')))));
   $('#queue-empty').hidden = s.queue.length + (s.requested?.length ?? 0) > 0;
@@ -625,6 +629,9 @@ function renderSources(s) {
     const b = $(`#src-${k}`);
     b.classList.toggle('on', sel[k].active);
     b.querySelector('.v span').textContent = sel[k].value;
+    // The active select carries the tag when an assistant picked it.
+    b.querySelector('.badge.mcp')?.remove();
+    if (sel[k].active && s.source?.by === 'mcp') b.querySelector('.k').after(mcpTag());
   }
   $('#src-line').textContent = sourceSentence(s.source, s.playlist);
   // An open menu is rebuilt so a mood that finished building (or was deleted) shows up.
@@ -729,7 +736,7 @@ async function loadDraft() {
   renderDraft();
 }
 
-const thumb = (x) => {
+export const thumb = (x) => {
   const t = el('span', { className: 'thumb', 'aria-hidden': 'true' }, icon('music'));
   if (x.id) {
     // No id = a Last.fm pick not on YouTube yet: the music-note tile stays.
@@ -1275,7 +1282,7 @@ const POPS = {
   settings: { pop: '#settings-pop', btns: ['#settings-btn'], focus: '#lastfm-key', onOpen: () => loadSettings() },
   menu: { pop: '#menu-pop', btns: ['#menu-btn'], focus: '#menu-add' },
 };
-function togglePop(name, open) {
+export function togglePop(name, open) {
   const p = POPS[name];
   open ??= $(p.pop).hidden;
   if (open) for (const k of Object.keys(POPS)) if (k !== name) togglePop(k, false);
@@ -1284,6 +1291,19 @@ function togglePop(name, open) {
   if (open) { p.onOpen?.(); $(p.focus).focus(); }
 }
 const closePops = () => { for (const k of Object.keys(POPS)) togglePop(k, false); };
+/** Another header popover (mcp.js): one open at a time with these, Esc closes it. */
+export function addPop(name, p) {
+  POPS[name] = p;
+  popKeys(name, p);
+}
+function popKeys(name, p) {
+  $(p.pop).addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    togglePop(name, false);
+    // Back to whichever header button is on screen (desktop button or the phone's "…").
+    [...p.btns, '#menu-btn'].map((b) => $(b)).find((b) => b.offsetParent)?.focus();
+  });
+}
 
 // --- settings: Last.fm key -------------------------------------------------------------
 /** Instant format check, same rule as the server (which also asks Last.fm). null = looks fine. */
@@ -1418,7 +1438,7 @@ export function initUi(stateCb, h = {}) {
   $('#search-cancel').addEventListener('click', () => { q.value = ''; search(''); toTab('now'); });
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest('#search-panel, #search-form') && !matchMedia('(max-width: 600px)').matches) panel.hidden = true;
-    if (!e.target.closest('.pop, #add-btn, #menu-btn, #settings-btn')) closePops();
+    if (!e.target.closest('.pop, #add-btn, #menu-btn, #settings-btn, #mcp-btn, #mcp-toast')) closePops();
     if (!e.target.closest('.src-wrap')) closeMenus();
     // The playlist head's ⋯ and "At the end" lists close on a click elsewhere.
     if ((plMenu.where === 'head' || plAtEnd) && !e.target.closest('#pl-head')) { plMenu = {}; plAtEnd = false; if (last) renderPlHead(last); }
@@ -1475,14 +1495,7 @@ export function initUi(stateCb, h = {}) {
   $('#menu-settings').addEventListener('click', () => togglePop('settings', true));
   $('#yt-browser').addEventListener('change', (e) => saveBrowser(e.target.value));
   $('#rt-repair').addEventListener('click', repairInstall);
-  for (const [name, p] of Object.entries(POPS)) {
-    $(p.pop).addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      togglePop(name, false);
-      // Back to whichever header button is on screen (desktop button or the phone's "…").
-      [...p.btns, '#menu-btn'].map((b) => $(b)).find((b) => b.offsetParent)?.focus();
-    });
-  }
+  for (const [name, p] of Object.entries(POPS)) popKeys(name, p);
   $('#lastfm-form').addEventListener('submit', (e) => { e.preventDefault(); saveKey($('#lastfm-key').value.trim()); });
   $('#lastfm-remove').addEventListener('click', () => saveKey(''));
   $('#add-form').addEventListener('submit', (e) => { e.preventDefault(); add($('#url').value.trim()); });

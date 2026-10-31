@@ -26,6 +26,8 @@
     <symbol id="i-audio-waveform" viewBox="0 0 24 24"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/></symbol>
     <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <path d="m4.9 4.9 14.2 14.2"/></symbol>
     <symbol id="i-blend" viewBox="0 0 24 24"><circle cx="9" cy="9" r="7"/> <circle cx="15" cy="15" r="7"/></symbol>
+    <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/> <rect width="16" height="12" x="4" y="8" rx="2"/> <path d="M2 14h2"/> <path d="M20 14h2"/> <path d="M15 13v2"/> <path d="M9 13v2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/> <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
     <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/> <line x1="12" x2="12" y1="8" y2="12"/> <line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
@@ -137,6 +139,47 @@
     </div>
     <button id="live-echo" type="button" class="btn" aria-pressed="false" disabled title="Hold for an echo throw">
       <svg class="i"><use href="#i-radio"/></svg><span class="desk-only">Hold for echo</span><span class="phone-only">Hold: echo</span></button>
+    <!-- MCP · the AI DJ (design m6p10, web/mcp.js): whether an assistant is connected and what it's
+         doing; opens the MCP settings. The card under it drops in for 5 s when a command lands. -->
+    <div class="mcp-wrap">
+      <button id="mcp-btn" type="button" class="mcp-btn needs-server" data-kind="off" aria-expanded="false" aria-controls="mcp-pop">
+        <span class="mcp-sig" aria-hidden="true"><i></i></span><span class="mcp-label" aria-hidden="true">MCP</span>
+        <span id="mcp-act" class="mcp-act" aria-hidden="true" hidden></span></button>
+      <div id="mcp-toast" class="mcp-toast" role="status" aria-live="polite" hidden></div>
+      <div id="mcp-pop" class="pop mcp-pop" role="dialog" aria-labelledby="mcp-h" hidden>
+        <div class="mcp-head">
+          <div><h2 id="mcp-h" class="mcp-h">MCP</h2><p class="dim small">Let an AI assistant read this session and DJ it.</p></div>
+          <span id="mcp-pill" class="mcp-pill"><i aria-hidden="true"></i><span></span></span>
+        </div>
+        <button id="mcp-enable" type="button" class="mcp-enable" role="switch" aria-checked="true">
+          <svg class="i"><use href="#i-bot"/></svg>Let assistants DJ<span class="switch" aria-hidden="true"></span></button>
+        <p id="mcp-off-note" class="mcp-note" hidden>Off: assistants that try get “MCP is turned off in autodeck”. Nothing else changes.</p>
+        <div class="mcp-block">
+          <p class="label" id="mcp-can">Assistants can</p>
+          <div id="mcp-mode" class="mcp-mode" role="group" aria-labelledby="mcp-can">
+            <button type="button" data-mode="steer" aria-pressed="true">Steer the session</button>
+            <button type="button" data-mode="read" aria-pressed="false">Only read</button></div>
+          <p id="mcp-mode-note" class="mcp-note"></p>
+        </div>
+        <div id="mcp-activity" class="mcp-block" hidden>
+          <p class="mcp-log-head"><span class="label">Activity</span><span id="mcp-client"></span></p>
+          <ol id="mcp-log" class="mcp-log"></ol>
+          <p id="mcp-empty" class="mcp-note" hidden>Nothing yet since autodeck started.</p>
+          <button id="mcp-reads" type="button" class="link-btn mcp-reads" hidden></button>
+        </div>
+        <!-- First run: no assistant has ever connected. -->
+        <div id="mcp-connect" class="mcp-block" hidden>
+          <p class="label">Connect an assistant</p>
+          <p class="mcp-note">Claude Code, in a terminal:</p>
+          <div class="mcp-copy"><code id="mcp-cmd"></code>
+            <button id="mcp-copy-cmd" type="button" class="icon-btn" aria-label="Copy the Claude Code command"><svg class="i"><use href="#i-copy"/></svg></button></div>
+          <p class="mcp-note">Any other MCP client (streamable HTTP). Works on this computer only:</p>
+          <div class="mcp-copy"><code id="mcp-url"></code>
+            <button id="mcp-copy-url" type="button" class="icon-btn" aria-label="Copy the MCP address"><svg class="i"><use href="#i-copy"/></svg></button></div>
+          <p class="mcp-wait"><svg class="i"><use href="#i-loader"/></svg><span>Waiting for an assistant. Then ask it: “what’s playing?” or “play something Balkan next”.</span></p>
+        </div>
+      </div>
+    </div>
     <button id="add-btn" type="button" class="btn needs-server desk-only" aria-expanded="false" aria-controls="add-pop">
       <svg class="i"><use href="#i-link"/></svg>Add link</button>
     <button id="settings-btn" type="button" class="icon-btn desk-only" aria-expanded="false" aria-controls="settings-pop"
@@ -251,6 +294,7 @@
                   aria-controls="fx-list" title="Transition effect for the next mix">
             <svg class="i"><use id="fx-icon" href="#i-sparkles"/></svg><span id="fx-label">Auto</span>
             <svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+          <span id="fx-mcp" class="badge mcp" title="An assistant picked this effect over MCP" hidden><svg class="i"><use href="#i-bot"/></svg>via MCP</span>
           <p id="fx-locked" class="fx-locked" hidden><svg class="i"><use href="#i-lock"/></svg><span></span></p>
           <ul id="fx-list" class="pop listbox" role="listbox" aria-label="Transition effect" tabindex="-1" hidden></ul>
         </div>

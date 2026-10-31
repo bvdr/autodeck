@@ -7,6 +7,7 @@ import { Deck, loadTrack, laneText } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
 import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
+import { initMcp, renderMcp } from './mcp.js';
 
 const $ = (sel) => document.querySelector(sel);
 const POLL_MS = 2000;
@@ -234,6 +235,7 @@ function onState(s) {
   }
   if (!live()) pickOpener(s);
   fadeOutIfLast(s);
+  show('#fx-mcp', s.next_effect_by === 'mcp'); // the assistant's pick, until the owner changes it
   const r = M.req;
   if (!M.ctx || !r || r.loading || M.manual || r.id !== M.decks[r.deck].info?.id) return;
   const nextId = s.queue.find((q) => q.id !== r.id)?.id;
@@ -899,7 +901,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !e.target.closest?.('input, textarea, select')) { e.preventDefault(); focusSearch(); }
 });
 initOnboard({ api, setOpener, last: getState });
-initUi((s) => { renderOnboard(s); onState(s); }, {
+initUi((s) => { renderOnboard(s); renderMcp(s); onState(s); }, {
   loadOpener: (song) => { if (!live()) loadOpener(song, null, true); },
   isLive: live,
   // Playlist rows say "now playing on A" / "next on deck B".
@@ -909,6 +911,7 @@ initUi((s) => { renderOnboard(s); onState(s); }, {
     next: () => (!live() ? null : 'AB'[pickNow().deck]),
   },
 });
+initMcp();
 // Canvas text (NOW tag, END/START) is drawn in Plex Mono: redraw the idle lanes once it has loaded.
 document.fonts?.ready.then(() => { idleKey = ''; });
 requestAnimationFrame(frame);
