@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { laneLeft, xAt, gainAt, mixBars, mixProgress, overview, mixesWith, mixTag, incomingStart,
   VIEW_SPAN, NOW_AT, MIX_AT, NOW_MAX } from './lanes.js';
 import { plan, bassMid, BASS_CUT } from './schedule.js';
+import { FX_LABEL, FX_SHAPE } from './ui.js';
 
 const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -66,4 +67,10 @@ test('overview strip and the mixes check', () => {
   [['intro', 0, 0.1], ['main', 0.1, 0.9], ['outro', 0.9, 1]]);
   assert.deepEqual(overview([], 100), []);
   assert.ok(mixesWith(120, 124) && mixesWith(120, 61) && !mixesWith(120, 135) && !mixesWith(120, null));
+});
+
+test('every effect has a shape thumbnail with an A-out and a B-in curve', () => {
+  for (const k of Object.keys(FX_LABEL)) {
+    assert.ok(FX_SHAPE[k]?.a && FX_SHAPE[k]?.b, `no shape for ${k}`);
+  }
 });

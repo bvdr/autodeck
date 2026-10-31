@@ -13,6 +13,44 @@ export const FX_ICON = { blend: 'blend', half_double: 'blend', bass_swap: 'arrow
   echo: 'radio', loop_roll: 'repeat', brake: 'disc-3', backspin: 'rotate-ccw', reverb: 'waves', gate: 'audio-lines',
   riser: 'trending-up', dropswap: 'arrow-down-to-line', cut: 'scissors', fade: 'audio-lines' };
 
+// Effect shapes (design plxFh "EFFECT SHAPES"): a small curve per effect, lime = A out,
+// violet = B in, red = the moment the incoming lands, grey = a riser. Hand-drawn paths in a
+// 100 x 32 box (y 4 = full volume, 28 = silent), not sampled from schedule.plan(): they are a
+// legend for picking, and the lanes already draw the real curves of the chosen plan.
+const FULL_IN = (x) => `M${x} 28 L${x} 4 L100 4`; // incoming slams in at x and stays up
+export const FX_SHAPE = {
+  blend: { a: 'M0 4 C35 4 65 28 100 28', b: 'M0 28 C35 28 65 4 100 4' },
+  bass_swap: { a: 'M0 4 L50 4 C70 4 80 28 100 28', b: 'M0 28 C20 28 30 4 50 4 L100 4', m: 50 },
+  filter_sweep: { a: 'M0 4 C50 4 70 20 100 28', b: 'M0 28 C30 20 50 4 100 4' },
+  echo: { a: 'M0 4 L48 4 L48 16 L58 16 L58 22 L68 22 L68 26 L76 26', b: FULL_IN(48), m: 48 },
+  loop_roll: { a: 'M0 4 L52 4 L56 14 L59 4 L63 14 L66 4 L70 14 L72 4', b: FULL_IN(73), m: 73 },
+  brake: { a: 'M0 4 L45 4 C60 4 68 10 74 28', b: FULL_IN(75), m: 75 },
+  backspin: { a: 'M0 4 L55 4 C62 4 66 14 69 28', b: FULL_IN(70), m: 70 },
+  reverb: { a: 'M0 4 L45 4 C65 4 70 28 100 28', b: 'M45 28 C60 28 70 4 100 4' },
+  gate: { a: 'M0 4 L40 4 L40 28 L46 28 L46 4 L50 4 L50 28 L55 28 L55 4 L58 4 L58 28 L61 28 L61 4', b: FULL_IN(62), m: 62 },
+  riser: { a: 'M0 4 L60 4', b: FULL_IN(60), x: 'M10 28 L60 4', m: 60 },
+  cut: { a: 'M0 4 L50 4', b: FULL_IN(50), m: 50 },
+  fade: { a: 'M0 4 L45 28', b: 'M55 28 L100 4' },
+  dropswap: { a: 'M0 4 L50 4', b: 'M0 28 L50 22 L50 4 L100 4', m: 50 },
+};
+FX_SHAPE.half_double = FX_SHAPE.blend;
+/** The shape thumbnail as an inline SVG (decorative: the effect's name is always next to it). */
+export function fxShape(kind) {
+  const d = FX_SHAPE[kind] ?? FX_SHAPE.blend, s = document.createElementNS(SVG, 'svg');
+  s.setAttribute('class', 'shape');
+  s.setAttribute('viewBox', '0 0 100 32');
+  s.setAttribute('preserveAspectRatio', 'none');
+  s.setAttribute('aria-hidden', 'true');
+  for (const [cls, path] of [['x', d.x], ['a', d.a], ['b', d.b], ['m', d.m != null ? `M${d.m} 0 L${d.m} 32` : null]]) {
+    if (!path) continue;
+    const e = document.createElementNS(SVG, 'path');
+    e.setAttribute('class', cls);
+    e.setAttribute('d', path);
+    s.append(e);
+  }
+  return s;
+}
+
 /** fetch JSON; server errors are always {error}, surfaced as Error(message). */
 export async function api(path, method = 'GET', body) {
   const r = await fetch(path, {

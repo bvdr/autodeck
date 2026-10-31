@@ -242,9 +242,15 @@ body.idle.empty .sign-title, .sign-title.long { font-size: clamp(32px, 4vw, 56px
 .listbox li[aria-selected="true"] { color: var(--text); background: var(--raised); font-weight: 600; }
 .listbox li.active, .listbox li:hover { background: #2b2833; color: var(--text); }
 .listbox li .check { margin-left: auto; }
+/* Effect shapes (design plxFh): lime = A out, violet = B in, red = the incoming lands. */
+.shape { width: 40px; height: 16px; flex: none; fill: none; stroke-width: 1.5; stroke-linejoin: round; overflow: visible; }
+.shape path { vector-effect: non-scaling-stroke; }
+.shape .a { stroke: var(--deck-a); } .shape .b { stroke: var(--deck-b); }
+.shape .m { stroke: var(--on-air); } .shape .x { stroke: var(--text-3); }
 .side-mix { display: grid; justify-items: end; gap: 12px; }
 .mix-name { font: 700 40px/1 var(--display); display: flex; gap: 12px; align-items: center; }
-.mix-name .i { width: 26px; height: 26px; color: var(--text-2); }
+#mix-shape { display: flex; }
+#mix-shape .shape { width: 64px; height: 24px; }
 .mix-bars { display: flex; gap: 6px; }
 .mix-bars i { width: 29px; height: 12px; border-radius: 2px; background: var(--raised); }
 .mix-bars i.done { background: var(--text); }

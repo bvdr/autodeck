@@ -5,7 +5,7 @@
 import * as S from './schedule.js';
 import { Deck, loadTrack, laneText } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith } from './lanes.js';
-import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs } from './ui.js';
+import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs, fxShape } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
 import { initMcp, renderMcp } from './mcp.js';
 
@@ -680,8 +680,7 @@ function updateSign(t, p, mixing, inc, onAir, label) {
       if (bars.childElementCount !== n) bars.replaceChildren(...Array.from({ length: n }, () => document.createElement('i')));
       [...bars.children].forEach((b, k) => { b.className = k < g.bar - 1 ? 'done' : k === g.bar - 1 ? 'now' : ''; });
     }
-    const href = `#i-${FX_ICON[p.kind] ?? 'blend'}`;
-    if (textCache.get('mix-icon') !== href) { textCache.set('mix-icon', href); $('#mix-icon').setAttribute('href', href); }
+    if (textCache.get('mix-shape') !== p.kind) { textCache.set('mix-shape', p.kind); $('#mix-shape').replaceChildren(fxShape(p.kind)); }
     side = 'mix';
   } else {
     const rest = s?.queue.filter((q) => q.id !== cur?.id) ?? [];
@@ -816,7 +815,8 @@ function updateFx(t) {
     li.setAttribute('role', 'option');
     li.dataset.k = k;
     li.setAttribute('aria-selected', String(k === cur));
-    li.append(icon(k === bad && k ? 'thumbs-down' : k ? FX_ICON[k] ?? 'blend' : p.res.loved_effect ? 'flame' : 'sparkles'), span);
+    // Effects show their shape (design plxFh); Auto keeps its sparkles / loved flame.
+    li.append(k ? fxShape(k) : icon(p.res.loved_effect ? 'flame' : 'sparkles'), span);
     if (k === cur) li.append(icon('check', 'check'));
     li.onclick = () => chooseFx(k);
     return li;
