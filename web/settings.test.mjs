@@ -1,0 +1,24 @@
+// node --test web/settings.test.mjs — what Settings says about the Last.fm key (pure helpers in ui.js).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { keyProblem, lastfmState } from './ui.js';
+
+test('key format is checked before any request (same rule as the server)', () => {
+  assert.equal(keyProblem('0123456789abcdef0123456789ABCDEF'), null);
+  assert.equal(keyProblem('  0123456789abcdef0123456789abcdef  '), null);
+  assert.match(keyProblem(''), /Paste/);
+  assert.match(keyProblem('nope'), /32 letters/);
+  assert.match(keyProblem('g'.repeat(32)), /32 letters/);
+});
+
+test('state line shows only the last 4 characters and who set the key', () => {
+  assert.deepEqual(lastfmState({ set: false, hint: null, source: null }),
+    { text: 'Not set — party suggestions and Hits/Oldies/Latino need it', cls: 'unset', removable: false });
+  const saved = lastfmState({ set: true, hint: '1e16', source: 'settings' });
+  assert.equal(saved.text, 'Set · ends in …1e16');
+  assert.ok(saved.removable);
+  // Only a key saved from Settings can be removed from the page.
+  const env = lastfmState({ set: true, hint: 'abcd', source: 'env' });
+  assert.ok(!env.removable && /environment/.test(env.text));
+  assert.ok(!lastfmState({ set: true, hint: 'abcd', source: 'legacy' }).removable);
+});

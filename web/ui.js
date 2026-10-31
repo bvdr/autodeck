@@ -428,7 +428,7 @@ function showSugg(list) {
   // No Last.fm key: a setup hint instead of an empty list (party ordering still works).
   $('#sugg-msg').replaceChildren(el('span', { className: 'key-hint' },
     el('b', {}, icon('key-round'), ' Suggestions need a free Last.fm API key'),
-    el('code', { textContent: '~/.config/autodeck/lastfm.env\nLASTFM_API_KEY=…' }),
+    el('button', { type: 'button', className: 'btn', onclick: () => togglePop('settings', true) }, icon('settings'), 'Add it in Settings'),
     el('a', { href: 'https://www.last.fm/api/account/create', target: '_blank', rel: 'noopener' }, 'Get a key at last.fm/api')));
 }
 
@@ -529,12 +529,64 @@ async function add(url) {
   } catch (e) { msg.textContent = e.message; } // 400 {error} from the server
 }
 
-function togglePop(open) {
-  const pop = $('#add-pop');
-  open ??= pop.hidden;
-  pop.hidden = !open;
-  for (const b of ['#add-btn', '#menu-btn']) $(b).setAttribute('aria-expanded', String(open));
-  if (open) $('#url').focus();
+// Header popovers: one open at a time. `btns` carry aria-expanded, `focus` gets focus on open.
+const POPS = {
+  add: { pop: '#add-pop', btns: ['#add-btn'], focus: '#url' },
+  settings: { pop: '#settings-pop', btns: ['#settings-btn'], focus: '#lastfm-key', onOpen: () => loadSettings() },
+  menu: { pop: '#menu-pop', btns: ['#menu-btn'], focus: '#menu-add' },
+};
+function togglePop(name, open) {
+  const p = POPS[name];
+  open ??= $(p.pop).hidden;
+  if (open) for (const k of Object.keys(POPS)) if (k !== name) togglePop(k, false);
+  $(p.pop).hidden = !open;
+  for (const b of p.btns) $(b).setAttribute('aria-expanded', String(open));
+  if (open) { p.onOpen?.(); $(p.focus).focus(); }
+}
+const closePops = () => { for (const k of Object.keys(POPS)) togglePop(k, false); };
+
+// --- settings: Last.fm key -------------------------------------------------------------
+/** Instant format check, same rule as the server (which also asks Last.fm). null = looks fine. */
+export function keyProblem(key) {
+  const k = (key ?? '').trim();
+  if (!k) return 'Paste a key first';
+  return /^[0-9a-fA-F]{32}$/.test(k) ? null : 'A Last.fm API key is 32 letters and digits (0-9, a-f)';
+}
+/** What Settings says about the key, from GET /api/settings' `lastfm` (never the key itself). */
+export function lastfmState(lf) {
+  if (!lf?.set) return { text: 'Not set — party suggestions and Hits/Oldies/Latino need it', cls: 'unset', removable: false };
+  const from = lf.source === 'env' ? ' (from the LASTFM_API_KEY environment variable)'
+    : lf.source === 'legacy' ? ' (from ~/.config/autodeck/lastfm.env; saving one here takes over)' : '';
+  // Remove deletes only the key saved from Settings: an env var or the old config file isn't
+  // the page's to delete, and "removing" it would silently do nothing.
+  return { text: `Set · ends in …${lf.hint}${from}`, cls: 'set', removable: lf.source === 'settings' };
+}
+function showSettings(st) {
+  const k = lastfmState(st.lastfm);
+  const el = $('#lastfm-state');
+  el.className = `key-state ${k.cls}`;
+  el.replaceChildren(icon(k.cls === 'set' ? 'circle-check' : 'info'), k.text);
+  $('#lastfm-remove').hidden = !k.removable;
+  if (st.library) $('#lib-path').textContent = st.library;
+}
+async function loadSettings() {
+  try { showSettings(await api('/api/settings')); } catch (e) { $('#lastfm-err').textContent = e.message; }
+}
+async function saveKey(key) {
+  const err = $('#lastfm-err');
+  const bad = key ? keyProblem(key) : null;
+  if (bad) { err.textContent = bad; return; }
+  err.textContent = '';
+  $('#lastfm-state').textContent = key ? 'Checking with Last.fm…' : 'Removing…';
+  try {
+    showSettings(await api('/api/settings/lastfm', 'PUT', { key }));
+    $('#lastfm-key').value = ''; // never keep the key in the page once saved
+    suggFor = null; // suggestions may work now (or stop): reload them on the next state
+    setState(await api('/api/state'));
+  } catch (e) {
+    err.textContent = e.message; // the server's 400 {error}: bad format or Last.fm said no
+    loadSettings();
+  }
 }
 
 // --- phone tabs --------------------------------------------------------------------
@@ -586,7 +638,7 @@ export function initUi(stateCb, h = {}) {
   $('#search-cancel').addEventListener('click', () => { q.value = ''; search(''); toTab('now'); });
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest('#search-panel, #search-form') && !matchMedia('(max-width: 600px)').matches) panel.hidden = true;
-    if (!e.target.closest('#add-pop, #add-btn, #menu-btn')) togglePop(false);
+    if (!e.target.closest('.pop, #add-btn, #menu-btn, #settings-btn')) closePops();
   });
   // Openers
   for (const b of document.querySelectorAll('[data-op]')) b.addEventListener('click', () => { opTab = b.dataset.op; $('#op-find').value = ''; renderOpeners(last); });
@@ -614,9 +666,21 @@ export function initUi(stateCb, h = {}) {
   document.addEventListener('focusout', (e) => { if (e.target.tagName === 'SELECT') setTimeout(flush); });
 
   // Add by link: the popover, or drop / paste a link anywhere on the page.
-  $('#add-btn').addEventListener('click', () => togglePop());
-  $('#menu-btn').addEventListener('click', () => togglePop());
-  $('#add-pop').addEventListener('keydown', (e) => { if (e.key === 'Escape') { togglePop(false); $('#add-btn').focus(); } });
+  $('#add-btn').addEventListener('click', () => togglePop('add'));
+  $('#settings-btn').addEventListener('click', () => togglePop('settings'));
+  $('#menu-btn').addEventListener('click', () => togglePop('menu'));
+  $('#menu-add').addEventListener('click', () => togglePop('add', true));
+  $('#menu-settings').addEventListener('click', () => togglePop('settings', true));
+  for (const [name, p] of Object.entries(POPS)) {
+    $(p.pop).addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      togglePop(name, false);
+      // Back to whichever header button is on screen (desktop button or the phone's "…").
+      [...p.btns, '#menu-btn'].map((b) => $(b)).find((b) => b.offsetParent)?.focus();
+    });
+  }
+  $('#lastfm-form').addEventListener('submit', (e) => { e.preventDefault(); saveKey($('#lastfm-key').value.trim()); });
+  $('#lastfm-remove').addEventListener('click', () => saveKey(''));
   $('#add-form').addEventListener('submit', (e) => { e.preventDefault(); add($('#url').value.trim()); });
   const overlay = $('#drop-overlay');
   const isUrlDrag = (e) => !e.dataTransfer.types.includes(ROW_TYPE)
@@ -627,7 +691,7 @@ export function initUi(stateCb, h = {}) {
     overlay.hidden = true;
     if (!isUrlDrag(e)) return;
     e.preventDefault();
-    togglePop(true);
+    togglePop('add', true);
     add(urlFrom(e.dataTransfer));
   });
   // Pasting a link outside any text field adds it directly; pasting into a field just fills it.
@@ -636,7 +700,7 @@ export function initUi(stateCb, h = {}) {
     const url = urlFrom(e.clipboardData);
     if (!/^https?:\/\//.test(url)) return;
     e.preventDefault();
-    togglePop(true);
+    togglePop('add', true);
     add(url);
   });
 }

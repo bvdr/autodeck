@@ -61,6 +61,9 @@
     <symbol id="i-waves" viewBox="0 0 24 24"><path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/> <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/> <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/></symbol>
     <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M12 20h.01"/> <path d="M8.5 16.429a5 5 0 0 1 7 0"/> <path d="M5 12.859a10 10 0 0 1 5.17-2.69"/> <path d="M19 12.859a10 10 0 0 0-2.007-1.523"/> <path d="M2 8.82a15 15 0 0 1 4.177-2.643"/> <path d="M22 8.82a15 15 0 0 0-11.288-3.764"/> <path d="m2 2 20 20"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/> <path d="m6 6 12 12"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/> <circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-external-link" viewBox="0 0 24 24"><path d="M15 3h6v6"/> <path d="M10 14 21 3"/> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
   </svg>
   <div class="app">
   <!-- Transport. On a phone this header is display:contents and its controls are laid out
@@ -92,8 +95,37 @@
       <svg class="i"><use href="#i-radio"/></svg><span class="desk-only">Hold for echo</span><span class="phone-only">Hold: echo</span></button>
     <button id="add-btn" type="button" class="btn needs-server desk-only" aria-expanded="false" aria-controls="add-pop">
       <svg class="i"><use href="#i-link"/></svg>Add link</button>
-    <button id="menu-btn" type="button" class="icon-btn phone-only" aria-expanded="false" aria-controls="add-pop"
-            aria-label="Add a link"><svg class="i"><use href="#i-ellipsis"/></svg></button>
+    <button id="settings-btn" type="button" class="icon-btn desk-only" aria-expanded="false" aria-controls="settings-pop"
+            aria-label="Settings" title="Settings"><svg class="i"><use href="#i-settings"/></svg></button>
+    <button id="menu-btn" type="button" class="icon-btn phone-only" aria-expanded="false" aria-controls="menu-pop"
+            aria-label="More: add a link, settings"><svg class="i"><use href="#i-ellipsis"/></svg></button>
+    <!-- Phone "…" menu: what the desktop header has as buttons. -->
+    <div id="menu-pop" class="pop menu" hidden>
+      <button type="button" id="menu-add"><svg class="i"><use href="#i-link"/></svg>Add link</button>
+      <button type="button" id="menu-settings"><svg class="i"><use href="#i-settings"/></svg>Settings</button>
+    </div>
+    <!-- Settings: the Last.fm key (never shown or logged in full: the server only ever sends
+         its last 4 characters) and where the library lives on disk. -->
+    <div id="settings-pop" class="pop settings" role="dialog" aria-labelledby="settings-h" hidden>
+      <h2 id="settings-h" class="settings-h">Settings</h2>
+      <form id="lastfm-form" class="settings-block">
+        <label for="lastfm-key">Last.fm API key</label>
+        <p id="lastfm-state" class="key-state"></p>
+        <div class="row-fields">
+          <input id="lastfm-key" type="password" placeholder="32 letters and digits" autocomplete="off"
+                 spellcheck="false" aria-describedby="lastfm-err lastfm-state">
+          <button type="submit" class="btn primary needs-server">Save</button>
+        </div>
+        <p id="lastfm-err" class="field-msg bad" role="alert"></p>
+        <p class="settings-links">
+          <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener">
+            <svg class="i"><use href="#i-external-link"/></svg>Get a free key at last.fm/api/account/create</a>
+          <button id="lastfm-remove" type="button" class="link-btn" hidden>Remove key</button>
+        </p>
+      </form>
+      <p class="settings-block storage"><svg class="i"><use href="#i-folder"/></svg>
+        <span>Your library (songs, moods, pairs, history) is stored in <code id="lib-path">~/Library/Application Support/autodeck</code></span></p>
+    </div>
     <!-- Add by URL. Dropping or pasting a link anywhere on the page adds it too. -->
     <div id="add-pop" class="pop" hidden>
       <form id="add-form">
