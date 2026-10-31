@@ -276,6 +276,17 @@ def test_corrupt_or_stale_session_is_ignored(tmp_library):
     assert e.playing is None and e.played == {IDS[0]} and e.maps == {}
 
 
+def test_active_genre_survives_a_restart(client):
+    # It used to reset to Any on every restart.
+    client.post("/api/genre", json={"genre": "Hip-hop"})
+    assert Engine().genre == "Hip-hop"
+    config.save_genres(["Pop"])  # the genre was deleted meanwhile: back to Any
+    assert Engine().genre == "Any"
+    client.post("/api/party", json={"flavor": "hits"})  # a party resets the vibe; it's what comes back
+    e = Engine()
+    assert (e.party, e.genre) == ("hits", "Any")
+
+
 def test_deck_peaks_cover_only_the_played_span(client):
     # peaks.json covers the whole 48 s source; the deck draws them over the trimmed render
     # [play_start, play_end], so unsliced they were stretched and misaligned.

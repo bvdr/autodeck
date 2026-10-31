@@ -132,6 +132,8 @@ class Engine:
             "maps": {k: tm.points for k, tm in self.maps.items()},
             "entered": {k: asdict(t) for k, t in self.entered.items()},
             "beat_to_beat": self.beat_to_beat, "party": self.party, "kept": self.kept,
+            # The active source (genre / mood; party above), so a restart doesn't reset it to Any.
+            "genre": self.genre,
             "requested": self.requested})
 
     def _load_session(self) -> None:
@@ -149,6 +151,10 @@ class Engine:
         self.playing, self.played, self.maps, self.entered = playing, played, maps, entered
         self.beat_to_beat = bool(d.get("beat_to_beat", False))
         self.party = d.get("party") if d.get("party") in party.FLAVORS else None
+        # A genre or mood deleted meanwhile falls back to Any. Party wins if both were saved
+        # (one source at a time; older session files had no genre at all).
+        g = d.get("genre")
+        self.genre = g if g in config.genres() and not self.party else config.ANY_GENRE
         kept = d.get("kept")
         self.kept = {k: str(v) for k, v in kept.items() if k in ids} if isinstance(kept, dict) else {}
         req = d.get("requested")
@@ -828,7 +834,7 @@ class Engine:
             if self.party:
                 self.party = None
                 self._sugg = None
-                self._save_session()
+            self._save_session()  # the source survives a restart
             cur = self.by_id(self.playing) if self.playing else None
             keep = None
             if cur is not None:
