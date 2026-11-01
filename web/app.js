@@ -15,7 +15,7 @@ const $ = (sel) => document.querySelector(sel);
 const clog = (msg) => fetch('/api/log', { method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ msg: String(msg).slice(0, 4000) }) }).catch(() => {});
 window.addEventListener('error', (e) => clog(`error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
-window.addEventListener('unhandledrejection', (e) => clog(`unhandled: ${e.reason?.stack || e.reason}`));
+window.addEventListener('unhandledrejection', (e) => clog(`unhandled: ${e.reason} | ${e.reason?.stack ?? ""}`));
 const POLL_MS = 2000;
 const MAX_RETRIES = 3; // tooSoon refetches before giving up and letting the song play out
 const RATE_MS = 30000; // "How was that mix?" stays this long after a mix, then goes by itself
