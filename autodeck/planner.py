@@ -18,6 +18,10 @@ BLEND_BARS = (8, 4)     # beat-matched overlap lengths, preferred first
 MAX_BLEND_SHARE = 0.25  # a blend never takes more than this share of either song
 LOCAL_BAR_TOL = 0.06  # a bar in a blend window may differ this much from the window's median bar
 LOCAL_MIN_BARS = 4    # tempo is measured over at least this many bars around a blend
+# Vocal activity (stems.activity: vocal RMS / mix RMS per second) at or above this, averaged over a
+# blend window, counts as "singing there". demucs leaks a little into the vocal stem, so not 0.
+# ponytail: one hand-picked threshold; tune by ear if Auto picks Vocal swap over near-instrumentals.
+SINGING = 0.3
 
 
 @dataclass
@@ -250,16 +254,25 @@ EXIT_FX_BARS = {"echo": 2, "loop_roll": 2, "brake": 1, "backspin": 1, "reverb": 
 # These land the incoming on its drop (first full-beat bar) when it's near the start: a
 # stop/stutter/riser into a quiet intro would fall flat.
 INTO_DROP = {"loop_roll", "brake", "backspin", "gate", "riser"}
-MATCHED_FX = ("blend", "bass_swap", "filter_sweep")
+# vocal_swap: a blend where A drops to its instrumental stem as B comes in (needs A's stems).
+MATCHED_FX = ("blend", "bass_swap", "filter_sweep", "vocal_swap")
 # Effects that still work when one song has no trustworthy beat grid (owner: the dropdown
 # showed only "fade" for ~1/4 of pairs). Roll/gate need the outgoing's bar grid to sound right.
 GRIDLESS_OK = ("echo", "brake", "backspin", "reverb", "riser", "cut")
 FORCEABLE = (*MATCHED_FX, *EXIT_FX_BARS, "dropswap", "cut", "fade")
 
 
+def _singing(act: list[float] | None, t0: float, t1: float) -> bool:
+    """True when the vocal stem is active over [t0, t1] (original seconds) on average."""
+    if not act:
+        return False
+    win = act[max(0, int(t0)): max(int(t0) + 1, int(t1 + 0.999))]
+    return bool(win) and sum(win) / len(win) >= SINGING
+
+
 def pick_transition(a: Song, b: Song, after: float | None = None, entered: Transition | None = None,
                     beat_to_beat: bool = False, force: str | None = None,
-                    enter: float | None = None) -> Transition:
+                    enter: float | None = None, vocals: dict[str, list[float]] | None = None) -> Transition:
     """Plan a -> b. `after` = mix now: leave at the first phrase boundary >= after.
 
     `entered` is the transition that brought `a` in. When given, a's exit is chosen
@@ -276,7 +289,14 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
 
     `enter` = original start of the b section the owner picked on the cued deck: b comes in
     there (in_at == enter) instead of at its play_start.
+
+    `vocals` = song id -> per-second vocal activity, for songs that have stems (stems.activity).
+    Vocal swap is only possible when a has stems; Auto picks it over a plain beat blend when
+    both songs sing in the blend window (two singers would clash there).
     """
+    vocals = vocals or {}
+    if force == "vocal_swap" and a.id not in vocals:
+        force = None  # can't drop a's vocals without its stems: the normal choice
     entry = _entry_view(b, enter) if enter is not None else None
     if entry:
         b = entry
@@ -340,8 +360,11 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
             lb = _local_bpm(b, bn.play_start, bn.play_start + max(n_len * ratio, LOCAL_MIN_BARS * _bar(bn.bpm)))
             local = tempo_relation(la, lb) if la and lb else ("none", 1.0)
             if local[0] != "none":
-                label = force if force in ("bass_swap", "filter_sweep") else (
+                label = force if force in ("bass_swap", "filter_sweep", "vocal_swap") else (
                     "blend" if local[0] == "match" else "half_double")
+                if force is None and a.id in vocals and _singing(vocals[a.id], out_at, out_at + n_len) \
+                        and _singing(vocals.get(b.id), bn.play_start, bn.play_start + n_len * local[1]):
+                    label = "vocal_swap"
                 return mk(label, out_at, bn.play_start, n_len, local[1])
             # ponytail: one exit tried; junk/drifting bars there -> phrase cut/echo, not another exit.
         kind = "none"  # no fitting overlap, or the bars at it can't be trusted: cut/echo below

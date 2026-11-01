@@ -175,7 +175,7 @@ def _title(s: dict, sid: str) -> str:
 
 # The page's names for the effects (web/ui.js FX_LABEL), so the log reads like the screen.
 FX_NAME = {"blend": "Beat blend", "half_double": "Beat blend (½×/2×)", "bass_swap": "Bass swap",
-           "filter_sweep": "Filter sweep", "echo": "Echo out", "loop_roll": "Loop roll", "brake": "Brake",
+           "filter_sweep": "Filter sweep", "vocal_swap": "Vocal swap", "echo": "Echo out", "loop_roll": "Loop roll", "brake": "Brake",
            "backspin": "Backspin", "reverb": "Reverb wash", "gate": "Gate / stutter", "riser": "Riser → drop",
            "dropswap": "Drop swap", "cut": "Cut", "fade": "Fade"}
 songs_n = lambda n: f"{n} song{'' if n == 1 else 's'}"  # noqa: E731
@@ -265,9 +265,10 @@ def mix_now() -> dict:
 @tool("Set next transition effect", "picking the next effect")
 def set_next_effect(effect: str = "") -> dict:
     """Force how the next transition sounds; empty = let the app choose. Effects: blend,
-    bass_swap, filter_sweep (beat-matched), echo, loop_roll, brake, backspin, reverb, gate,
-    riser, dropswap, cut, fade. An effect that can't work for the song pair falls back to the
-    app's choice. Applies only to the current song's exit."""
+    bass_swap, filter_sweep, vocal_swap (beat-matched; vocal_swap drops the playing song's vocals as
+    the next one comes in, and needs its vocal/instrumental stems), echo, loop_roll, brake, backspin,
+    reverb, gate, riser, dropswap, cut, fade. An effect that can't work for the song pair falls back
+    to the app's choice. Applies only to the current song's exit."""
     s = _api("/api/next_effect", "POST", {"effect": effect or None})
     fx = s.get("next_effect")
     say(f"Set the next effect to {FX_NAME.get(fx, fx)}" if fx else "Let autodeck pick the next effect")

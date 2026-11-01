@@ -1008,3 +1008,44 @@ def test_transition_enters_the_cued_song_at_a_clicked_section(client):
     # Meant for another song (the queue moved on): ignored.
     other = client.get("/api/transition", params={"from": IDS[0], "enter": 1, "to": IDS[3]}).json()
     assert other["transition"] == plain["transition"]
+
+
+def _fake_stems(sid, secs=48.0, vocal=1.0):
+    from autodeck import stems
+
+    t = np.arange(int(secs * 48000)) / 48000
+    y = (0.1 * np.sin(2 * np.pi * 110 * t)).astype(np.float32)
+    for name in stems.NAMES:
+        sf.write(stems.path(sid, name), y, 48000, format="OGG", subtype="OPUS")
+    config.write_json_atomic(library.song_dir(sid) / "stems.json", {"vocal": [vocal] * int(secs)})
+
+
+def test_vocal_swap_needs_a_stems_and_brings_its_instrumental(client):
+    a = IDS[0]
+    client.post("/api/playing", json={"id": a})
+    plain = client.get("/api/transition", params={"from": a}).json()
+    assert "vocal_swap" not in plain["options"] and plain["out_stem"] is None
+    # No stems: Voice/Beat has nothing to play yet.
+    assert client.get(f"/api/stem/{a}/vocals").status_code == 409
+    _fake_stems(a, vocal=0.0)
+    r = client.get("/api/transition", params={"from": a}).json()
+    assert "vocal_swap" in r["options"] and r["transition"]["kind"] != "vocal_swap"  # b has no stems: Auto unchanged
+    r = client.get("/api/transition", params={"from": a, "kind": "vocal_swap"}).json()
+    assert r["transition"]["kind"] == "vocal_swap"
+    assert r["out_stem"].startswith(f"/audio/{a}/render-") and r["out_stem"].endswith("-instrumental.wav")
+    assert client.get(r["out_stem"]).status_code == 200
+    # Both sing in the blend window: Auto picks it by itself.
+    _fake_stems(a)
+    _fake_stems(r["transition"]["in_id"])
+    assert client.get("/api/transition", params={"from": a}).json()["transition"]["kind"] == "vocal_swap"
+
+
+def test_stem_endpoint_renders_with_the_playing_map(client):
+    a = IDS[0]
+    client.post("/api/playing", json={"id": a})
+    _fake_stems(a)
+    deck = client.get(f"/api/deck/{a}").json()
+    r = client.get(f"/api/stem/{a}/instrumental").json()
+    assert r["url"] == deck["url"].replace(".wav", "-instrumental.wav")
+    assert client.get(r["url"]).status_code == 200
+    assert client.get(f"/api/stem/{a}/drums").status_code == 400

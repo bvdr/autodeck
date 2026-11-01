@@ -395,3 +395,32 @@ def test_picked_entry_brings_b_in_at_that_section():
     # The first section, or a time no section starts at, is the normal entry.
     assert pick_transition(a, b, enter=b.analysis.sections[0].start) == pick_transition(a, b)
     assert pick_transition(a, b, enter=body.start + 0.5) == pick_transition(a, b)
+
+
+def test_vocal_swap_is_offered_only_when_a_has_stems():
+    a, b = make_song(122, id="a"), make_song(124, id="b")
+    base = pick_transition(a, b)
+    # No stems for a: forcing it gives the normal choice (the dropdown then doesn't list it).
+    assert pick_transition(a, b, force="vocal_swap") == base
+    assert pick_transition(a, b, force="vocal_swap", vocals={"b": [1.0] * 240}) == base
+    t = pick_transition(a, b, force="vocal_swap", vocals={"a": [0.0] * 240})
+    assert t.kind == "vocal_swap"  # forced: works even where nobody sings
+    assert (t.out_at, t.in_at, t.length, t.tempo_ratio) == (base.out_at, base.in_at, base.length, base.tempo_ratio)
+    # Beat-matched only: unrelated tempos can't vocal-swap.
+    far = make_song(150, id="far")
+    assert pick_transition(a, far, force="vocal_swap", vocals={"a": [1.0] * 240}).kind != "vocal_swap"
+
+
+def test_auto_picks_vocal_swap_only_when_both_sing_in_the_blend_window():
+    a, b = make_song(122, id="a"), make_song(124, id="b")
+    base = pick_transition(a, b)
+    sing, quiet = [1.0] * 240, [0.05] * 240
+    assert pick_transition(a, b, vocals={"a": sing, "b": sing}).kind == "vocal_swap"
+    assert pick_transition(a, b, vocals={"a": sing, "b": quiet}) == base
+    assert pick_transition(a, b, vocals={"a": quiet, "b": sing}) == base
+    assert pick_transition(a, b, vocals={"a": sing}) == base  # b's vocals unknown
+    # Only the blend window counts: a singing everywhere except where it leaves.
+    gap = [1.0] * int(base.out_at) + [0.0] * (240 - int(base.out_at))
+    assert pick_transition(a, b, vocals={"a": gap, "b": sing}) == base
+    # The owner's pick still wins over Auto.
+    assert pick_transition(a, b, force="bass_swap", vocals={"a": sing, "b": sing}).kind == "bass_swap"

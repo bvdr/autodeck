@@ -20,6 +20,7 @@ import soundfile as sf
 from autodeck.config import EASE_BARS
 
 log = logging.getLogger(__name__)
+from autodeck import stems
 from autodeck.library import ANALYSIS_VERSION, Song, audio_path, song_dir
 from autodeck.planner import Transition
 
@@ -145,16 +146,29 @@ def _loudness_gain(y: np.ndarray, sr: int) -> float:
     return min(gain, PEAK_CEILING / peak) if peak > 0 else gain
 
 
-def render(song: Song, tm: TimeMap) -> Path:
-    out = song_dir(song.id) / f"render-{_hash(tm)}.wav"
+def _trimmed(src: Path, tm: TimeMap) -> tuple[np.ndarray, int]:
+    y, sr = sf.read(src, dtype="float32", always_2d=False)
+    return y[int(round(tm.points[0][0] * sr)): int(round(tm.points[-1][0] * sr))], sr
+
+
+def render(song: Song, tm: TimeMap, stem: str | None = None) -> Path:
+    """The song (or one of its stems: "vocals" | "instrumental", see stems.py) through time map tm.
+
+    A stem goes through exactly the same path as the main render (same map, same Rubber Band
+    options, same gain), so the two stay sample-aligned and Voice + Beat add back up to Both.
+    Costs one more Rubber Band pass (~as long as the main render), so the web UI only asks for a
+    stem when it's needed: A's instrumental for a planned Vocal swap, or the Voice/Beat switch."""
+    out = song_dir(song.id) / f"render-{_hash(tm)}{'-' + stem if stem else ''}.wav"
     if out.exists():
         return out
-    y, sr = sf.read(audio_path(song.id), dtype="float32", always_2d=False)
-    o_start, o_end = tm.points[0][0], tm.points[-1][0]
-    y = y[int(round(o_start * sr)): int(round(o_end * sr))]
+    y, sr = _trimmed(audio_path(song.id), tm)
+    o_start = tm.points[0][0]
     # Measured on the song's own (trimmed) audio, before stretching: stretching doesn't change
-    # loudness, and every render of a song then gets the same gain.
+    # loudness, and every render of a song then gets the same gain. A stem gets the song's gain too
+    # (its own loudness would boost a quiet vocal stem and break Voice + Beat == Both).
     gain = _loudness_gain(y, sr)
+    if stem:
+        y, sr = _trimmed(stems.path(song.id, stem), tm)
     if not _is_identity(tm):
         # Sample-index pairs relative to the trimmed start; the final (n_src, n_dst)
         # pair is required or rubberband stops mapping early.

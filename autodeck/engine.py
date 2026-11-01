@@ -1576,6 +1576,19 @@ class Engine:
             self.maps.setdefault(sid, tm)
             return self._deck(s, tm, path)
 
+    def stem(self, sid: str, name: str) -> dict:
+        """The Voice/Beat switch: song sid's stem `name` rendered with the map it's playing on, so it
+        lines up sample for sample with the main render the deck is already playing."""
+        if name not in stems.NAMES:
+            raise EngineError(400, f"Unknown stem: {name}")
+        with LOCK:
+            s = self._ready(sid)
+            tm = self.maps.get(sid) or time_map_for(s, None)
+        if not stems.has(sid):
+            raise EngineError(409, "No stems for this song yet")
+        path = render(s, tm, stem=name)  # one Rubber Band pass; never under the lock
+        return {"id": sid, "stem": name, "url": f"/audio/{sid}/{path.name}"}
+
     def transition(self, from_id: str, after: float | None, kind: str | None = None,
                    enter: int | None = None, to: str | None = None) -> dict:
         """`enter` = index into the cued song's sections_rendered: the owner clicked that section on
@@ -1596,9 +1609,11 @@ class Engine:
             after_orig = tm_a.to_original(after) if after is not None else None
             shown = _shown_sections(b.analysis)
             enter_at = shown[enter].start if to == b.id and enter is not None and 0 < enter < len(shown) else None
+            # Vocal activity of the songs that have stems: Vocal swap needs a's (planner).
+            vocals = {s.id: v for s in (a, b) if (v := stems.activity(s.id)) is not None}
             plan = lambda force: pick_transition(  # noqa: E731
                 a, b, after=after_orig, entered=self.entered.get(a.id),
-                beat_to_beat=self.beat_to_beat, force=force, enter=enter_at)
+                beat_to_beat=self.beat_to_beat, force=force, enter=enter_at, vocals=vocals)
             # The dropdown lists only effects that actually work for this pair (pure, cheap:
             # the planner is a handful of list scans). "blend" covers half_double too.
             options = [k for k in FORCEABLE
@@ -1620,6 +1635,14 @@ class Engine:
             # exits after the ease when it can, so the ease is rarely cut short.
             tm_b = time_map_for(b, tr)
         path = render(b, tm_b)  # blocks a few seconds; endpoint is a threadpool `def`
+        # Vocal swap: a drops to its instrumental, rendered with the map a is playing on (aligned).
+        # A failed render degrades to a plain blend in the player (out_stem missing), never silence.
+        out_stem = None
+        if tr.kind == "vocal_swap":
+            try:
+                out_stem = f"/audio/{a.id}/{render(a, tm_a, stem='instrumental').name}"
+            except Exception:
+                logging.getLogger(__name__).exception("instrumental render failed for %s", a.id)
         with LOCK:
             plan_id = uuid.uuid4().hex
             self.plans[plan_id] = (b.id, tm_b, tr)
@@ -1634,5 +1657,6 @@ class Engine:
                     # effect the picker dims as "you 👎 it here".
                     "loved_effect": loved_fx, "avoid_effect": avoid_fx,
                     "out_at_rendered": tm_a.to_rendered(tr.out_at),
+                    "out_stem": out_stem,
                     "in_at_rendered": tm_b.to_rendered(tr.in_at)}
 

@@ -37,9 +37,6 @@ OPUS_BITRATE = "96k"   # ~2.9 MB per 4-min stem; transparent enough for a stem t
 # Stems are kept for at most this many songs (~7 MB each); the oldest go first, never one that's
 # wanted right now. Same idea as render pruning: re-made on demand, so dropping them is safe.
 MAX_SONGS = 40
-# Per-second vocal activity = vocal RMS / mix RMS. demucs leaks a little; above this counts as singing.
-# ponytail: one hand-picked threshold; tune by ear if Auto picks Vocal swap over spoken intros.
-SINGING = 0.35
 
 _model = None
 _lock = threading.Lock()  # one model load; separate() itself only runs on the worker thread
@@ -59,7 +56,8 @@ def has(song_id: str) -> bool:
 
 
 def activity(song_id: str) -> list[float] | None:
-    """Vocal activity per original second (0..1), None without stems."""
+    """Vocal activity per original second (0..1) = vocal RMS / mix RMS, None without stems.
+    The planner reads it to let Auto pick Vocal swap (planner.SINGING)."""
     if not has(song_id):
         return None
     try:

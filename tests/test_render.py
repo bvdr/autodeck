@@ -146,3 +146,29 @@ def test_renders_are_loudness_matched(tmp_library):
         assert np.max(np.abs(y)) < 1.0
     assert abs(out[0] - out[1]) < 1.0
     assert abs(out[1] - LOUDNESS_TARGET) < 1.0
+
+
+def test_stem_renders_follow_the_same_time_map(tmp_library):
+    """A stem goes through the main render's path: same map, same gain, same length, aligned."""
+    from autodeck import stems
+
+    s = make_song(ps=0.0, pe=60.0)
+    _put_audio(tmp_library, s, sr=48000, secs=62)
+    y, sr = sf.read(song_dir(s.id) / "audio.flac", dtype="float32")
+    sf.write(stems.path(s.id, "vocals"), 0.5 * y, sr, format="OGG", subtype="OPUS")
+    tm = time_map_for(s, tr(s, ratio=1.05, length=10.0, in_at=0.0, out_at=60.0))
+    main = render(s, tm)
+    voc = render(s, tm, stem="vocals")
+    assert voc != main and voc.name == main.name.replace(".wav", "-vocals.wav")
+    m, _ = sf.read(main)
+    v, _ = sf.read(voc)
+    assert len(v) == len(m)
+    # Same gain as the song: the stem renders at half the main's level, not normalised up.
+    mid = slice(sr * 5, sr * 50)
+    assert np.std(v[mid, 0]) / np.std(m[mid, 0]) == pytest.approx(0.5, rel=0.05)
+    # Sample-aligned: the clicks line up (cross-correlation peaks at lag 0, within a few samples).
+    a, b = np.abs(np.diff(m[mid, 0])), np.abs(np.diff(v[mid, 0]))
+    lags = range(-200, 201)
+    best = max(lags, key=lambda k: float(np.dot(a[200:-200], np.roll(b, k)[200:-200])))
+    assert abs(best) <= 3
+    assert render(s, tm, stem="vocals") == voc  # cached like the main render
