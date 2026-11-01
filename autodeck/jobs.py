@@ -4,7 +4,7 @@ import random
 import threading
 from collections.abc import Callable
 
-from . import analyze, config, fetch, genre, library
+from . import analyze, config, fetch, genre, library, stems
 from .library import Song
 
 log = logging.getLogger(__name__)
@@ -14,10 +14,16 @@ class Worker:
     # ponytail: one thread, one song at a time. If prep falls behind playback,
     # use 2 threads (download in parallel with analyze).
     def __init__(self, get_state: Callable[[], tuple[list[Song], list[str], str, set[str]]],
-                 on_change: Callable[[], None] = lambda: None, seed: int = 0):
+                 on_change: Callable[[], None] = lambda: None, seed: int = 0,
+                 stems_wanted: Callable[[], list[str]] = list):
         # get_state -> (pool, upcoming ids, active genre, played ids); the server owns all four.
         self.get_state = get_state
         self.on_change = on_change
+        # Ready songs that should have vocal/instrumental stems, most urgent first (ON AIR, then the
+        # next few). Separate from get_state: stems are optional extras, not part of "ready".
+        self.stems_wanted = stems_wanted
+        # Songs whose separation failed this run: never retried in a loop (a restart retries).
+        self.stems_failed: set[str] = set()
         # Fixed seed per instance: the "rest of the queue" order is random but reproducible in tests.
         self._rng = random.Random(seed)
         self._wake = threading.Event()
@@ -59,6 +65,21 @@ class Worker:
         self._rng.shuffle(rest)
         return (out + hit + rest)[: config.WINDOW_SIZE]
 
+    def next_job(self, pool: list[Song], upcoming: list[str], genre_name: str,
+                 played: set[str] = frozenset()) -> tuple[str, str] | None:
+        """("prep", id) | ("stems", id) | None. Selection is purely status-based: every _prep ends
+        ready/failed, so no "done" set is needed and retry/re-add (status back to queued) just works.
+
+        Stems are low priority: the next songs' download + analysis always come first, so a
+        separation (~17 s on MPS) never delays the next mix being ready. They do go before filling
+        the rest of the window, or a big library would keep them waiting forever."""
+        ids = self.wanted(pool, upcoming, genre_name, played)
+        if not (ids and ids[0] in upcoming):
+            sid = self.next_stems()
+            if sid:
+                return "stems", sid
+        return ("prep", ids[0]) if ids else None
+
     # --- thread control --------------------------------------------------------
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True, name="autodeck-worker")
@@ -80,18 +101,35 @@ class Worker:
         while not self._stop:
             try:
                 pool, upcoming, active, played = self.get_state()
-                # Selection is purely status-based: every _prep ends ready/failed, so no
-                # "done" set is needed and retry/re-add (status back to queued) just works.
-                ids = self.wanted(pool, upcoming, active, played)
-                if not ids:
+                job = self.next_job(pool, upcoming, active, played)
+                if job is None:
                     # Idle: sleep until poked; the timeout is a safety net for missed pokes.
                     self._wake.wait(2)
                     self._wake.clear()
                     continue
-                self._prep(next(s for s in pool if s.id == ids[0]))
+                kind, sid = job
+                if kind == "stems":
+                    self._stems(sid)
+                else:
+                    self._prep(next(s for s in pool if s.id == sid))
             except Exception:  # never let the thread die
                 log.exception("worker loop error")
                 self._wake.wait(2)
+
+    # --- stems (low priority, see _run) -----------------------------------------
+    def next_stems(self) -> str | None:
+        return next((i for i in self.stems_wanted() if i not in self.stems_failed and not stems.has(i)), None)
+
+    def _stems(self, sid: str) -> None:
+        try:
+            stems.separate(sid)
+            stems.prune(set(self.stems_wanted()))
+        except Exception:
+            # A failed split only means "no Voice/Beat, no Vocal swap" for this song: playback
+            # never depends on stems, so log it, remember it, and carry on.
+            log.exception("stems failed for %s", sid)
+            self.stems_failed.add(sid)
+        self.on_change()
 
     # --- one song --------------------------------------------------------------
     def _set(self, song: Song, status: str, error: str | None = None, analysis=None) -> None:

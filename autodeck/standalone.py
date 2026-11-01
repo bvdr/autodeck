@@ -10,7 +10,7 @@ own source + uv.lock. Everything heavy is installed on first launch into
                       versions, hashes verified by uv
     runtime/bin/      ffmpeg -> the imageio-ffmpeg wheel's binary (deno is in venv/bin)
     runtime/setup.json  marker: app version, lock hash, Python version; written last
-    models/           beat_this, Discogs-EffNet, Whisper tiny (pinned URLs + sha256)
+    models/           beat_this, Discogs-EffNet, Whisper tiny, htdemucs (pinned URLs + sha256)
 
 Launch sequence (Contents/MacOS/autodeck is a shell script):
   1. bootstrap(), on the bundled Python, stdlib only: copy Python, then `uv sync --only-group ui`
@@ -46,6 +46,9 @@ PY = f"python{sys.version_info.major}.{sys.version_info.minor}"
 # Whisper one is also Hugging Face's LFS id); a mismatch is treated as a failed download.
 WHISPER = "https://huggingface.co/Systran/faster-whisper-tiny/resolve/d90ca5fe260221311c53c58e660288d3deb8d356/"
 DISCOGS = "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/"
+# Vocal/instrumental stems (stems.py), which also reads this entry for its dev download + check.
+HTDEMUCS = ("htdemucs-955717e8-8726e21a.th", "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th",
+            "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4", 84141911)
 MODELS = [
     ("beat_this-final0.ckpt", "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt",
      "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331", 81058141),
@@ -61,6 +64,7 @@ MODELS = [
      "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab", 2203239),
     ("faster-whisper-tiny/vocabulary.txt", WHISPER + "vocabulary.txt",
      "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913", 459861),
+    HTDEMUCS,
 ]
 
 

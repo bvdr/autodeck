@@ -11,6 +11,7 @@ WINDOW_SIZE = 10          # songs analysed/rendered ahead in the rolling window
 # made the worker download the whole pool hunting for matches (140 songs / 9 GB in real use).
 MAX_READY_AHEAD = 20
 FIXED_NEXT = 2            # upcoming songs whose order is locked
+STEMS_AHEAD = 3           # Up next songs (after the ON AIR one) that get vocal/instrumental stems
 # Up next is the owner's list (kept songs); below this many ready songs the engine tops it up
 # with auto picks from the active source so the music never stops.
 MIN_UPCOMING = 3

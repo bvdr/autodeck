@@ -5,6 +5,9 @@ requires-python = ">=3.12"
 dependencies = [
     # From PyPI, not git: the standalone app installs with `uv sync` on Macs that have no git.
     "beat-this==1.1.0",
+    # Vocal / instrumental stems (autodeck/stems.py, htdemucs). Resolves to 4.1.0 on Apple Silicon (the
+    # only standalone target); not pinned because 4.1.0 needs numpy<2 on Intel Macs, which librosa rules out.
+    "demucs>=4.0.1",
     "deno>=2.9.8",  # official deno binary as a wheel: yt-dlp's YouTube challenge solver
     "essentia==2.1b6.dev1389",
     "fastapi>=0.162.0",

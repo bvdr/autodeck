@@ -17,7 +17,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from . import config, fetch, jobs, lastfm, library, mcp_activity, moods, party, standalone
+from . import config, fetch, jobs, lastfm, library, mcp_activity, moods, party, standalone, stems
 from .library import Song
 from .planner import FORCEABLE, Transition, avoids, genre_entry, order, pair_key, pick_transition, score_pair
 from .render import TimeMap, render, time_map_for
@@ -207,7 +207,7 @@ class Engine:
         # The MCP button, toast and Activity log (mcp_activity.py); in /api/state as `mcp`.
         self.mcp = mcp_activity.Activity()
         # Created here, started by the server lifespan (tests never start it).
-        self.worker = jobs.Worker(self.get_state, on_change=self._on_worker_change)
+        self.worker = jobs.Worker(self.get_state, on_change=self._on_worker_change, stems_wanted=self.stems_wanted)
         with LOCK:
             self._load_session()
             self._recompute()
@@ -227,6 +227,22 @@ class Engine:
                          if i in by and by[i].status not in ("ready", "failed")]
             ids = list(dict.fromkeys(first + list(self.upcoming) + prep))
             return list(self.pool), ids, self.genre, set(self.played)
+
+    def stems_wanted(self) -> list[str]:
+        """Songs that should have stems: the ON AIR one, then the next few. Only songs about to play,
+        so separation (the heaviest job per song) is never spent on the whole library."""
+        with LOCK:
+            by = {s.id: s for s in self.pool}
+            ids = ([self.playing] if self.playing else []) + self.upcoming[: config.STEMS_AHEAD]
+            return [i for i in dict.fromkeys(ids) if i in by and by[i].status == "ready"]
+
+    def _stems_status(self, sid: str, wanted: list[str]) -> str | None:
+        """Up next's quiet stems icon: "ready" | "preparing" | "failed" | None (not near enough)."""
+        if sid not in wanted:
+            return None
+        if stems.has(sid):
+            return "ready"
+        return "failed" if sid in self.worker.stems_failed else "preparing"
 
     def _on_worker_change(self) -> None:
         # A song changed status (e.g. became ready): it may belong in the queue now.
@@ -432,6 +448,9 @@ class Engine:
             src = self._source()
             if src is not None:
                 src["by"] = "mcp" if "source" in self.by_mcp else None
+            wanted = self.stems_wanted()
+            # Up next rows and the ON AIR deck's Voice/Beat switch: id -> stems status (_stems_status).
+            stems_by = {i: self._stems_status(i, wanted) for i in wanted}
             return {"version": self.version, "genre": self.genre, "genres": config.genres(),
                     "notice": self.notice, "playing": self.playing, "beat_to_beat": self.beat_to_beat,
                     "party": self.party, "flavors": list(party.FLAVORS), "lastfm": bool(lastfm.api_key()),
@@ -457,7 +476,8 @@ class Engine:
                     "pool_counts": counts,
                     # The beat-match limit, so the web UI's beat-match icon uses the planner's
                     # number instead of a copy that could drift (music.tempo_relation).
-                    "beatmatch_max_pct": config.BEATMATCH_MAX_PCT}
+                    "beatmatch_max_pct": config.BEATMATCH_MAX_PCT,
+                    "stems": stems_by}
 
     def add(self, url: str, genre: str | None) -> int:
         _known_genre(genre, allow_none=True)
