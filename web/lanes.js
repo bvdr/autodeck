@@ -13,7 +13,7 @@ export const VIEW_SPAN = 64;   // seconds across a lane (design: ~24 s countdown
 export const NOW_AT = 0.1;     // NOW sits 10 % in from the left when nothing is being mixed
 export const MIX_AT = 0.25;    // a mix window is kept at least this far in, so it's never cut off
 export const NOW_MAX = 0.85;   // ...but NOW never goes further right than this
-const BEATMATCHED = new Set(['blend', 'half_double', 'bass_swap', 'filter_sweep']);
+const BEATMATCHED = new Set(['blend', 'half_double', 'bass_swap', 'filter_sweep', 'vocal_swap']);
 
 /** Left edge (ctx time) of the lane view. Normal: NOW at 10 %. With a mix coming up or under
  * way, the view holds back so the window starts at least 25 % in (design R3rrm: NOW walks

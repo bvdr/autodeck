@@ -28,8 +28,25 @@ export const SWEEP_HP = 1500;    // Hz: incoming starts this thin in a filter sw
 export const SWEEP_LP = 300;     // Hz: outgoing ends this muffled in a filter sweep
 export const CURVE_POINTS = 64;  // enough for a smooth cos/sin; setValueCurveAtTime interpolates
 
+// Voice / Beat switch (design "Voice & beat (stems)"): each deck plays its main render plus, once
+// loaded, its vocal and instrumental stem renders, all started sample-aligned; three gains pick
+// what's heard. A switch is a STEM_FADE linear crossfade (a few ms: no click, still feels instant).
+export const STEM_FADE = 0.02;
+/** Stem gains per mode: main | voc | inst. 'both' plays the plain render, not voc + inst. */
+export function modeGains(mode) {
+  return { main: mode === 'both' ? 1 : 0, voc: mode === 'voice' ? 1 : 0, inst: mode === 'beat' ? 1 : 0 };
+}
+/** Vocal swap, outgoing side: whatever mode A is in until T0, then over one beat A drops to its
+ * instrumental (vocals out) while B rises. Separate from plan() so a mode change on A while the
+ * swap is scheduled can re-apply it from T0 (app.js). */
+export function swapEvents(mode, T0, beat) {
+  const g = modeGains(mode);
+  return ['main', 'voc', 'inst'].flatMap((k) => [set(k, g[k], T0), lin(k, k === 'inst' ? 1 : 0, T0 + beat)]);
+}
+
 const QUICK = new Set(['cut', 'dropswap']); // instant swaps: their `length` is not a crossfade
-const EQUAL_POWER = new Set(['blend', 'half_double']);
+// vocal_swap is a beat blend whose outgoing drops to its instrumental (swapEvents) on top.
+const EQUAL_POWER = new Set(['blend', 'half_double', 'vocal_swap']);
 // Exit effects: the outgoing does its thing for `length`, then the incoming lands.
 export const EXIT = new Set(['echo', 'loop_roll', 'brake', 'backspin', 'reverb', 'gate', 'riser']);
 
@@ -76,9 +93,10 @@ const lin = (param, value, time) => ({ param, type: 'linear', value, time });
  * params: gain | hp (highpass frequency) | echo (send into the delay loop) | delay (delayTime).
  * Every param a plan touches starts with a `set` at `now` so the applier can
  * cancelScheduledValues(now) first and still leave a defined value. Requires now < T0.
- * `beat` = outgoing seconds per beat (echo delay time).
+ * `beat` = outgoing seconds per beat (echo delay time). `outMode` = the outgoing deck's Voice/Beat
+ * mode (vocal swap starts from it). params also: main | voc | inst (stem gains, modeGains).
  */
-export function plan(res, outZero, now, beat = 0.5) {
+export function plan(res, outZero, now, beat = 0.5, outMode = 'both') {
   const t = timing(outZero, res);
   const { kind, T0, length: L } = t;
   const bar = 4 * beat;
@@ -93,6 +111,10 @@ export function plan(res, outZero, now, beat = 0.5) {
     inn.push(set('gain', 0, now), { param: 'gain', type: 'curve', values: c.in, time: T0, duration: L },
       // Bass comes back over the first half; exp ramp because pitch perception is logarithmic.
       set('hp', HP_BLEND, T0), { param: 'hp', type: 'exp', value: HP_IDLE, time: T0 + L / 2 });
+    if (kind === 'vocal_swap') {
+      const g = modeGains(outMode);
+      out.push(...['main', 'voc', 'inst'].map((k) => set(k, g[k], now)), ...swapEvents(outMode, T0, beat));
+    }
   } else if (kind === 'bass_swap') {
     // Both songs at full level; only one has bass. The bass jumps across on the bar line
     // halfway through, so two basslines never play together (the classic club blend).
@@ -329,6 +351,15 @@ export const exitAfterLoop = (l, outAtRendered) => (l && outAtRendered < l.end -
  * control follows: never under the owner's hand on the fader, never once the planned mix can't
  * change (inside the replan margin or running). */
 export const sectionsOpen = ({ manual, plan, now }) => !manual && !(plan && !canReplan(now, plan.T0));
+
+/** The ON AIR deck's [Both | Voice | Beat] switch: { open, why }. Same lock as sections; Voice and
+ * Beat also need the song's stems (/api/state stems: 'ready' | 'preparing' | 'failed' | undefined).
+ * `why` is the reason line shown when it can't be used (null when it can). */
+export function stemsOpen({ manual, plan, now, stems }) {
+  if (!sectionsOpen({ manual, plan, now })) return { open: false, why: 'Locked during the mix' };
+  if (stems === 'ready') return { open: true, why: null };
+  return { open: false, why: stems === 'preparing' ? 'Preparing stems…' : stems === 'failed' ? 'No stems · split failed' : 'No stems for this song' };
+}
 
 /** An ON AIR section can loop if it hasn't been played yet (or is playing with time left). */
 export const loopable = (span, pos, margin = LOOP_MARGIN) => span.end - pos > margin;

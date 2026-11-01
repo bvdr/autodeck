@@ -7,11 +7,11 @@ const $ = (sel) => document.querySelector(sel);
 const ROW_TYPE = 'application/x-autodeck-id';
 
 export const FX_LABEL = { blend: 'Beat blend', half_double: 'Beat blend (½×/2×)', bass_swap: 'Bass swap',
-  filter_sweep: 'Filter sweep', echo: 'Echo out', loop_roll: 'Loop roll', brake: 'Brake', backspin: 'Backspin',
+  filter_sweep: 'Filter sweep', vocal_swap: 'Vocal swap', echo: 'Echo out', loop_roll: 'Loop roll', brake: 'Brake', backspin: 'Backspin',
   reverb: 'Reverb wash', gate: 'Gate / stutter', riser: 'Riser → drop', dropswap: 'Drop swap', cut: 'Cut', fade: 'Fade' };
 // Lucide icon per effect (the design's effect picker and Played rows).
 export const FX_ICON = { blend: 'blend', half_double: 'blend', bass_swap: 'arrow-left-right', filter_sweep: 'audio-waveform',
-  echo: 'radio', loop_roll: 'repeat', brake: 'disc-3', backspin: 'rotate-ccw', reverb: 'waves', gate: 'audio-lines',
+  vocal_swap: 'mic-vocal', echo: 'radio', loop_roll: 'repeat', brake: 'disc-3', backspin: 'rotate-ccw', reverb: 'waves', gate: 'audio-lines',
   riser: 'trending-up', dropswap: 'arrow-down-to-line', cut: 'scissors', fade: 'audio-lines' };
 
 // Effect shapes (design plxFh "EFFECT SHAPES"): a small curve per effect, lime = A out,
@@ -23,6 +23,8 @@ export const FX_SHAPE = {
   blend: { a: 'M0 4 C35 4 65 28 100 28', b: 'M0 28 C35 28 65 4 100 4' },
   bass_swap: { a: 'M0 4 L50 4 C70 4 80 28 100 28', b: 'M0 28 C20 28 30 4 50 4 L100 4', m: 50 },
   filter_sweep: { a: 'M0 4 C50 4 70 20 100 28', b: 'M0 28 C30 20 50 4 100 4' },
+  // A's vocal line (lime) drops on the first beat, A's beat (grey) fades under B, B (violet) rises.
+  vocal_swap: { a: 'M0 4 L14 4 C22 4 24 28 32 28', b: 'M0 28 C35 28 65 4 100 4', x: 'M0 4 C50 4 70 28 100 28' },
   echo: { a: 'M0 4 L48 4 L48 16 L58 16 L58 22 L68 22 L68 26 L76 26', b: FULL_IN(48), m: 48 },
   loop_roll: { a: 'M0 4 L52 4 L56 14 L59 4 L63 14 L66 4 L70 14 L72 4', b: FULL_IN(73), m: 73 },
   brake: { a: 'M0 4 L45 4 C60 4 68 10 74 28', b: FULL_IN(75), m: 75 },
@@ -223,6 +225,17 @@ export function upNextNote(song, s) {
   return { auto: true, badge: `Auto · ${from}`, sub: song.channel };
 }
 
+// Up next's stems hint (design "Voice & beat (stems)"): only the ON AIR song and the next few are
+// split, so most rows show nothing. A tooltip, not a badge: it's a detail, not a status to act on.
+const STEMS_TIP = { ready: 'Stems ready: Voice / Beat and Vocal swap', preparing: 'Preparing stems…',
+  failed: 'Stems failed: this song plays normally, without Voice / Beat or Vocal swap' };
+function stemsIcon(st) {
+  if (!STEMS_TIP[st]) return null;
+  const s = el('span', { className: `stems-i ${st}`, role: 'img', title: STEMS_TIP[st], 'aria-label': STEMS_TIP[st] },
+    icon({ ready: 'layers', preparing: 'loader', failed: 'circle-alert' }[st], st === 'preparing' ? 'spin' : ''));
+  return s;
+}
+
 function queueRow(song, i, s, ids, prevId) {
   const locked = i < (s.queue_locked ?? 0);
   const note = upNextNote(song, s);
@@ -240,6 +253,7 @@ function queueRow(song, i, s, ids, prevId) {
         // A locked auto pick shows the Locked badge, so its "Auto · …" note moves under the title.
         : el('span', { className: 's', textContent: [note.sub, note.auto && locked ? note.badge : null].filter(Boolean).join(' · ') })),
     bpmMeta(song, { rest: songRest(song), title: 'BPM  key  danceability' }),
+    stemsIcon(s.stems?.[song.id]),
     mcp ? mcpTag() : loved ? badge('loved', 'Loved after this') : isAvoided(pair) ? badge('avoided', 'Avoided pair')
       : locked ? badge('locked', 'Locked in') : note.auto ? badge('auto', note.badge, 'Fills in so the music never stops') : badge(song.status, cap(song.status), song.error),
     genreSelect(song, s.genres, `Genre for ${song.title}`),

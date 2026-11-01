@@ -2,7 +2,12 @@
 // schedule.js. The waveform lives in lanes.js (both decks share one time axis).
 //
 // Graph (built once per deck, a new BufferSource per song):
-//   source -> highpass -> lowpass -> gate -> gain -> master
+//   source -> main ---\
+//   vocals -> voc ----+-> highpass -> lowpass -> gate -> gain -> master
+//   instr. -> inst ---/
+// The stem sources (vocals / instrumental renders on the same time map) only exist once loaded
+// (Voice/Beat switch, Vocal swap); they start sample-aligned with the song and the three gains
+// pick what's heard (schedule.modeGains). Every effect below them works the same on any mode.
 //                                              \-> echoSend -> delay <-> feedback(0.5)
 //                                              |               delay -> master
 //                                              \-> revSend -> convolver (3 s tail) -> master
@@ -10,7 +15,7 @@
 // the riser is its own noise source straight to master.
 // The delay sits after the gain so an echo-out echoes the *fading* signal and its
 // tail keeps ringing after the dry signal is gone.
-import { ECHO_FEEDBACK, HP_IDLE, LP_IDLE, loopPos, loopZero, lastPassAt, exitLoop } from './schedule.js';
+import { ECHO_FEEDBACK, HP_IDLE, LP_IDLE, STEM_FADE, modeGains, loopPos, loopZero, lastPassAt, exitLoop } from './schedule.js';
 import { overview } from './lanes.js';
 
 /** Stereo decaying-noise impulse: a plain 3 s hall for the reverb wash. */
@@ -76,6 +81,10 @@ export class Deck {
     this.delay = new DelayNode(ctx, { maxDelayTime: 2, delayTime: 0.5 });
     this.fb = new GainNode(ctx, { gain: ECHO_FEEDBACK });
     this.hp.connect(this.lp).connect(this.gate).connect(this.gain).connect(master);
+    this.mix = { main: new GainNode(ctx, { gain: 1 }), voc: new GainNode(ctx, { gain: 0 }), inst: new GainNode(ctx, { gain: 0 }) };
+    for (const g of Object.values(this.mix)) g.connect(this.hp);
+    this.mode = 'both';  // the Voice/Beat switch; back to 'both' with every new song
+    this.stems = {};     // 'voc' | 'inst' -> AudioBufferSourceNode of that stem's render
     this.gain.connect(this.revSend).connect(this.verb).connect(master);
     this.gain.connect(this.send).connect(this.delay).connect(this.fb).connect(this.delay);
     this.delay.connect(master);
@@ -97,6 +106,7 @@ export class Deck {
   pos(now) { return this.loop ? loopPos(this.loop, now) : now - this.zero; }
 
   param(name) {
+    if (name in this.mix) return this.mix[name].gain;
     return { gain: this.gain.gain, hp: this.hp.frequency, echo: this.send.gain, delay: this.delay.delayTime,
       lp: this.lp.frequency, gate: this.gate.gain, rev: this.revSend.gain,
       // Playback rate belongs to the current source (brake); a fresh source starts at 1.
@@ -108,7 +118,9 @@ export class Deck {
     this.stop();
     this.track = track;
     const src = new AudioBufferSourceNode(this.ctx, { buffer: track.buffer });
-    src.connect(this.hp);
+    src.connect(this.mix.main);
+    this.mode = 'both';
+    for (const [k, v] of Object.entries(modeGains('both'))) { const p = this.mix[k].gain; p.cancelScheduledValues(0); p.setValueAtTime(v, 0); }
     src.onended = () => {
       if (this.src === src) { this.src = null; this.endAt = Math.min(this.endAt, this.ctx.currentTime); onEnded?.(this); }
     };
@@ -121,12 +133,42 @@ export class Deck {
     this.renderInfo();
   }
 
+  /** The song's sources: the main render and any loaded stems (all aligned, all stop together). */
+  sources() { return this.src ? [this.src, ...Object.values(this.stems)] : []; }
+
   /** Stop in ctx time (sample-accurate), not via a wall-clock timer. */
-  stopAt(when) { this.src?.stop(when); if (this.src) this.endAt = when; }
+  stopAt(when) { for (const s of this.sources()) s.stop(when); if (this.src) this.endAt = when; }
 
   /** Undo a stopAt (and any scheduled effect sources). The spec applies only the last
    * stop() call made before the source has stopped, so a far-future stop cancels the earlier one. */
-  unstop() { this.src?.stop(this.ctx.currentTime + 1e7); this.endAt = Infinity; this.dropExtra(); }
+  unstop() { for (const s of this.sources()) s.stop(this.ctx.currentTime + 1e7); this.endAt = Infinity; this.dropExtra(); }
+
+  /** Start a stem render (same time map as the song) aligned with the playing source, silent until
+   * its gain rises. `name` 'voc' | 'inst'. A stem already loaded for this song is kept. */
+  addStem(name, buffer, now) {
+    if (!this.src || this.stems[name]) return;
+    const s = new AudioBufferSourceNode(this.ctx, { buffer });
+    s.connect(this.mix[name]);
+    // Lead so start() is in the future; pos() maps that ctx time to the rendered second (loop-aware),
+    // which is exactly where the main source will be then: same buffer timeline, same sample.
+    const when = Math.max(now + 0.05, this.startAt);
+    if (this.loop) { s.loopStart = this.loop.start; s.loopEnd = this.loop.end; s.loop = this.src.loop; }
+    s.playbackRate.value = this.src.playbackRate.value;
+    s.start(when, Math.max(0, this.pos(when)));
+    if (Number.isFinite(this.endAt)) s.stop(this.endAt);
+    this.stems[name] = s;
+  }
+
+  /** The Voice/Beat switch: a STEM_FADE crossfade from wherever the gains are now. */
+  setMode(mode, now) {
+    this.mode = mode;
+    for (const [k, v] of Object.entries(modeGains(mode))) {
+      const p = this.mix[k].gain;
+      p.cancelScheduledValues(now);
+      p.setValueAtTime(p.value, now);
+      p.linearRampToValueAtTime(v, now + STEM_FADE);
+    }
+  }
 
   dropExtra() {
     for (const s of this.extra) { try { s.stop(); } catch { /* not started */ } s.disconnect(); }
@@ -138,7 +180,8 @@ export class Deck {
     const s = this.src;
     this.src = null; // first, so onended doesn't report a deliberate stop as "song ended"
     if (s) this.endAt = Math.min(this.endAt, this.ctx.currentTime);
-    if (s) { try { s.stop(); } catch { /* never started */ } s.disconnect(); }
+    for (const x of [s, ...Object.values(this.stems)]) if (x) { try { x.stop(); } catch { /* never started */ } x.disconnect(); }
+    this.stems = {};
     this.dropExtra();
   }
 
@@ -151,15 +194,13 @@ export class Deck {
     this.loop = l;
     // "Until I stop" has no end yet; plans aren't made while it runs (app.js), so this zero is unused.
     this.zero = l.n === Infinity ? l.z0 : loopZero(l);
-    const src = this.src;
-    src.loopStart = l.start;
-    src.loopEnd = l.end;
-    src.loop = l.n > 1;
+    const src = this.src, all = this.sources();
+    for (const x of all) { x.loopStart = l.start; x.loopEnd = l.end; x.loop = l.n > 1; }
     // The only non-sample-accurate step: turning the loop flag off. It just has to happen during
     // the last pass (after its wrap, before its end), so it fires just after that pass starts and
     // has the whole pass (8+ bars) of slack for timer jitter / background-tab throttling.
     if (l.n > 1 && l.n !== Infinity) {
-      this.loopTimer = setTimeout(() => { if (this.src === src) src.loop = false; }, (lastPassAt(l) + 0.25 - now) * 1000);
+      this.loopTimer = setTimeout(() => { if (this.src === src) for (const x of this.sources()) x.loop = false; }, (lastPassAt(l) + 0.25 - now) * 1000);
     }
   }
 
@@ -175,7 +216,7 @@ export class Deck {
 
   clearLoop() {
     clearTimeout(this.loopTimer);
-    if (this.loop && this.src) this.src.loop = false;
+    if (this.loop) for (const x of this.sources()) x.loop = false;
     this.loop = null;
   }
 
@@ -194,7 +235,8 @@ export class Deck {
     if (e.type === 'roll') {
       // The bar before T0 repeats: half-bar slices over the first half, quarter-bar slices
       // over the second, each restarting on the grid (sample-accurate start(when, offset)).
-      this.src.stop(e.time);
+      // ponytail: the slices are of the full mix even in Voice/Beat mode; slice the stem if missed.
+      for (const x of this.sources()) x.stop(e.time);
       const from = pos - e.bar;
       for (const [slice, span] of [[e.bar / 2, e.duration / 2], [e.bar / 4, e.duration / 2]]) {
         const t0 = e.time + (slice === e.bar / 2 ? 0 : e.duration / 2);
@@ -202,7 +244,7 @@ export class Deck {
       }
     } else if (e.type === 'backspin') {
       // The last ~1.5 bars played backwards, speeding up, fading out.
-      this.src.stop(e.time);
+      for (const x of this.sources()) x.stop(e.time);
       const sr = buf.sampleRate, len = Math.floor(Math.min(1.5 * e.bar, pos) * sr), start = Math.floor(pos * sr) - len;
       const rev = this.ctx.createBuffer(buf.numberOfChannels, Math.max(1, len), sr);
       for (let c = 0; c < buf.numberOfChannels; c++) {
@@ -236,22 +278,29 @@ export class Deck {
   /** Apply schedule.js events. Each touched param is cleared from `now` first; plans
    * always begin a param with a `set` at now, so nothing is left undefined. */
   apply(events, now) {
-    for (const name of new Set(events.map((e) => e.param))) if (name !== 'fx') this.param(name).cancelScheduledValues(now);
+    for (const name of new Set(events.map((e) => e.param))) if (name !== 'fx') this.params(name).forEach((p) => p.cancelScheduledValues(now));
     for (const e of events) {
       if (e.param === 'fx') { this.fx(e); continue; }
-      const p = this.param(e.param);
-      if (e.type === 'set') p.setValueAtTime(e.value, e.time);
-      else if (e.type === 'linear') p.linearRampToValueAtTime(e.value, e.time);
-      else if (e.type === 'exp') p.exponentialRampToValueAtTime(e.value, e.time);
-      else if (e.type === 'curve') p.setValueCurveAtTime(e.values, e.time, e.duration);
+      for (const p of this.params(e.param)) {
+        if (e.type === 'set') p.setValueAtTime(e.value, e.time);
+        else if (e.type === 'linear') p.linearRampToValueAtTime(e.value, e.time);
+        else if (e.type === 'exp') p.exponentialRampToValueAtTime(e.value, e.time);
+        else if (e.type === 'curve') p.setValueCurveAtTime(e.values, e.time, e.duration);
+      }
     }
+  }
+
+  /** The AudioParams an event drives: 'rate' (brake) drives every source of the song, so loaded
+   * stems slow down with it and stay aligned; everything else is one param. */
+  params(name) {
+    return name === 'rate' && this.src ? this.sources().map((s) => s.playbackRate) : [this.param(name)];
   }
 
   /** Manual takeover: freeze every param where it is right now. cancelAndHoldAtTime keeps
    * the mid-curve value (Chrome/Safari); cancelScheduledValues alone would jump back to
    * the last event's value, so the fallback re-sets the value we read. */
   hold(now) {
-    for (const name of ['gain', 'hp', 'echo']) {
+    for (const name of ['gain', 'hp', 'echo', 'main', 'voc', 'inst']) {
       const p = this.param(name);
       if (p.cancelAndHoldAtTime) p.cancelAndHoldAtTime(now);
       else { const v = p.value; p.cancelScheduledValues(now); p.setValueAtTime(v, now); }
@@ -265,7 +314,7 @@ export class Deck {
     this.send.gain.setTargetAtTime(0, now, 0.05);
     this.revSend.gain.cancelScheduledValues(now);
     this.revSend.gain.setTargetAtTime(0, now, 0.05);
-    if (this.src) { this.src.playbackRate.cancelScheduledValues(now); this.src.playbackRate.setValueAtTime(1, now); }
+    for (const s of this.sources()) { s.playbackRate.cancelScheduledValues(now); s.playbackRate.setValueAtTime(1, now); }
     this.dropExtra();
   }
 

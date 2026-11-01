@@ -46,6 +46,9 @@
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/> <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
     <symbol id="i-list-music" viewBox="0 0 24 24"><path d="M21 15V6"/> <path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/> <path d="M12 12H3"/> <path d="M16 6H3"/> <path d="M12 18H3"/></symbol>
     <symbol id="i-list-start" viewBox="0 0 24 24"><path d="M16 12H3"/> <path d="M16 18H3"/> <path d="M10 6H3"/> <path d="M21 18V8a2 2 0 0 0-2-2h-5"/> <path d="m16 8-2-2 2-2"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></symbol>
+    <symbol id="i-mic-vocal" viewBox="0 0 24 24"><path d="m11 7.601-5.994 8.19a1 1 0 0 0 .1 1.298l.817.818a1 1 0 0 0 1.314.087L15.09 12"/> <path d="M16.5 21.174C15.5 20.5 14.372 20 13 20c-2.058 0-3.928 2.356-6 2-2.072-.356-2.775-3.369-1.5-4.5"/> <circle cx="16" cy="7" r="5"/></symbol>
+    <symbol id="i-drum" viewBox="0 0 24 24"><path d="m2 2 8 8"/> <path d="m22 2-8 8"/> <ellipse cx="12" cy="9" rx="10" ry="5"/> <path d="M7 13.4v7.9"/> <path d="M12 14v8"/> <path d="M17 13.4v7.9"/> <path d="M2 9v8a10 5 0 0 0 20 0V9"/></symbol>
     <symbol id="i-loader" viewBox="0 0 24 24"><path d="M12 2v4"/> <path d="m16.2 7.8 2.9-2.9"/> <path d="M18 12h4"/> <path d="m16.2 16.2 2.9 2.9"/> <path d="M12 18v4"/> <path d="m4.9 19.1 2.9-2.9"/> <path d="M2 12h4"/> <path d="m4.9 4.9 2.9 2.9"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/> <path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
     <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5"/> <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></symbol>
@@ -339,6 +342,7 @@
         <p class="title">—</p>
         <p class="artist"></p>
         <p class="loopline mono" hidden><span></span><button type="button" class="loop-btn"></button></p>
+        <p class="stemline" hidden><span class="segmented tiny" role="group" aria-label="Play the whole song, its vocals or its instrumental"><button type="button" data-mode="both" aria-pressed="true"><svg class="i"><use href="#i-layers"/></svg>Both</button><button type="button" data-mode="voice" aria-pressed="false"><svg class="i"><use href="#i-mic-vocal"/></svg>Voice</button><button type="button" data-mode="beat" aria-pressed="false"><svg class="i"><use href="#i-drum"/></svg>Beat</button></span><span class="stem-hint mono"></span></p>
         <p class="metaline mono"></p>
         <div class="overview" role="group" aria-label="Sections"><i class="pos" aria-hidden="true"></i></div>
       </div>
@@ -350,6 +354,7 @@
         <p class="title">—</p>
         <p class="artist"></p>
         <p class="loopline mono" hidden><span></span><button type="button" class="loop-btn"></button></p>
+        <p class="stemline" hidden><span class="segmented tiny" role="group" aria-label="Play the whole song, its vocals or its instrumental"><button type="button" data-mode="both" aria-pressed="true"><svg class="i"><use href="#i-layers"/></svg>Both</button><button type="button" data-mode="voice" aria-pressed="false"><svg class="i"><use href="#i-mic-vocal"/></svg>Voice</button><button type="button" data-mode="beat" aria-pressed="false"><svg class="i"><use href="#i-drum"/></svg>Beat</button></span><span class="stem-hint mono"></span></p>
         <p class="metaline mono"></p>
         <div class="overview" role="group" aria-label="Sections"><i class="pos" aria-hidden="true"></i></div>
       </div>

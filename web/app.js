@@ -86,6 +86,14 @@ async function requestPlan(deck, after = null, retries = 0) {
     if (M.enter) { q.set('enter', M.enter.i); q.set('to', M.enter.id); }
     res = await api(`/api/transition?${q}`);
     if (res.transition) res.track = await loadTrack(M.ctx, res.in_deck); // decode before scheduling
+    if (res.transition?.kind === 'vocal_swap') {
+      // A's instrumental on A's own time map. Without it the swap would drop A to silence, so a
+      // failed render/download plays the same mix as a plain beat blend instead.
+      try {
+        if (!res.out_stem) throw new Error('no instrumental');
+        res.outStem = (await loadTrack(M.ctx, { url: res.out_stem })).buffer;
+      } catch { res.transition = { ...res.transition, kind: 'blend' }; }
+    }
   } catch (e) {
     if (seq === M.seq) {
       M.req.loading = false; M.req.inId = null;
@@ -123,7 +131,7 @@ function tryApply() {
   if (inc.busy) return; // previous transition's tail still on that slot; retried at swap
   // The outgoing leaves at its settled tempo (bpm_playing), so that's the echo's beat.
   const beat = 60 / (out.info.bpm_playing || 120);
-  const p = S.plan(n, out.zero, t, beat);
+  const p = S.plan(n, out.zero, t, beat, out.mode);
   // A section loop pushes the song later; out.zero is its timeline after the loop, which is
   // only right for an exit after the loop. One before it (the planner's usual outro pick when
   // the outro itself is looped, or a response for the pre-loop song): ask for the first phrase
@@ -143,6 +151,7 @@ function tryApply() {
   const inIdx = 1 - M.cur;
   inc.start(n.track, p.inStart, p.inOffset, songEnded);
   inc.planId = n.plan_id; // reported with /api/playing so the server commits this render's map
+  if (p.kind === 'vocal_swap') out.addStem('inst', n.outStem, t); // silent until the swap
   out.apply(p.out, t);
   inc.apply(p.in, t);
   // Outgoing stops in ctx time at the end of the transition (exact for cut/dropswap; gain
@@ -164,7 +173,7 @@ function cancelPlan() {
   // Before T0: undo the scheduled fade-out. After T0 (grab mid echo-out): keep the
   // current gain; takeOver's hold() freezes it there.
   const reset = S.outgoingOnCancel(t, M.plan.T0);
-  if (reset) out.apply(reset, t);
+  if (reset) { out.apply(reset, t); out.setMode(out.mode, t); } // a dropped vocal swap: back to the owner's mode
   M.plan = null;
 }
 
@@ -752,6 +761,7 @@ function liveFrame(dt) {
     lanes[i].setInfo(d.info);
     const marks = p && i !== p.inDeck ? { end: p.end - d.zero } : p ? { start: p.inOffset } : {};
     updateStrip(i, t, p);
+    updateStems(i, t, p);
     // Inside a loop the playhead jumps back at each wrap; draw the song where it really is now
     // (t - pos), so the waveform under NOW is what's heard. ponytail: the passes still to come
     // aren't drawn, so a mix window shown during a loop sits (passes left × section) after the
@@ -935,6 +945,67 @@ function updateStrip(i, t, p) {
     if (b.disabled !== off) b.disabled = off;
   }
 }
+
+// --- Voice / Beat switch (design "Voice & beat (stems)") ------------------------------------
+// ON AIR deck only. Voice and Beat play that stem's render on the song's own time map (fetched the
+// first time it's picked: one Rubber Band pass on the server, ~seconds), so the mix still lands on
+// the grid. Locked like sections; resets to Both with the next song (Deck.start).
+const STEM_OF = { voice: ['vocals', 'voc'], beat: ['instrumental', 'inst'] };
+const stemKey = ['', ''];
+const stemLoading = [null, null]; // mode being fetched per deck, for the button's spinner
+function updateStems(i, t, p) {
+  const d = M.decks[i], info = d.info;
+  const air = !!info && d.busy && i === M.cur && d.started(t);
+  const st = air ? getState()?.stems?.[info.id] : undefined;
+  const { open, why } = air ? S.stemsOpen({ manual: M.manual, plan: p, now: t, stems: st }) : { open: false, why: null };
+  // Voice/Beat while a vocal swap runs shows what A really plays (Beat) without changing d.mode.
+  const shownMode = p && t >= p.T0 && p.kind === 'vocal_swap' && i !== p.inDeck ? 'beat' : d.mode;
+  const hint = why ?? (stemLoading[i] ? 'Rendering…' : { both: 'Stems ready', voice: 'Vocals only', beat: 'Instrumental' }[shownMode]);
+  const key = [air, open, shownMode, hint, stemLoading[i]].join('|');
+  if (stemKey[i] === key) return;
+  stemKey[i] = key;
+  const line = $(`#deck${i} .stemline`);
+  line.hidden = !air;
+  line.classList.toggle('off', !open);
+  line.classList.toggle('preparing', st === 'preparing');
+  line.classList.toggle('failed', st === 'failed');
+  line.querySelectorAll('button').forEach((b) => {
+    const m = b.dataset.mode;
+    b.setAttribute('aria-pressed', String(m === shownMode));
+    // Both is always possible (it's the plain song), unless the mix has the deck.
+    b.disabled = !air || (m === 'both' ? why === 'Locked during the mix' : !open);
+    b.classList.toggle('busy', stemLoading[i] === m);
+    b.title = b.disabled && why ? why : '';
+  });
+  line.querySelector('.stem-hint').textContent = hint ?? '';
+}
+
+async function chooseMode(i, mode) {
+  const d = M.decks[i], info = d.info;
+  if (!info || i !== M.cur || mode === d.mode) return;
+  const [name, slot] = STEM_OF[mode] ?? [];
+  if (slot && !d.stems[slot]) {
+    stemLoading[i] = mode;
+    try {
+      const r = await api(`/api/stem/${info.id}/${name}`);
+      const { buffer } = await loadTrack(M.ctx, r);
+      if (d.info !== info) return; // the song changed while it rendered
+      d.addStem(slot, buffer, now());
+    } catch (e) { status(`Couldn't switch to ${mode} (${e.message})`); return; } finally { stemLoading[i] = null; }
+  }
+  const t = now();
+  if (!S.sectionsOpen({ manual: M.manual, plan: M.plan, now: t })) return; // the mix locked it meanwhile
+  d.setMode(mode, t);
+  // A vocal swap scheduled out of this deck starts from the mode A is in: re-plan its stem part.
+  if (M.plan?.kind === 'vocal_swap' && M.plan.inDeck !== i) {
+    if (!d.stems.inst) d.addStem('inst', M.plan.res.outStem, t);
+    d.apply(S.swapEvents(mode, M.plan.T0, M.plan.bar / 4), M.plan.T0);
+  }
+}
+$('.timeline').addEventListener('click', (e) => {
+  const b = e.target.closest('.stemline button');
+  if (b && !b.disabled) chooseMode(+b.closest('.lane').id.slice(-1), b.dataset.mode);
+});
 
 const loopMenu = $('#loop-menu');
 function openLoopMenu(i, k, btn) {

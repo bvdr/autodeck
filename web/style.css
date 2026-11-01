@@ -311,6 +311,25 @@ body.idle.empty .sign-title, .sign-title.long { font-size: clamp(32px, 4vw, 56px
 #deck0 .loopline.entry { color: var(--deck-a); } #deck1 .loopline.entry { color: var(--deck-b); }
 .loopline span { overflow: hidden; text-overflow: ellipsis; }
 .loopline:not([hidden]) + .metaline { display: none; }
+/* Voice / Beat switch: the ON AIR deck's metaline row (the lane's height is fixed). A running loop
+   keeps the row; the switch comes back when the loop ends. */
+.stemline { display: flex; align-items: center; gap: 10px; min-width: 0; height: 22px; }
+.stemline:not([hidden]) + .metaline, .loopline:not([hidden]) ~ .metaline { display: none; }
+.loopline:not([hidden]) + .stemline { display: none; }
+.segmented.tiny { padding: 2px; gap: 1px; }
+.segmented.tiny button { height: 18px; min-width: 0; padding: 0 8px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.segmented.tiny button .i { width: 11px; height: 11px; }
+.segmented.tiny button:disabled { opacity: .4; cursor: default; }
+.segmented.tiny button.busy .i { animation: spin 1.4s linear infinite; }
+.stem-hint { margin-left: auto; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--deck-a);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#deck1 .stem-hint { color: var(--deck-b); }
+.stemline.off .stem-hint { color: var(--text-3); }
+.stemline.preparing .stem-hint { color: var(--working); }
+.stemline.failed .stem-hint { color: var(--failed); }
+/* Up next: one quiet icon after the meta (stems ready / preparing / failed), no badge. */
+.stems-i { flex: none; width: 14px; height: 14px; color: var(--text-3); }
+.stems-i.preparing { color: var(--working); } .stems-i.failed { color: var(--failed); }
 .loop-btn { margin-left: auto; height: 20px; padding: 0 8px; border: 1px solid var(--text-3); border-radius: var(--r-sm);
   background: none; color: var(--text); font: 600 12px var(--body); letter-spacing: 0; text-transform: none; cursor: pointer; }
 .loop-btn:disabled { opacity: .45; cursor: default; }
@@ -760,6 +779,12 @@ body.live .openers, body:not(.live) .upnext { display: none; }
   .meta-top { gap: 8px; }
   .lane .title { font-size: 22px; }
   .lane .artist, .lane .metaline, .overview { display: none; }
+  .stemline { height: auto; margin: 6px 0 2px; flex-wrap: wrap; row-gap: 4px; }
+  .stemline .segmented.tiny { flex: 1; }
+  .stemline .segmented.tiny button { flex: 1; height: 40px; justify-content: center; font-size: 15px; }
+  /* The phone keeps only the reason line (why it's greyed), under the switch. */
+  .stemline:not(.off) .stem-hint { display: none; }
+  .stemline.off .stem-hint { flex-basis: 100%; margin-left: 0; }
   .lane-wave { height: 64px; margin: 0 16px 12px; }
   .lane-note { position: static; transform: none; margin: 0; font-size: 12px; }
   .lane-wave:has(.lane-note:not([hidden])) { height: auto; }
