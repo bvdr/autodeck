@@ -67,6 +67,11 @@ def test_state_shape(client):
     assert [p["id"] for p in s["pool"]] == IDS and set(s["pool"][0]) | {"kept", "kept_from", "in_playlist", "by"} == set(s["queue"][0])
 
 
+def test_state_carries_the_beatmatch_limit(client):
+    # The web UI's beat-match icon reads the planner's limit from here (no JS copy to drift).
+    assert client.get("/api/state").json()["beatmatch_max_pct"] == config.BEATMATCH_MAX_PCT
+
+
 def test_pool_shows_failed_song_with_error(client):
     client.engine.pool.append(Song("ffffffffff6", "gone", "c", 0, "failed", error="video removed"))
     s = client.get("/api/state").json()

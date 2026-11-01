@@ -448,7 +448,10 @@ class Engine:
                     # Whole pool too: the UI shows per-song status/errors and lets the owner
                     # relabel or delete songs that aren't (or can't be) in the queue.
                     "pool": [self.view(s) for s in self.pool],
-                    "pool_counts": counts}
+                    "pool_counts": counts,
+                    # The beat-match limit, so the web UI's beat-match icon uses the planner's
+                    # number instead of a copy that could drift (music.tempo_relation).
+                    "beatmatch_max_pct": config.BEATMATCH_MAX_PCT}
 
     def add(self, url: str, genre: str | None) -> int:
         _known_genre(genre, allow_none=True)
