@@ -73,7 +73,9 @@ notarytool credentials under the keychain profile `autodeck` (`AUTODECK_NOTARY_P
 - **Model downloads, about 100–170 MB in total, once:** the beat_this checkpoint (~77 MB, torch hub
   cache), the Discogs-EffNet genre model (~18 MB, into `<library>/models/`) and Whisper tiny
   (~75 MB, Hugging Face cache). The first analysis waits for them. After that everything runs offline
-  except the YouTube downloads.
+  except the YouTube downloads. The htdemucs stem model (~84 MB, into `<library>/models/`) is fetched
+  the first time a song is split into stems. The Mac app's setup downloads all of them up front
+  (~260 MB of models in total).
 - **Keychain prompt:** yt-dlp reads your YouTube login from Chrome, and macOS asks for Keychain
   access to "Chrome Safe Storage". Click **Always Allow**, or it asks again on every download.
   Cookies are read live by yt-dlp and never written to disk or logged by autodeck.
@@ -219,6 +221,24 @@ planned and the sign says it waits; **Mix now** ends the loop and mixes right af
 deck a click picks where the next song comes in (e.g. skip its intro); **Reset** goes back to the
 top. Sections are locked during a mix, like the effect picker and Mix now.
 
+## Voice & beat (stems)
+
+The song ON AIR and the next 3 in Up next are split in the background into a **vocal** and an
+**instrumental** stem (htdemucs, on the Mac's GPU: about 17 s per 4-minute song, after the next
+songs' analysis, never ahead of it). They sit next to the song's audio as `vocals.opus` and
+`instrumental.opus` (~3 MB each); only the 40 most recently split songs keep them. A small icon on Up
+next rows says when a song's stems are ready, being prepared, or failed (the song then plays normally).
+
+- **Both | Voice | Beat** under the ON AIR deck's title plays the whole song, just its vocals
+  (acapella) or just its instrumental, crossfading in 20 ms. The first Voice or Beat on a song takes a
+  few seconds (the stem is rendered on the song's own time map, so the next mix still lands on the
+  beat). It goes back to Both when the next song starts, is locked during a mix, and is greyed with
+  the reason when the song has no stems yet. A running section loop takes its row until it ends.
+- **Vocal swap** (effect picker, with the beat-matched effects): a beat blend where the outgoing song
+  drops to its instrumental on the first beat as the next one comes in, so two singers never clash.
+  Offered only when the outgoing song has stems; Auto picks it by itself when both songs sing in the
+  blend window.
+
 ## Pair memory
 
 Rate a hand-over with **🔥** (nailed it) or **👎** (didn't work): on its Played row (which rates the
@@ -299,7 +319,7 @@ Both switches are saved in `settings.json` (default: on, Steer the session).
     uv run pytest -m "not slow and not network"      # also skip the heavy real-model tests
                                                      # (a -m on the command line replaces the default, so keep "not network")
     AUTODECK_BROWSER=none uv run pytest -m network   # hits real YouTube, public content only
-    node --test web/*.test.mjs   # transition timing, section loops, lane geometry, drag drop index
+    node --test web/*.test.mjs   # transition timing, section loops, stems switch, lane geometry, drag drop index
 
 ## Known limits
 
