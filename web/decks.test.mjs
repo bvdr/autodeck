@@ -31,6 +31,7 @@ test('the phone sheet offers only what applies to the list', () => {
   assert.deepEqual(ids(sheetActions('queue', { i: 3, locked: 2, kept: false })), ['next', 'top', 'pin', 'remove']);
   assert.deepEqual(ids(sheetActions('queue', { i: 2, locked: 2, kept: true })), ['next', 'remove']); // at the top already, pinned already
   assert.deepEqual(ids(sheetActions('queue', { i: 0, locked: 2, kept: false })), ['remove']); // already next, locked in
-  assert.deepEqual(ids(sheetActions('played', {})), ['next']);
-  assert.deepEqual(ids(sheetActions('library', {})), ['next']);
+  assert.deepEqual(ids(sheetActions('played', {})), ['next', 'queue']);
+  assert.deepEqual(ids(sheetActions('library', { kept: true })), ['next']); // in Up next already
+  assert.deepEqual(ids(sheetActions('library', {})), ['next', 'queue']);
 });

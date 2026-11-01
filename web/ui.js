@@ -331,6 +331,30 @@ function deckBtn(song, where = 'list') {
   paintDeckBtn(b);
   return b;
 }
+/** Already in Up next as a kept song (or waiting to be): "Add to queue" would do nothing. */
+const inUpNext = (id) => !!last && (last.requested?.some((q) => q.id === id) || last.queue?.some((q) => q.id === id && q.kept));
+/** "Add to queue", beside Play next: after the owner's other kept songs instead of on the idle
+ * deck. Same /api/request a kept suggestion uses, so it's a kept song: it goes ahead of the Auto
+ * top-up (those are fill-ins, not the queue) and auto-order leaves its place. */
+function queueBtn(song, where = 'list') {
+  if (inUpNext(song.id)) return null;
+  return el('button', { type: 'button', className: `queue-btn ${where}`, title: 'Add to queue: plays after the songs you already picked',
+    'aria-label': `Add ${song.title} to the queue, after the songs you already picked`, onclick: (e) => addToQueue(song, e.currentTarget) },
+  icon('list-plus'), el('span', { className: 'lbl', textContent: 'Add to queue' }));
+}
+async function addToQueue(song, btn = null) {
+  const search = btn?.classList.contains('search');
+  try {
+    const r = await api('/api/request', 'POST', { id: song.id, title: song.title, channel: song.channel || '',
+      duration: song.duration || 0, source: search ? 'search' : null });
+    picked = { id: song.id, wait: false, kind: 'working', until: Date.now() + 8000,
+      text: `${song.title} is queued after your other picks.${song.status === 'ready' ? '' : ' It gets ready on the way.'}` };
+    if (search) $('#search-msg').textContent = `Queued "${song.title}" after your other picks.`;
+    setState(r);
+    renderPickNote(r);
+    setTimeout(() => last && renderPickNote(last), 8500);
+  } catch (e) { report(e); }
+}
 // Phone: the row's actions live in a sheet (long-press, or this button).
 const moreBtn = (song) => iconBtn('ellipsis', `More for ${song.title}`, (e) => openSheet(e.currentTarget.closest('li').pick), 'more');
 
@@ -376,6 +400,7 @@ function renderPickNote(s) {
 export function sheetActions(list, { i = 0, locked = 0, kept = false } = {}) {
   const out = [];
   if (list !== 'queue' || i > 0) out.push({ id: 'next' }); // the first row is already next
+  if (list !== 'queue' && !kept) out.push({ id: 'queue' }); // Up next rows are in the queue already
   if (list === 'queue') {
     if (i > locked) out.push({ id: 'top' });
     if (i >= locked && !kept) out.push({ id: 'pin' });
@@ -390,6 +415,7 @@ function openSheet(p) {
   const ids = () => last.queue.map((q) => q.id);
   const ACT = {
     next: [`Play next on deck ${letter()}`, null, () => playNext(song), 'deck'],
+    queue: ['Add to queue', 'list-plus', () => addToQueue(song)],
     top: ['Move to top', 'arrow-up-to-line', () => reorder(ids(), song.id, last.queue_locked ?? 0)],
     // Pin = the owner placed it here: it stops being an auto pick and keeps its spot.
     pin: ['Pin here', 'pin', () => reorder(ids(), song.id, ids().indexOf(song.id))],
@@ -604,8 +630,8 @@ async function loadHistory() {
         h.from ? rateBtn('loved', FLAME, `Nailed it: the mix from ${titleOf(h.from)} into ${h.title}`) : el('span', { className: 'rate' }),
         h.from ? rateBtn('avoided', THUMB, `Didn't work: the mix from ${titleOf(h.from)} into ${h.title}`) : el('span', { className: 'rate' }),
         // Not for the playing song (always the newest row): it can't be next as well.
-        h.id === last?.playing ? null : [deckBtn(h), moreBtn(h)]);
-      if (h.id !== last?.playing) li.pick = { song: h, list: 'played', ctx: {} };
+        h.id === last?.playing ? null : [deckBtn(h), queueBtn(h), moreBtn(h)]);
+      if (h.id !== last?.playing) li.pick = { song: h, list: 'played', ctx: { kept: inUpNext(h.id) } };
       // 👎 asks one optional question inline, so the right thing gets avoided. Unanswered it
       // counts as "songs" (the planner treats no reason like that).
       const ask = v === 'avoided' && !h.why ? el('li', { className: 'why-ask' },
@@ -668,9 +694,10 @@ function libRow(p, s) {
     p.status === 'failed' ? el('button', { type: 'button', className: 'btn', onclick: () => act(`/api/song/${p.id}/retry`, 'POST') }, icon('rotate-ccw'), 'Retry')
       : genreSelect(p, s.genres, `Genre for ${p.title}`),
     can ? deckBtn(p) : null,
+    can ? queueBtn(p) : null,
     iconBtn('x', `Remove ${p.title}`, () => act(`/api/song/${p.id}`, 'DELETE'), 'remove'),
     can ? moreBtn(p) : null);
-  if (can) li.pick = { song: p, list: 'library', ctx: {} };
+  if (can) li.pick = { song: p, list: 'library', ctx: { kept: inUpNext(p.id) } };
   return li;
 }
 
@@ -1286,7 +1313,7 @@ function resultRow(r) {
       el('span', { className: 's' }, r.status ? badge(r.status) : null,
         [r.channel, mmss(r.duration)].filter(Boolean).join(' · '))),
     bpmMeta(r, { only: true }),
-    r.id === last?.playing ? null : deckBtn(r, 'search'));
+    r.id === last?.playing ? null : [deckBtn(r, 'search'), queueBtn(r, 'search')]);
 }
 
 function showLocal(q) {

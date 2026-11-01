@@ -641,6 +641,17 @@ body.live .openers, body:not(.live) .upnext { display: none; }
 @media (hover: hover) {
   :is(.row, .logrow):not(:hover, :focus-within) .deck-btn { opacity: 0; }
 }
+.queue-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px 0 8px; flex: none; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); color: var(--text); font: 600 13px var(--body);
+  transition: opacity var(--quick), border-color var(--quick); }
+.queue-btn:hover { border-color: var(--text-3); }
+.queue-btn .i { width: 16px; height: 16px; }
+/* Library / Played rows are narrow: icon only there (the title says it), so song titles keep their room. */
+:is(#pool, #history) .queue-btn { width: 32px; padding: 0; justify-content: center; }
+:is(#pool, #history) .queue-btn .lbl { display: none; }
+@media (hover: hover) {
+  :is(.row, .logrow):not(:hover, :focus-within) .queue-btn { opacity: 0; }
+}
 .logrow:hover, .logrow:focus-within { background: #ffffff06; }
 .logrow .thumb, .row .thumb { width: 36px; height: 36px; }
 .icon-btn.more { display: none; }
@@ -827,7 +838,9 @@ body.live .openers, body:not(.live) .upnext { display: none; }
   .search-panel { position: static; width: auto; max-height: none; border: 0; box-shadow: none; padding: 0; }
   .res-row .btn span { display: none; }
   /* Lists: the row's actions are in the sheet (⋯ / long-press); Search keeps the bare B tile. */
-  :is(#queue, #history, #pool) .deck-btn { display: none; }
+  :is(#queue, #history, #pool) :is(.deck-btn, .queue-btn) { display: none; }
+  .queue-btn.search { width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .queue-btn.search .lbl { display: none; }
   .row .acts .icon-btn.more, .logrow .icon-btn.more { display: inline-grid; }
   #queue .icon-btn.keep { display: none; }  /* the sheet's "Pin here" keeps an auto pick; the title needs the room */
   :is(#queue, #history, #pool) li { -webkit-touch-callout: none; user-select: none; }
