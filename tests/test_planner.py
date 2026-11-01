@@ -382,3 +382,16 @@ def test_order_pins_beat_pair_memory():
     cur, a, b = make_song(122, id="cur"), make_song(122, id="a"), make_song(122, id="b")
     res = order(cur, [a, b], {0: "a"}, "Any", pairs={"cur>a": AVOIDED, "cur>b": LOVED})
     assert res[0].id == "a"
+
+
+def test_picked_entry_brings_b_in_at_that_section():
+    # Cued-deck click: b skips its intro and comes in at its main section, still beat-matched.
+    a, b = make_song(122), make_song(124)
+    body = b.analysis.sections[1]
+    t = pick_transition(a, b, enter=body.start)
+    assert t.kind == "blend" and t.in_at == body.start
+    # A drop effect lands where the owner said, not on b's next main section.
+    assert pick_transition(a, b, enter=body.start, force="brake").in_at == body.start
+    # The first section, or a time no section starts at, is the normal entry.
+    assert pick_transition(a, b, enter=b.analysis.sections[0].start) == pick_transition(a, b)
+    assert pick_transition(a, b, enter=body.start + 0.5) == pick_transition(a, b)

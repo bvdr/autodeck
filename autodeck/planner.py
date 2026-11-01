@@ -166,6 +166,20 @@ def _main_view(s: Song, side: str) -> Song | None:
     return replace(s, analysis=view)
 
 
+def _entry_view(s: Song, start: float) -> Song | None:
+    """Planning view of b entering at its section that starts at `start` (original time): the
+    owner clicked that section on the cued deck. Like _main_view's "in" side, the section plays
+    the intro role, so blends get their usual room and the planner's rules apply unchanged.
+    None if no section starts there or it's the first one (= the normal entry)."""
+    an = s.analysis
+    i = next((k for k, x in enumerate(an.sections) if abs(x.start - start) < 1e-6), 0)
+    if i == 0:
+        return None
+    x = an.sections[i]
+    view = replace(an, play_start=x.start, sections=[Section(x.start, x.end, "intro"), *an.sections[i + 1:]])
+    return replace(s, analysis=view)
+
+
 def _section_len(s: Song, label: str, first: bool) -> float:
     secs = [x for x in s.analysis.sections if x.label == label]
     if not secs:
@@ -244,7 +258,8 @@ FORCEABLE = (*MATCHED_FX, *EXIT_FX_BARS, "dropswap", "cut", "fade")
 
 
 def pick_transition(a: Song, b: Song, after: float | None = None, entered: Transition | None = None,
-                    beat_to_beat: bool = False, force: str | None = None) -> Transition:
+                    beat_to_beat: bool = False, force: str | None = None,
+                    enter: float | None = None) -> Transition:
     """Plan a -> b. `after` = mix now: leave at the first phrase boundary >= after.
 
     `entered` is the transition that brought `a` in. When given, a's exit is chosen
@@ -258,12 +273,19 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
     `force` (one of FORCEABLE) is the owner's pick from the transition dropdown. It only
     narrows the choice: a forced kind that can't work for this pair (e.g. a beat blend
     between unrelated tempos) yields the normal choice, so the result's kind may differ.
+
+    `enter` = original start of the b section the owner picked on the cued deck: b comes in
+    there (in_at == enter) instead of at its play_start.
     """
+    entry = _entry_view(b, enter) if enter is not None else None
+    if entry:
+        b = entry
     late = False
     if beat_to_beat:
         # Owner's "beat to beat" mode: skip a's outro and b's intro, blending main part into
         # main part. Falls back to the normal plan for a song without a body section.
-        va, vb = _main_view(a, "out"), _main_view(b, "in")
+        # A picked entry already says where b comes in: only a's side changes then.
+        va, vb = _main_view(a, "out"), entry or _main_view(b, "in")
         if va and vb:
             a, b, late = va, vb, True
     an, bn = a.analysis, b.analysis
@@ -330,7 +352,8 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
         hit = _search(a, [length], after, floors, late) if outro >= length else None
         if hit:
             body = next((x for x in bn.sections if x.label == "body"), None)
-            drop = (force in INTO_DROP and body is not None
+            # A picked entry wins over landing on the drop: the owner said where b starts.
+            drop = (force in INTO_DROP and body is not None and not entry
                     and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm))
             return mk(force, hit[1], body.start if drop else bn.play_start, length)
     length = ECHO_BARS * bar_a
@@ -340,7 +363,7 @@ def pick_transition(a: Song, b: Song, after: float | None = None, entered: Trans
             body = next((x for x in bn.sections if x.label == "body"), None)
             # Drop swap only when the owner forces it: they disliked it as an automatic pick
             # (2026-10-30), so unrelated-tempo pairs get an echo out instead.
-            if (force == "dropswap" and body
+            if (force == "dropswap" and body and not entry
                     and body.start - bn.play_start <= DROPSWAP_MAX_BARS * _bar(bn.bpm)):
                 return mk("dropswap", hit[1], body.start, length)
             return mk("echo", hit[1], bn.play_start, length)

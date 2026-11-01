@@ -995,3 +995,16 @@ def test_mcp_settings_switches_persist(client):
     assert s["mcp"]["enabled"] and s["mcp"]["mode"] == "read"
     assert config.settings()["mcp_mode"] == "read"
     assert client.put("/api/mcp/settings", json={"mode": "admin"}).status_code == 400
+
+
+def test_transition_enters_the_cued_song_at_a_clicked_section(client):
+    client.post("/api/playing", json={"id": IDS[0]})
+    plain = client.get("/api/transition", params={"from": IDS[0]}).json()
+    b = plain["in_deck"]
+    picked = client.get("/api/transition", params={"from": IDS[0], "enter": 1, "to": b["id"]}).json()
+    # in_at_rendered is in the new render's time; the clicked section's start in that render.
+    assert picked["in_at_rendered"] == pytest.approx(picked["in_deck"]["sections_rendered"][1]["start"], abs=1e-3)
+    assert picked["in_at_rendered"] > plain["in_at_rendered"]
+    # Meant for another song (the queue moved on): ignored.
+    other = client.get("/api/transition", params={"from": IDS[0], "enter": 1, "to": IDS[3]}).json()
+    assert other["transition"] == plain["transition"]

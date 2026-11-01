@@ -100,6 +100,12 @@ def rate_entry(entry: dict | None, verdict: str, effect: str | None, when: str) 
     return {"effect": effect, "loved": 0, "avoided": 1, "why": None, "last": when}
 
 
+def _shown_sections(an) -> list:
+    """The sections a deck shows (sections_rendered), in order: the ones inside the played span.
+    The cued deck's section clicks send an index into this list (Engine.transition's `enter`)."""
+    return [x for x in an.sections if x.end > an.play_start and x.start < an.play_end]
+
+
 class EngineError(Exception):
     """Owner-facing error; the server maps it to an HTTP status + {error}."""
 
@@ -1539,7 +1545,7 @@ class Engine:
                 "duration_rendered": tm.points[-1][1],
                 "downbeats_rendered": [r(d) for d in an.downbeats if ps <= d <= pe],
                 "sections_rendered": [{"start": r(max(x.start, ps)), "end": r(min(x.end, pe)), "label": x.label}
-                                      for x in an.sections if x.end > ps and x.start < pe]}
+                                      for x in _shown_sections(an)]}
 
     def deck(self, sid: str) -> dict:
         with LOCK:
@@ -1550,7 +1556,11 @@ class Engine:
             self.maps.setdefault(sid, tm)
             return self._deck(s, tm, path)
 
-    def transition(self, from_id: str, after: float | None, kind: str | None = None) -> dict:
+    def transition(self, from_id: str, after: float | None, kind: str | None = None,
+                   enter: int | None = None, to: str | None = None) -> dict:
+        """`enter` = index into the cued song's sections_rendered: the owner clicked that section on
+        the cued deck, so the mix brings it in there. Only applied while `to` is still the next
+        song (the queue may have changed while the click was on its way)."""
         if kind is not None and kind not in FORCEABLE:
             raise EngineError(400, f"Unknown transition effect: {kind}")
         with LOCK:
@@ -1564,9 +1574,11 @@ class Engine:
             tm_a = self.maps.setdefault(a.id, time_map_for(a, None))
             # The player reports rendered seconds; the planner works in original time.
             after_orig = tm_a.to_original(after) if after is not None else None
+            shown = _shown_sections(b.analysis)
+            enter_at = shown[enter].start if to == b.id and enter is not None and 0 < enter < len(shown) else None
             plan = lambda force: pick_transition(  # noqa: E731
                 a, b, after=after_orig, entered=self.entered.get(a.id),
-                beat_to_beat=self.beat_to_beat, force=force)
+                beat_to_beat=self.beat_to_beat, force=force, enter=enter_at)
             # The dropdown lists only effects that actually work for this pair (pure, cheap:
             # the planner is a handful of list scans). "blend" covers half_double too.
             options = [k for k in FORCEABLE
