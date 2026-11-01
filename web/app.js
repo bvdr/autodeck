@@ -10,6 +10,12 @@ import { initOnboard, renderOnboard } from './onboard.js';
 import { initMcp, renderMcp } from './mcp.js';
 
 const $ = (sel) => document.querySelector(sel);
+// The desktop window has no dev tools, so page errors and stuck mixes go to autodeck.log via the
+// server. Fire-and-forget: logging must never break playback.
+const clog = (msg) => fetch('/api/log', { method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ msg: String(msg).slice(0, 4000) }) }).catch(() => {});
+window.addEventListener('error', (e) => clog(`error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
+window.addEventListener('unhandledrejection', (e) => clog(`unhandled: ${e.reason?.stack || e.reason}`));
 const POLL_MS = 2000;
 const MAX_RETRIES = 3; // tooSoon refetches before giving up and letting the song play out
 const RATE_MS = 30000; // "How was that mix?" stays this long after a mix, then goes by itself
@@ -76,7 +82,7 @@ async function requestPlan(deck, after = null, retries = 0) {
   if (M.decks[deck].loop?.n === Infinity) return;
   const d = M.decks[deck], id = d.info.id, seq = ++M.seq;
   M.req = { seq, deck, id, after, version: getState()?.version, mode: !!getState()?.beat_to_beat,
-            inId: undefined, retries, loading: true };
+            inId: undefined, retries, loading: true, t0: Date.now() };
   status('Preparing next mix…', true);
   let res;
   try {
@@ -100,6 +106,7 @@ async function requestPlan(deck, after = null, retries = 0) {
       // Server restarting / network blip: keep trying while this song still plays, so a
       // short outage never ends the mix. songEnded() is the last safety net.
       status(`Next mix failed (${e.message}) — retrying…`, true);
+      clog(`next mix failed for ${id}: ${e.stack || e.message}`);
       setTimeout(() => { if (seq === M.seq && M.decks[deck]?.info?.id === id && !M.plan) requestPlan(deck, after, retries); }, 3000);
     }
     return;
@@ -257,6 +264,15 @@ function onState(s) {
   fadeOutIfLast(s);
   show('#fx-mcp', s.next_effect_by === 'mcp'); // the assistant's pick, until the owner changes it
   const r = M.req;
+  // A mix that should be planned by now but isn't (the sign stuck on "Preparing next mix…"):
+  // log once what the mixer holds, so the cause shows in autodeck.log.
+  if (M.ctx && r && !M.plan && !r.stuckLogged && Date.now() - r.t0 > 30000) {
+    r.stuckLogged = true;
+    clog(`no plan 30 s after asking: ${JSON.stringify({ req: { ...r, version: undefined }, cur: M.cur, manual: M.manual,
+      next: M.next && { deck: M.next.deck, id: M.next.id, in: M.next.transition?.in_id, kind: M.next.transition?.kind },
+      decks: M.decks.map((d) => ({ id: d.info?.id, busy: d.busy, endAt: d.endAt, loop: d.loop?.n ?? null })),
+      ctxTime: M.ctx.currentTime, status: $('#status').textContent })}`);
+  }
   if (!M.ctx || !r || r.loading || M.manual || r.id !== M.decks[r.deck].info?.id) return;
   const nextId = s.queue.find((q) => q.id !== r.id)?.id;
   const T0 = M.plan && M.plan.res.id === r.id ? M.plan.T0 : undefined;

@@ -1,4 +1,5 @@
 """FastAPI app: JSON API + audio files + static UI. State and queue rules live in engine.py."""
+import logging
 import re
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -21,6 +22,13 @@ WEB = Path(__file__).resolve().parent.parent / "web"
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 # Only the source and our renders are servable; song.json, peaks.json etc. are not.
 AUDIO_RE = re.compile(r"^(audio\.(opus|flac)|render-[0-9a-f]+(-vocals|-instrumental)?\.wav)$")
+
+
+log = logging.getLogger(__name__)
+
+
+class LogReq(BaseModel):
+    msg: str = Field(max_length=4000)
 
 
 class AddReq(BaseModel):
@@ -250,6 +258,13 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.post("/api/add")
     def add(req: AddReq):
         return {"added": eng.add(req.url, req.genre)}
+
+    @app.post("/api/log")
+    def client_log(req: LogReq):
+        # The desktop window (WKWebView) has no dev tools: page errors and "why no mix" snapshots
+        # land in autodeck.log, the one place the owner and a debugging session can read.
+        log.warning("web: %s", req.msg)
+        return {"ok": True}
 
     @app.post("/api/playing")
     def playing(req: PlayingReq):
