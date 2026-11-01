@@ -211,6 +211,14 @@ Up next; **Or start with** loads another one. **Library** shows why a song faile
 On a phone (≤ 600 px wide) the same page splits into Now / Vibe / Queue / Search tabs (the Vibe
 tab keeps genre, mood and party buttons; Suggestions is in the Queue tab).
 
+Each deck's **section strip** (intro / main / outro, under the title) is clickable on desktop. On the
+ON AIR deck a section loops **×2, ×4, ×8** or **until you stop it**, seamlessly on its bar lines,
+then the song carries on; the next mix moves later and still lands on a phrase. The deck shows
+"Loop 2 of 4" with **Exit loop** (finishes this pass). While a loop runs *until stopped* no mix is
+planned and the sign says it waits; **Mix now** ends the loop and mixes right after it. On the CUED
+deck a click picks where the next song comes in (e.g. skip its intro); **Reset** goes back to the
+top. Sections are locked during a mix, like the effect picker and Mix now.
+
 ## Pair memory
 
 Rate a hand-over with **🔥** (nailed it) or **👎** (didn't work): on its Played row (which rates the
@@ -291,7 +299,7 @@ Both switches are saved in `settings.json` (default: on, Steer the session).
     uv run pytest -m "not slow and not network"      # also skip the heavy real-model tests
                                                      # (a -m on the command line replaces the default, so keep "not network")
     AUTODECK_BROWSER=none uv run pytest -m network   # hits real YouTube, public content only
-    node --test web/*.test.mjs   # transition timing, lane geometry, drag drop index
+    node --test web/*.test.mjs   # transition timing, section loops, lane geometry, drag drop index
 
 ## Known limits
 
