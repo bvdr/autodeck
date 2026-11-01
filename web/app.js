@@ -29,6 +29,7 @@ const M = {
   rate: null,      // { from, to, title, until } the hand-over the sign asks about
   on: false,       // live mode (see live() / setLive())
   lastPlan: null,  // the plan that just finished: keeps the lane view steady through the swap
+  enter: null,     // { id, i }: the cued song comes in at its section i (a click on the cued deck)
 };
 // Reload resumes where you were: the playing song + position, saved about once a second.
 // localStorage, not the server: it's this browser's playback, and it must survive a reload
@@ -71,6 +72,8 @@ const live = () => M.on;
 // --- transitions ------------------------------------------------------------
 /** Ask the server for the transition out of `deck`'s song. `after` = rendered seconds. */
 async function requestPlan(deck, after = null, retries = 0) {
+  // "Until I stop": no plan while it runs, its exit time is unknown (Exit loop / Mix now replan).
+  if (M.decks[deck].loop?.n === Infinity) return;
   const d = M.decks[deck], id = d.info.id, seq = ++M.seq;
   M.req = { seq, deck, id, after, version: getState()?.version, mode: !!getState()?.beat_to_beat,
             inId: undefined, retries, loading: true };
@@ -80,6 +83,7 @@ async function requestPlan(deck, after = null, retries = 0) {
     const q = new URLSearchParams({ from: id });
     if (after != null) q.set('after', after.toFixed(3));
     if (M.force) q.set('kind', M.force);
+    if (M.enter) { q.set('enter', M.enter.i); q.set('to', M.enter.id); }
     res = await api(`/api/transition?${q}`);
     if (res.transition) res.track = await loadTrack(M.ctx, res.in_deck); // decode before scheduling
   } catch (e) {
@@ -110,7 +114,9 @@ function tryApply() {
     if (!M.plan) status('');
     return;
   }
+  if (M.enter && n.transition.in_id !== M.enter.id) M.enter = null; // the next song changed: entry forgotten
   const t = now(), out = M.decks[M.cur], inc = M.decks[1 - M.cur];
+  if (out.loop?.n === Infinity) { M.next = null; return; } // set while this was rendering
   // Replan guard: a plan whose blend is (about to be) audible is never replaced.
   if (M.plan && !S.canReplan(t, M.plan.T0)) { M.next = null; return; }
   if (M.plan) cancelPlan();
@@ -118,11 +124,16 @@ function tryApply() {
   // The outgoing leaves at its settled tempo (bpm_playing), so that's the echo's beat.
   const beat = 60 / (out.info.bpm_playing || 120);
   const p = S.plan(n, out.zero, t, beat);
-  if (S.tooSoon(p.T0, t)) {
+  // A section loop pushes the song later; out.zero is its timeline after the loop, which is
+  // only right for an exit after the loop. One before it (the planner's usual outro pick when
+  // the outro itself is looped, or a response for the pre-loop song): ask for the first phrase
+  // boundary after the loop instead.
+  const afterLoop = S.exitAfterLoop(S.looping(out.loop, t) ? out.loop : null, n.out_at_rendered);
+  if (afterLoop != null || S.tooSoon(p.T0, t)) {
     M.next = null;
     // T0 passed while rendering (or a pulled-back song's exit is behind us): ask for
     // the next boundary instead. Capped so a song at its very end can't loop forever.
-    if (M.req.retries < MAX_RETRIES) requestPlan(M.cur, out.pos(t) + S.PREP_LEAD, M.req.retries + 1);
+    if (M.req.retries < MAX_RETRIES) requestPlan(M.cur, afterLoop ?? out.pos(t) + S.PREP_LEAD, M.req.retries + 1);
     else status('No usable mix point left — this song plays to its end.', true);
     return;
   }
@@ -256,7 +267,7 @@ function onState(s) {
 const FADE_S = 8;
 function fadeOutIfLast(s) {
   const d = M.decks[M.cur];
-  if (!M.ctx || !d?.busy || !d.info || M.plan) return;
+  if (!M.ctx || !d?.busy || !d.info || M.plan || d.loop?.n === Infinity) return; // ∞: no end to fade to
   const isLast = s.source?.kind === 'playlist' && s.playlist?.at_end === 'stop' && !s.queue.some((q) => q.id !== d.info.id);
   if (isLast === (M.fade === d.info.id)) return;
   const g = d.param('gain'), end = d.zero + d.info.duration_rendered, t = Math.max(now(), end - FADE_S);
@@ -426,6 +437,8 @@ function setLive(on) {
   idleKey = '';
   wasBusy = [true, true]; // so a deck that's empty when the mixer starts gets cleared (liveFrame)
   mo = { plan: null, beat: null }; ghost = null;
+  stripKey[0] = stripKey[1] = ''; // section buttons re-evaluated in the new mode
+  closeLoopMenu();
   $('#play').disabled = on;
   for (const el of ['#xfader', '#live-filter', '#live-echo']) $(el).disabled = !on;
   if (on) {
@@ -461,7 +474,35 @@ async function startSong(song, at = null, info = null) {
 function mixNow() {
   if (!M.ctx || !M.decks[M.cur].started(now())) return;
   if (M.plan && now() >= M.plan.T0 - S.REPLAN_MARGIN) { status('Mix already under way.'); return; }
-  requestPlan(M.cur, M.decks[M.cur].pos(now()) + S.PREP_LEAD);
+  const d = M.decks[M.cur], t = now(), l = S.looping(d.loop, t) ? d.loop : null, soon = d.pos(t) + S.PREP_LEAD;
+  if (l) {
+    // Mix now also ends a loop: the pass playing now finishes, then the mix (first phrase
+    // boundary after it). A loop that hasn't started yet is simply dropped.
+    const inside = d.pos(t) >= l.start;
+    d.exitLoop(t);
+    loopChanged(inside ? Math.max(soon, l.end) : soon);
+    return;
+  }
+  requestPlan(M.cur, soon);
+}
+
+/** The ON AIR deck's loop was set, changed or exited: its song now ends at another ctx time, so
+ * the planned exit is stale. Re-plan the same way a pulled-back fader / Mix now does (requestPlan;
+ * tryApply then keeps the exit after the loop). Only ever called while the plan can still change
+ * (sectionsOpen), so dropping it here never cuts into an audible mix. */
+function loopChanged(after = M.req?.after ?? null) {
+  const d = M.decks[M.cur], t = now();
+  if (M.plan) cancelPlan();
+  M.next = null;
+  // "Stop after last" faded the song at its old end: undo, fadeOutIfLast re-arms it at the new one.
+  if (M.fade) { const g = d.param('gain'); g.cancelScheduledValues(t); g.setValueAtTime(1, t); M.fade = null; }
+  if (d.loop?.n === Infinity) {
+    M.seq++; // an in-flight plan for the old timeline is dropped on arrival
+    if (M.req) M.req.loading = false;
+    status('');
+    return;
+  }
+  requestPlan(M.cur, after);
 }
 
 const fader = $('#xfader');
@@ -687,6 +728,7 @@ function liveFrame(dt) {
   const k = ghost ? Math.min(1, (performance.now() - ghost.from) / SETTLE_MS) : 1;
   if (k >= 1) ghost = null;
   M.decks.forEach((d, i) => {
+    if (d.loop && !S.looping(d.loop, t)) d.clearLoop(); // played out: d.zero is already the after-loop one
     const started = d.started(t);
     let role = ['', ''];
     if (!d.info) role = ['empty', ''];
@@ -709,7 +751,12 @@ function liveFrame(dt) {
     if (d.info) $(`#deck${i} .overview .pos`).style.transform = `translateX(${(Math.min(0.995, pos / d.info.duration_rendered) * 100).toFixed(2)}%)`;
     lanes[i].setInfo(d.info);
     const marks = p && i !== p.inDeck ? { end: p.end - d.zero } : p ? { start: p.inOffset } : {};
-    lanes[i].draw({ zero: d.zero, startAt: d.busy ? d.startAt : null, endAt: d.endAt }, view, mix, marks, i === 1, ghost?.mix, k);
+    updateStrip(i, t, p);
+    // Inside a loop the playhead jumps back at each wrap; draw the song where it really is now
+    // (t - pos), so the waveform under NOW is what's heard. ponytail: the passes still to come
+    // aren't drawn, so a mix window shown during a loop sits (passes left × section) after the
+    // waveform's END mark until the last pass; draw the repeats if that confuses.
+    lanes[i].draw({ zero: d.info ? t - d.pos(t) : d.zero, startAt: d.busy ? d.startAt : null, endAt: d.endAt }, view, mix, marks, i === 1, ghost?.mix, k);
   });
   // The fader animates from the same progress the gain curves use.
   if (!M.manual && p) {
@@ -775,6 +822,13 @@ function updateSign(t, p, mixing, inc, onAir, label) {
           ['link', 'Add link', () => openAdd()]]);
       }
       side = rating ? 'rate' : 'help';
+    } else if (M.decks[M.cur].loop?.n === Infinity) {
+      // "Until I stop": no plan is held while it runs (its exit time is unknown), so the sign says
+      // the mix waits rather than showing a countdown that would be a guess.
+      setKicker('next');
+      setText('#sign-title', rest[0]?.title ?? '—');
+      setText('#sign-sub', 'Waits for the loop  ·  Exit loop or Mix now to carry on');
+      side = rating ? 'rate' : null;
     } else {
       setKicker('now');
       setText('#sign-title', cur?.title ?? '—');
@@ -824,6 +878,128 @@ function setKicker(kind) {
     k.replaceChildren('Next mix ', l);
   } else k.textContent = { next: 'Next mix', mixing: 'Mixing into', end: 'End of queue', now: 'Now playing' }[kind];
 }
+
+// --- section strip (design "Loop a section") ------------------------------------------
+// ON AIR deck: a click opens the loop menu (×2 / ×4 / ×8 / until I stop). Cued deck: a click picks
+// where the next song comes in (/api/transition enter=). Both follow the same lock as the effect
+// picker and Mix now (schedule.sectionsOpen). The phone hides the strip (style.css), so no sheet yet.
+const spanCache = new WeakMap(); // deck payload -> its sections' loop spans (they never change)
+const spansOf = (info) => {
+  let v = spanCache.get(info);
+  if (!v) spanCache.set(info, v = info.sections_rendered.map((_, k) => S.sectionSpan(info, k)));
+  return v;
+};
+const barsText = (sp) => (sp.bars ? `Bars ${sp.bars[0]}–${sp.bars[1]}` : `${fmt(sp.start)}–${fmt(sp.end)}`);
+
+/** 'air' (loopable), 'cued' (entry pickable) or null (strip is just a picture now). */
+function stripRole(i, t, p) {
+  const d = M.decks[i];
+  if (!d.info || !d.busy || !S.sectionsOpen({ manual: M.manual, plan: p, now: t })) return null;
+  if (i === M.cur && d.started(t)) return 'air';
+  return p && i === p.inDeck ? 'cued' : null;
+}
+
+const stripKey = ['', ''];
+/** Per frame; writes the buttons only when what they offer changed. */
+function updateStrip(i, t, p) {
+  const d = M.decks[i], info = d.info, role = stripRole(i, t, p);
+  const spans = info ? spansOf(info) : [], pos = info ? d.pos(t) : 0;
+  const l = S.looping(d.loop, t) ? d.loop : null;
+  const enter = role === 'cued' && M.enter?.id === info.id ? M.enter.i : -1;
+  const ok = spans.map((sp) => role === 'cued' || (role === 'air' && S.loopable(sp, pos)));
+  const looped = l ? spans.findIndex((sp) => sp.start === l.start && sp.end === l.end) : -1;
+  const key = [info?.id, role, ok.join(), looped, enter].join('|');
+  if (stripKey[i] !== key) {
+    stripKey[i] = key;
+    $(`#deck${i} .overview`).querySelectorAll('button').forEach((b, k) => {
+      b.disabled = !ok[k];
+      b.classList.toggle('loop', k === looped);
+      b.classList.toggle('enter', k === enter);
+      b.classList.toggle('skipped', enter > 0 && k < enter);
+      const sp = spans[k];
+      b.title = !sp ? '' : ok[k] ? `${barsText(sp)} · ${role === 'cued' ? (k ? 'start here' : 'start from the top') : 'click to loop'}`
+        : role === 'air' ? `${barsText(sp)} · already played` : !info || !d.busy ? '' : `${barsText(sp)} · locked during the mix`;
+      b.setAttribute('aria-label', b.title || b.className);
+    });
+    if (!role && !$('#loop-menu').hidden && +$('#loop-menu').dataset.deck === i) closeLoopMenu();
+  }
+  // The row under the title: the running loop (with Exit loop) or the picked entry (with Reset).
+  const sel = `#deck${i} .loopline`, entry = enter > 0 ? spans[enter] : null;
+  show(sel, !!(l || entry));
+  if (l || entry) {
+    $(sel).classList.toggle('entry', !l);
+    setText(`${sel} span`, l ? `Loop ${S.loopCount(l, t)} · ${barsText({ ...l, bars: spans[looped]?.bars })}`
+      : `Enters at ${entry.bars ? `bar ${entry.bars[0]}` : fmt(entry.start)}`);
+    setText(`${sel} button`, l ? 'Exit loop' : 'Reset');
+    const b = $(`${sel} button`), off = role === null;
+    if (b.disabled !== off) b.disabled = off;
+  }
+}
+
+const loopMenu = $('#loop-menu');
+function openLoopMenu(i, k, btn) {
+  const sp = spansOf(M.decks[i].info)[k];
+  loopMenu.dataset.deck = i;
+  loopMenu.dataset.i = k;
+  $('#loop-head').textContent = `${barsText(sp)} · ${M.decks[i].info.sections_rendered[k].label === 'body' ? 'main' : M.decks[i].info.sections_rendered[k].label}`;
+  loopMenu.hidden = false;
+  // Fixed under the section (the timeline clips overflow); above it if it would leave the window.
+  // Layout reads happen on the click, never in the frame loop.
+  const r = btn.getBoundingClientRect(), h = loopMenu.offsetHeight;
+  loopMenu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - loopMenu.offsetWidth - 8))}px`;
+  loopMenu.style.top = `${r.bottom + 8 + h > innerHeight ? r.top - 8 - h : r.bottom + 8}px`;
+  loopMenu.querySelector('button').focus();
+}
+function closeLoopMenu() { loopMenu.hidden = true; }
+
+function chooseLoop(times) {
+  const i = +loopMenu.dataset.deck, k = +loopMenu.dataset.i;
+  closeLoopMenu();
+  const d = M.decks[i], t = now();
+  if (stripRole(i, t, M.plan) !== 'air') { status('Too late to loop now.'); return; }
+  const sp = spansOf(d.info)[k], pos = d.pos(t);
+  if (!S.loopable(sp, pos)) { status('That section has already played.'); return; }
+  d.setLoop(S.makeLoop(sp, times, t, pos, S.looping(d.loop, t) ? d.loop : null), t);
+  loopChanged();
+}
+
+function onSection(i, k, btn) {
+  const role = stripRole(i, now(), M.plan);
+  if (role === 'air') openLoopMenu(i, k, btn);
+  else if (role === 'cued') {
+    // The planner brings the cued song in at that section; the first one = from the top again.
+    M.enter = k ? { id: M.decks[i].info.id, i: k } : null;
+    requestPlan(M.cur, M.req?.after ?? null);
+  }
+}
+
+$('.timeline').addEventListener('click', (e) => {
+  const b = e.target.closest('.overview button, .loopline button');
+  if (!b || b.disabled) return;
+  const i = +b.closest('.lane').id.slice(-1);
+  if (b.classList.contains('loop-btn')) {
+    if (stripRole(i, now(), M.plan) === null) return;
+    if (M.decks[i].loop) { M.decks[i].exitLoop(now()); loopChanged(); } // Exit loop: this pass, then on
+    else { M.enter = null; requestPlan(M.cur, M.req?.after ?? null); } // Reset: from the top
+    return;
+  }
+  onSection(i, +b.dataset.i, b);
+});
+loopMenu.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-n]');
+  if (b) chooseLoop(b.dataset.n === 'inf' ? Infinity : +b.dataset.n);
+});
+loopMenu.addEventListener('keydown', (e) => {
+  const items = [...loopMenu.querySelectorAll('button')], k = items.indexOf(document.activeElement);
+  if (e.key === 'Escape') { closeLoopMenu(); return; }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    items[(k + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+  }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!loopMenu.hidden && !e.target.closest('#loop-menu, .overview')) closeLoopMenu();
+});
 
 // --- live FX: filter knob + echo throw ----------------------------------------
 function liveFx(ctx, input) {

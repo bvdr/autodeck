@@ -10,7 +10,7 @@
 // the riser is its own noise source straight to master.
 // The delay sits after the gain so an echo-out echoes the *fading* signal and its
 // tail keeps ringing after the dry signal is gone.
-import { ECHO_FEEDBACK, HP_IDLE, LP_IDLE } from './schedule.js';
+import { ECHO_FEEDBACK, HP_IDLE, LP_IDLE, loopPos, loopZero, lastPassAt, exitLoop } from './schedule.js';
 import { overview } from './lanes.js';
 
 /** Stereo decaying-noise impulse: a plain 3 s hall for the reverb wash. */
@@ -38,8 +38,13 @@ export function laneText(root, i) {
   q('.metaline').textContent = i ? [i.genre, `${fmtBpm(i.bpm_original)}→${fmtBpm(playing)}`, key].filter(Boolean).join('  ') : '';
   q('.metaline').title = i && Math.abs(i.bpm_playing - playing) > 0.05 ? `Settles at ${fmtBpm(i.bpm_playing)} BPM` : '';
   const ov = q('.overview'), pos = ov.querySelector('.pos');
-  ov.replaceChildren(...(i ? overview(i.sections_rendered, i.duration_rendered) : []).map((x) => {
-    const b = document.createElement('b');
+  // Buttons: on a live deck a section loops (ON AIR) or picks the entry (cued); app.js enables them.
+  ov.replaceChildren(...(i ? overview(i.sections_rendered, i.duration_rendered) : []).map((x, k) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.disabled = true;
+    b.dataset.i = k;
+    b.setAttribute('aria-label', x.label);
     b.className = x.label;
     b.style.flex = String(Math.max(0.001, x.to - x.from));
     return b;
@@ -76,7 +81,11 @@ export class Deck {
     this.delay.connect(master);
     this.src = null;
     this.track = null;
-    this.zero = 0;       // ctx time of rendered second 0
+    // ctx time of rendered second 0. With a section loop: of the audio after the loop (what plans
+    // and effects schedule against); pos() knows where the playhead really is inside the loop.
+    this.zero = 0;
+    this.loop = null;    // schedule.js loop object (setLoop), null = plays straight through
+    this.loopTimer = 0;
     this.startAt = 0;    // ctx time the source starts sounding
     this.endAt = Infinity; // ctx time the source stops (stopAt), for the lane drawing
   }
@@ -85,7 +94,7 @@ export class Deck {
   /** True while a source exists that hasn't been stopped (scheduled or sounding). */
   get busy() { return this.src !== null; }
   started(now) { return this.busy && now >= this.startAt; }
-  pos(now) { return now - this.zero; }
+  pos(now) { return this.loop ? loopPos(this.loop, now) : now - this.zero; }
 
   param(name) {
     return { gain: this.gain.gain, hp: this.hp.frequency, echo: this.send.gain, delay: this.delay.delayTime,
@@ -125,11 +134,49 @@ export class Deck {
   }
 
   stop() {
+    this.clearLoop();
     const s = this.src;
     this.src = null; // first, so onended doesn't report a deliberate stop as "song ended"
     if (s) this.endAt = Math.min(this.endAt, this.ctx.currentTime);
     if (s) { try { s.stop(); } catch { /* never started */ } s.disconnect(); }
     this.dropExtra();
+  }
+
+  /** Repeat a section: the source's native loop (sample-accurate wraps at loopEnd -> loopStart).
+   * `l` from schedule.makeLoop / exitLoop. Passing a section that's still ahead is fine: the
+   * source plays into it and wraps at its end. */
+  setLoop(l, now) {
+    if (!this.src) return;
+    clearTimeout(this.loopTimer);
+    this.loop = l;
+    // "Until I stop" has no end yet; plans aren't made while it runs (app.js), so this zero is unused.
+    this.zero = l.n === Infinity ? l.z0 : loopZero(l);
+    const src = this.src;
+    src.loopStart = l.start;
+    src.loopEnd = l.end;
+    src.loop = l.n > 1;
+    // The only non-sample-accurate step: turning the loop flag off. It just has to happen during
+    // the last pass (after its wrap, before its end), so it fires just after that pass starts and
+    // has the whole pass (8+ bars) of slack for timer jitter / background-tab throttling.
+    if (l.n > 1 && l.n !== Infinity) {
+      this.loopTimer = setTimeout(() => { if (this.src === src) src.loop = false; }, (lastPassAt(l) + 0.25 - now) * 1000);
+    }
+  }
+
+  /** Finish the pass playing now, then carry on. */
+  exitLoop(now) {
+    if (!this.loop) return;
+    const l = exitLoop(this.loop, now);
+    if (l.n > 1) { this.setLoop(l, now); return; }
+    // Already the last pass: nothing left to loop, the song plays on from here.
+    this.clearLoop();
+    this.zero = l.z0;
+  }
+
+  clearLoop() {
+    clearTimeout(this.loopTimer);
+    if (this.loop && this.src) this.src.loop = false;
+    this.loop = null;
   }
 
   /** Extra source playing part of this deck's buffer into the deck chain. */

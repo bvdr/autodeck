@@ -322,6 +322,15 @@
     </div>
   </section>
 
+  <!-- Loop a section (ON AIR deck strip): fixed to the clicked section, outside the timeline's clip. -->
+  <div id="loop-menu" class="pop menu loop-menu" role="menu" aria-labelledby="loop-head" hidden>
+    <p id="loop-head" class="loop-head mono"></p>
+    <button type="button" role="menuitem" data-n="2"><svg class="i"><use href="#i-repeat"/></svg>Loop ×2</button>
+    <button type="button" role="menuitem" data-n="4"><svg class="i"><use href="#i-repeat"/></svg>Loop ×4</button>
+    <button type="button" role="menuitem" data-n="8"><svg class="i"><use href="#i-repeat"/></svg>Loop ×8</button>
+    <button type="button" role="menuitem" data-n="inf"><span class="inf" aria-hidden="true">∞</span>Until I stop</button>
+  </div>
+
   <!-- Two lanes on one time axis (lanes.js draws the canvases) + the vertical crossfader. -->
   <section class="timeline" aria-label="Decks">
     <article class="lane" id="deck0" aria-label="Deck A">
@@ -329,8 +338,9 @@
         <p class="meta-top"><span class="letter a" aria-hidden="true">A</span><span class="role"></span><span class="time mono"></span></p>
         <p class="title">—</p>
         <p class="artist"></p>
+        <p class="loopline mono" hidden><span></span><button type="button" class="loop-btn"></button></p>
         <p class="metaline mono"></p>
-        <div class="overview" aria-hidden="true"><i class="pos"></i></div>
+        <div class="overview" role="group" aria-label="Sections"><i class="pos" aria-hidden="true"></i></div>
       </div>
       <div class="lane-wave"><canvas aria-hidden="true"></canvas></div>
     </article>
@@ -339,8 +349,9 @@
         <p class="meta-top"><span class="letter b" aria-hidden="true">B</span><span class="role"></span><span class="time mono"></span></p>
         <p class="title">—</p>
         <p class="artist"></p>
+        <p class="loopline mono" hidden><span></span><button type="button" class="loop-btn"></button></p>
         <p class="metaline mono"></p>
-        <div class="overview" aria-hidden="true"><i class="pos"></i></div>
+        <div class="overview" role="group" aria-label="Sections"><i class="pos" aria-hidden="true"></i></div>
       </div>
       <div class="lane-wave"><canvas aria-hidden="true"></canvas>
         <p id="lane-note" class="lane-note" hidden><svg class="i"><use href="#i-clock-3"/></svg><span></span></p></div>
