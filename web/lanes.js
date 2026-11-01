@@ -77,11 +77,15 @@ export function overview(sections, duration) {
   return sections.map((s) => ({ label: s.label === 'body' ? 'main' : s.label, from: f(s.start), to: f(s.end) }));
 }
 
-/** Do two tempos beat-match (same rule as the server's 8 % stretch limit, also ½× / 2×)?
- * Used for the "mixes" badge on the phone's THEN line. */
+/** Do two tempos beat-match (music.tempo_relation: within the stretch limit, also ½× / 2×)?
+ * Used for the "mixes" badge on the phone's THEN line and the beat-match icon on song rows.
+ * Callers pass state.beatmatch_max_pct (the server's BEATMATCH_MAX_PCT), so JS and Python
+ * can't drift; 0.08 only covers the moment before the first /api/state answer. */
 export function mixesWith(a, b, maxPct = 0.08) {
   if (!(a > 0) || !(b > 0)) return false;
-  return [1, 2, 0.5].some((k) => Math.abs((b * k) / a - 1) <= maxPct);
+  // a = what's playing (out), b = the candidate (in). Same ratio as the server (out / in, not
+  // in / out: they differ near the limit) and the same epsilon, so the limit stays inclusive.
+  return [1, 2, 0.5].some((k) => Math.abs(a / (b * k) - 1) <= maxPct + 1e-9);
 }
 
 /** Label for the transition region: "NEXT · BASS SWAP · 8 BARS" before it, without "NEXT"

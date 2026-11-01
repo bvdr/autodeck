@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { laneLeft, xAt, gainAt, mixBars, mixProgress, overview, mixesWith, mixTag, incomingStart,
   VIEW_SPAN, NOW_AT, MIX_AT, NOW_MAX, mixBeat, mixAnnouncement } from './lanes.js';
-import { FX_LABEL, FX_SHAPE } from './ui.js';
+import { FX_LABEL, FX_SHAPE, beatMatches } from './ui.js';
 import { plan, bassMid, BASS_CUT, REPLAN_MARGIN } from './schedule.js';
 
 const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
@@ -67,6 +67,25 @@ test('overview strip and the mixes check', () => {
   [['intro', 0, 0.1], ['main', 0.1, 0.9], ['outro', 0.9, 1]]);
   assert.deepEqual(overview([], 100), []);
   assert.ok(mixesWith(120, 124) && mixesWith(120, 61) && !mixesWith(120, 135) && !mixesWith(120, null));
+});
+
+test('beatMatches: the row icon, vs the song ON AIR, with the limit from /api/state', () => {
+  const air = { id: 'a', bpm: 100 };
+  // The state's limit is used: 105 BPM is in at 8 %, out at 4 %.
+  assert.ok(beatMatches({ id: 'b', bpm: 105 }, air, 0.08));
+  assert.ok(!beatMatches({ id: 'b', bpm: 105 }, air, 0.04));
+  // Inclusive like the server: out / in = 100 / 92.6 = 1.0799 matches, 108.6 (1 / 1.086) too.
+  assert.ok(beatMatches({ id: 'b', bpm: 92.6 }, air, 0.08) && beatMatches({ id: 'b', bpm: 108.6 }, air, 0.08));
+  // Half / double time.
+  assert.ok(beatMatches({ id: 'b', bpm: 200 }, air, 0.08) && beatMatches({ id: 'b', bpm: 51 }, air, 0.08));
+  assert.ok(!beatMatches({ id: 'b', bpm: 150 }, air, 0.08));
+  // Missing BPM (row or ON AIR), nothing ON AIR, and the ON AIR song itself: no icon.
+  assert.ok(!beatMatches({ id: 'b', bpm: null }, air, 0.08));
+  assert.ok(!beatMatches({ id: 'b', bpm: 100 }, { id: 'a', bpm: null }, 0.08));
+  assert.ok(!beatMatches({ id: 'b', bpm: 100 }, { id: null, bpm: null }, 0.08));
+  assert.ok(!beatMatches({ id: 'a', bpm: 100 }, air, 0.08));
+  // No state yet: mixesWith's 8 % fallback.
+  assert.ok(beatMatches({ id: 'b', bpm: 107 }, air, undefined));
 });
 
 test('mixBeat: planned -> locked at the replan margin -> mixing at T0 -> handover at the midpoint', () => {

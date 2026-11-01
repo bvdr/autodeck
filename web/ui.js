@@ -1,6 +1,7 @@
 // Everything that isn't audio: API calls, the sources panel (Vibe / Party dropdowns; the phone's
 // genre, mood and party chips), Up next, Suggestions / Played / Pairs / Library, search, "Or start with", add-by-link, notices and phone tabs.
 import { sortable } from './sortable.js';
+import { mixesWith } from './lanes.js';
 const $ = (sel) => document.querySelector(sel);
 // Queue-row drags carry this type so the URL drop zone can ignore them.
 const ROW_TYPE = 'application/x-autodeck-id';
@@ -128,8 +129,36 @@ function badge(kind, text = cap(kind), title = '') {
   return el('span', { className: `badge ${kind}`, title: title || text },
     icon(STATUS_ICON[kind] ?? { auto: 'sparkles', pinned: 'pin', locked: 'lock', loved: 'flame', avoided: 'thumbs-down', mixes: 'check' }[kind] ?? 'info', spin ? 'spin' : ''), text);
 }
-const songMeta = (s) => [s.bpm ? s.bpm.toFixed(1) : '–', s.camelot ?? '–',
-  s.danceability != null ? `${Math.round(s.danceability * 100)}%` : '–'].join('  ');
+
+// --- beat-match icon -------------------------------------------------------------------
+// A row's BPM gets the audio-lines icon, both in the ready green of Badge / mixes, when the
+// song can be beat-matched with the song ON AIR: then Beat blend, Bass swap and Filter sweep
+// are offered for it. Rows that don't match show nothing extra (no red marks).
+const MATCH_TIP = 'Beat-matches what’s playing: blend, bass swap and filter sweep work';
+// The song ON AIR (id + analysed BPM), set by app.js every frame; null id = nothing playing.
+let air = { id: null, bpm: null };
+/** Does song x beat-match the song `on` (ON AIR)? Never the ON AIR song itself. maxPct comes
+ * from state.beatmatch_max_pct, the planner's own limit. Pure (node-tested). */
+export const beatMatches = (x, on, maxPct) => !!on?.id && x.id !== on.id && mixesWith(on.bpm, x.bpm, maxPct);
+const paintBpm = (m) => m.classList.toggle('mixes', beatMatches(m.song, air, last?.beatmatch_max_pct));
+/** app.js, every frame: the song ON AIR. Repaints the BPM cells only when it changed (a new
+ * song, or the handover halfway through a mix), so no row is rebuilt. */
+export function setAir(id = null, bpm = null) {
+  if (id === air.id && bpm === air.bpm) return;
+  air = { id, bpm };
+  for (const m of document.querySelectorAll('.meta.bpm')) paintBpm(m);
+}
+/** The BPM cell: [icon] 104.2, then `rest` (key, danceability). `only`: rows with no BPM
+ * column (Library, Search) show the cell only on a match. */
+function bpmMeta(x, { rest = '', title = 'BPM', only = false } = {}) {
+  const m = el('span', { className: `meta bpm${only ? ' only' : ''}`, title, song: x },
+    el('span', { className: 'mark', role: 'img', title: MATCH_TIP, 'aria-label': MATCH_TIP }, icon('audio-lines')),
+    el('span', { className: 'n', textContent: x.bpm ? x.bpm.toFixed(1) : '–' }),
+    rest ? el('span', { className: 'rest', textContent: rest }) : null);
+  paintBpm(m);
+  return m;
+}
+const songRest = (s) => `  ${s.camelot ?? '–'}  ${s.danceability != null ? `${Math.round(s.danceability * 100)}%` : '–'}`;
 
 function moveTo(ids, id, to) {
   const out = ids.filter((x) => x !== id);
@@ -210,7 +239,7 @@ function queueRow(song, i, s, ids, prevId) {
       loved ? el('span', { className: 's why', textContent: lovedLine(titleOf(prevId), pair) })
         // A locked auto pick shows the Locked badge, so its "Auto · …" note moves under the title.
         : el('span', { className: 's', textContent: [note.sub, note.auto && locked ? note.badge : null].filter(Boolean).join(' · ') })),
-    el('span', { className: 'meta', textContent: songMeta(song), title: 'BPM  key  danceability' }),
+    bpmMeta(song, { rest: songRest(song), title: 'BPM  key  danceability' }),
     mcp ? mcpTag() : loved ? badge('loved', 'Loved after this') : isAvoided(pair) ? badge('avoided', 'Avoided pair')
       : locked ? badge('locked', 'Locked in') : note.auto ? badge('auto', note.badge, 'Fills in so the music never stops') : badge(song.status, cap(song.status), song.error),
     genreSelect(song, s.genres, `Genre for ${song.title}`),
@@ -620,6 +649,7 @@ function libRow(p, s) {
   const li = el('li', { className: 'logrow' }, thumb(p),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: p.title }),
       el('span', { className: p.status === 'failed' ? 's err' : 's', textContent: p.status === 'failed' ? p.error || 'Failed' : p.channel })),
+    bpmMeta(p, { only: true }),
     badge(p.status, cap(p.status), p.error),
     p.status === 'failed' ? el('button', { type: 'button', className: 'btn', onclick: () => act(`/api/song/${p.id}/retry`, 'POST') }, icon('rotate-ccw'), 'Retry')
       : genreSelect(p, s.genres, `Genre for ${p.title}`),
@@ -811,12 +841,12 @@ function draftRow(r) {
     try { await api('/api/suggestions/unreject', 'POST', body); } catch (e) { report(e); return; }
     r.state = 'new'; draft.excluded--; renderDraft();
   };
-  const bpm = el('span', { className: `meta${x.mixes ? ' mixes' : ''}`, textContent: x.bpm ? x.bpm.toFixed(1) : '–',
-    title: x.mixes ? 'BPM · beat-matches the current song' : x.bpm ? 'BPM' : 'Tempo unknown' });
+  // Same beat-match rule as every row (vs ON AIR, live); the server's x.mixes only sorts them.
+  const bpm = bpmMeta(x, { title: x.bpm ? 'BPM' : 'Tempo unknown' });
   return el('li', { className: `row draft-row ${r.state}` }, thumb(x),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: x.title }),
       el('span', { className: 's', textContent: why })),
-    bpm, x.mixes && !kept && !out ? el('span', { className: 'sr-only', textContent: 'mixes with what’s playing' }) : null,
+    bpm,
     out ? el('button', { type: 'button', className: 'btn undo', onclick: undo }, icon('undo-2'), 'Undo')
       : el('span', { className: 'acts' },
         working ? el('span', { className: 'badge working' }, icon('loader', 'spin'), x.id ? 'Adding…' : 'Finding on YouTube…')
@@ -1206,7 +1236,7 @@ function plRow(r) {
   return el('li', { className: `row draft-row pl-row ${st}${isNew ? ' new' : ''}${out ? ' excluded' : ''}` }, thumb(x),
     el('span', { className: 'text' }, el('span', { className: 't', textContent: x.title }),
       el('span', { className: 's', textContent: out ? 'Skipped in this playlist from now on' : plRowNote(x, hooks.decks, isNew) })),
-    el('span', { className: 'meta', textContent: x.bpm ? x.bpm.toFixed(1) : '–', title: x.bpm ? 'BPM' : 'Tempo unknown yet' }), acts);
+    bpmMeta(x, { title: x.bpm ? 'BPM' : 'Tempo unknown yet' }), acts);
 }
 
 function renderPlaylistDraft() {
@@ -1241,6 +1271,7 @@ function resultRow(r) {
     el('span', { className: 'text' }, el('span', { className: 't', textContent: r.title }),
       el('span', { className: 's' }, r.status ? badge(r.status) : null,
         [r.channel, mmss(r.duration)].filter(Boolean).join(' · '))),
+    bpmMeta(r, { only: true }),
     r.id === last?.playing ? null : deckBtn(r, 'search'));
 }
 

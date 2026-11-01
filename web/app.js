@@ -5,7 +5,7 @@
 import * as S from './schedule.js';
 import { Deck, loadTrack, laneText } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith, mixBeat, mixAnnouncement } from './lanes.js';
-import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs, fxShape } from './ui.js';
+import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs, fxShape, setAir } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
 import { initMcp, renderMcp } from './mcp.js';
 
@@ -650,6 +650,7 @@ function frame(ts) {
  * only when something it shows changes (opener, start point, lane size), not 60 times a second. */
 let idleKey = '';
 function idleFrame() {
+  setAir(); // nothing ON AIR before Play: no beat-match icons
   const info = O.info;
   const startAt = O.at ?? (info ? S.firstOffset(info) : 0);
   const key = [info?.id, startAt, lanes[0].w, lanes[0].h, lanes[1].w, lanes[1].h].join('|');
@@ -667,6 +668,10 @@ function liveFrame(dt) {
   // ON AIR moves to the incoming halfway through a transition (the handover beat), when it's
   // the louder one (deck roles only swap at the very end, which looked like the old song hung on).
   const onAir = beat === 'handover' ? p.inDeck : M.cur;
+  // Beat-match icons on song rows compare with the song ON AIR, at its analysed BPM (what the
+  // planner compares). No-op unless it changed.
+  const air = M.decks[onAir];
+  if (air?.info && air.started(t)) setAir(air.info.id, air.info.bpm_original); else setAir();
   const anchor = p ?? (M.lastPlan && t < M.lastPlan.end + 2 ? M.lastPlan : null);
   const target = laneLeft(t, anchor?.T0 ?? null) - t;
   viewOff = viewOff == null || reduceMotion.matches ? target : viewOff + (target - viewOff) * (1 - Math.exp(-dt / 0.15));
@@ -798,7 +803,7 @@ function updateSign(t, p, mixing, inc, onAir, label) {
   show('#then', !!then);
   if (then) {
     setText('#then b', `${then.title} — ${then.channel}`);
-    show('#then .badge', mixesWith(nextIn.bpm_playing, then.bpm));
+    show('#then .badge', mixesWith(nextIn.bpm_playing, then.bpm, s.beatmatch_max_pct));
   }
   setText('#nb-title', airInfo?.title ?? '—');
   setText('#nb-sub', p ? (mixing ? `Mixing into ${p.res.in_deck.title}` : `${p.res.in_deck.title} in ${fmt(p.T0 - t)}`) : '');
