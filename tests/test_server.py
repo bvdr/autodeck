@@ -1049,3 +1049,10 @@ def test_stem_endpoint_renders_with_the_playing_map(client):
     assert r["url"] == deck["url"].replace(".wav", "-instrumental.wav")
     assert client.get(r["url"]).status_code == 200
     assert client.get(f"/api/stem/{a}/drums").status_code == 400
+
+
+def test_web_files_are_always_revalidated(client):
+    # A stale cached module next to a fresh one broke the desktop window (new app.js, old deck.js).
+    for path in ("/", "/app.js", "/deck.js"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path

@@ -27,6 +27,18 @@ AUDIO_RE = re.compile(r"^(audio\.(opus|flac)|render-[0-9a-f]+(-vocals|-instrumen
 log = logging.getLogger(__name__)
 
 
+class FreshStaticFiles(StaticFiles):
+    """The web app, always revalidated. Without Cache-Control, WebKit (the desktop window keeps a
+    disk cache) heuristically reuses old copies of modules: after an update the window ran a new
+    app.js against a stale deck.js (2026-11-01: no stems, no section strip). no-cache still lets it
+    use its copy when the ETag matches, so a reload costs one 304 per file on localhost."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 class LogReq(BaseModel):
     msg: str = Field(max_length=4000)
 
@@ -515,6 +527,6 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     # Mounted last so it never shadows /api or /audio.
     if WEB.is_dir():
-        app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+        app.mount("/", FreshStaticFiles(directory=WEB, html=True), name="web")
     return app
 
