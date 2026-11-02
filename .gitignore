@@ -11,3 +11,6 @@ __pycache__/
 dist/
 build/
 *.dmg
+.DS_Store
+# YouTube thumbnails used as examples in design/autodeck.pen: kept locally, never committed (copyright is the uploaders')
+design/thumbs/

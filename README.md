@@ -1,7 +1,40 @@
 # autodeck
 
-Local auto-DJ: import YouTube songs, analyze them, and play a beatmatched mix in the browser.
-Runs on macOS (Apple Silicon), local only: the server binds `127.0.0.1`.
+> **Beta.** autodeck is a personal project that is still changing quickly. Expect rough edges and
+> bugs. Use it at your own risk: it comes with no warranty (see [License](#license)).
+
+autodeck is an auto-DJ for your Mac. Point it at a YouTube or YouTube Music playlist and it plays
+the songs as one continuous mix, the way a DJ would: it finds each song's beats, bars, key and
+sections, picks an order that flows, and blends every song into the next on the beat.
+
+You can let it run on its own, or steer it: reorder Up next, pick the next effect, pick a mood or
+party style, loop a section, or let an AI assistant DJ through MCP.
+
+![autodeck on the desktop: the ON AIR deck, the cued next song and Up next](docs/screenshots/desktop.png)
+
+<img src="docs/screenshots/phone.png" alt="autodeck at phone width" width="300">
+
+**What it does**
+- **Imports** songs from YouTube / YouTube Music links, playlists or your Liked Music (via yt-dlp).
+- **Analyzes** each song locally: beat and bar grid (beat_this), tempo, key, sections, loudness,
+  genre (Discogs-EffNet) and language (Whisper tiny).
+- **Mixes** two decks in the browser with Web Audio: tempo-matched blends rendered with Rubber Band,
+  bass swaps, echo outs, and vocal swaps using stems split by Demucs.
+- **Learns** which pairs worked from your ratings, and suggests songs from moods, genres and
+  party styles (Last.fm and public playlists).
+- **Stays local.** The server only listens on `127.0.0.1`. Nothing about your library leaves your Mac
+  except the YouTube downloads and optional Last.fm lookups.
+
+Runs on macOS with Apple Silicon.
+
+## Download
+
+Get the latest DMG from [Releases](https://github.com/bvdr/autodeck/releases/latest), open it and drag
+autodeck to Applications. The first launch installs the audio libraries and models (about 1.5 GB) into
+`~/Library/Application Support/autodeck/`. See [Mac app](#mac-app) for what's inside.
+
+autodeck downloads audio from YouTube for your personal listening. Respect YouTube's terms and the
+rights of the artists whose music you play.
 
 ## One-time setup
 
@@ -382,3 +415,15 @@ From the acceptance smoke (6 real songs) and the `ponytail:` notes in the code:
 
 **Not yet verified:** a 30+ minute listening session across genre switches, and the Liked Music import
 with a real login. Both are left to the owner.
+
+## License
+
+autodeck is released under the [MIT License](LICENSE).
+
+It uses third-party software and models under their own licenses, which autodeck doesn't change:
+- **Rubber Band** (the `rubberband` command-line tool, bundled in the Mac app) is GPL-licensed.
+  Source: [breakfastquay.com/rubberband](https://breakfastquay.com/rubberband/).
+- **Discogs-EffNet** genre model (Essentia, downloaded on first run) is CC BY-NC-SA 4.0:
+  non-commercial use only.
+- **beat_this**, **Demucs**, **Whisper** (via faster-whisper) and **yt-dlp** each have their own
+  licenses. See their projects.
