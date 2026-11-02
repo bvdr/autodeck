@@ -354,6 +354,27 @@ def test_requested_song_is_prepped_first_and_plays_next(client):
     assert NEW not in eng.requested
 
 
+def test_play_next_with_a_bare_id_names_the_song_from_youtube(client, monkeypatch):
+    # The assistant's play_next can send only an id: the song must still get its name.
+    from autodeck import fetch
+    seen = []
+    monkeypatch.setattr(fetch, "expand", lambda url: seen.append(url) or [Song(NEW, "Hit", "Chan", 180.0, "queued")])
+    client.post("/api/play_next", json={"id": NEW, "source": "assistant"})
+    s = client.engine.by_id(NEW)
+    assert (s.title, s.channel, s.duration) == ("Hit", "Chan", 180.0)
+    assert library.load_song(NEW).title == "Hit"
+    assert seen == [f"https://www.youtube.com/watch?v={NEW}"]
+    client.post("/api/request", json={"id": NEW})  # known now: no second lookup
+    assert len(seen) == 1
+
+
+def test_bare_id_not_on_youtube_is_refused(client, monkeypatch):
+    from autodeck import fetch
+    monkeypatch.setattr(fetch, "expand", lambda url: [])
+    assert client.post("/api/play_next", json={"id": NEW}).status_code == 404
+    assert client.engine.by_id(NEW) is None
+
+
 def test_request_validates_id(client):
     assert client.post("/api/request", json={"id": "../etc", "title": "x"}).status_code == 404
 

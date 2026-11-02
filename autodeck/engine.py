@@ -573,11 +573,27 @@ class Engine:
             return [{"id": h.id, "title": h.title, "channel": h.channel, "duration": h.duration,
                      "status": by[h.id].status if h.id in by else None} for h in hits]
 
+    def _named(self, sid: str, title: str, channel: str, duration: float) -> tuple[str, str, float]:
+        """(title, channel, duration) for a song about to be added. The assistant's play_next can
+        send a bare video id; added as is, the song had no name anywhere (Up next, the decks) and
+        analysis had no artist to go on. So a new song with no title is looked up on YouTube
+        first. Outside LOCK: it's a network call."""
+        if title or self.by_id(sid) or library.load_song(sid):
+            return title, channel, duration
+        try:
+            songs = fetch.expand(f"https://www.youtube.com/watch?v={sid}")
+        except fetch.FetchError as e:
+            raise EngineError(404, f"Couldn't find video {sid} on YouTube: {e}") from e
+        if not songs:
+            raise EngineError(404, f"Couldn't find video {sid} on YouTube")
+        return songs[0].title, songs[0].channel, songs[0].duration
+
     def request(self, sid: str, title: str, channel: str, duration: float, kept_from: str | None = None,
                 first: bool = False, by: str | None = None) -> None:
         """Owner kept a song (the draft, the assistant, a pair): add it if new, prep it first, and
         put it in Up next after the songs already kept (`first`: before them, see play_next).
         `kept_from` is the note ("Balkan party", "search", "assistant")."""
+        title, channel, duration = self._named(sid, title, channel, duration)
         with LOCK:
             s = self.by_id(sid)
             if s is None:
@@ -609,6 +625,7 @@ class Engine:
         planned song moves back to second; one still downloading/analysing waits at the top of
         the requests while the planned song stays, then swaps in once ready (_recompute). The
         playing song is never touched. Returns what the UI's one-line notice needs."""
+        title, channel, duration = self._named(sid, title, channel, duration)  # before LOCK: network
         with LOCK:
             if sid == self.playing:
                 raise EngineError(409, "That song is playing now")
