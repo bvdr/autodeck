@@ -29,7 +29,7 @@ Runs on macOS with Apple Silicon.
 
 ## Download
 
-Get the latest DMG from [Releases](https://github.com/bvdr/autodeck/releases/latest), open it and drag
+Get the latest DMG from [Releases](https://github.com/bvdr/autodeck/releases) (beta builds are marked pre-release), open it and drag
 autodeck to Applications. The first launch installs the audio libraries and models (about 1.5 GB) into
 `~/Library/Application Support/autodeck/`. See [Mac app](#mac-app) for what's inside.
 
