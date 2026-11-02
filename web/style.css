@@ -218,6 +218,12 @@ body.idle .lamp-play { display: grid; justify-items: center; gap: 6px; }
 .lamp-play small { font: 11px var(--mono); letter-spacing: 2px; opacity: .75; }
 body.idle .lamp:hover { background: #ff5f43; }
 .lamp:disabled { cursor: default; }
+/* Live, the lamp pauses / resumes (app.js togglePause). Paused: the sign goes dark, the music isn't on air. */
+body.live .lamp:not(:disabled) { cursor: pointer; }
+body.live .lamp:hover { background: #ff5f43; }
+body.paused .lamp, body.paused .lamp:hover { background: var(--on-air-dim); color: var(--on-air); box-shadow: inset 0 0 0 2px var(--on-air); }
+body.paused .lamp-on b { display: none; }
+body.paused .lamp-on::after { content: "PAUSED"; font: 700 24px/1 var(--display); letter-spacing: 2px; }
 .sign-text { padding: 22px 28px; min-width: 0; display: flex; flex-direction: column; gap: 2px; justify-content: center; }
 .kicker { font: 13px var(--mono); letter-spacing: 2px; text-transform: uppercase; color: var(--text-2); display: flex; gap: 6px; align-items: center; }
 .kicker.live { color: var(--on-air); }

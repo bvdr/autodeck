@@ -18,6 +18,14 @@
 import { ECHO_FEEDBACK, HP_IDLE, LP_IDLE, STEM_FADE, modeGains, loopPos, loopZero, lastPassAt, exitLoop } from './schedule.js';
 import { overview } from './lanes.js';
 
+/** setTimeout in AudioContext time. While the context is suspended (Pause) its clock stands
+ * still, so a wall-clock timer would fire early: this one re-arms for whatever ctx time is
+ * still left. `keep(id)` gets each timer id, so the caller can clear the live one. */
+export function ctxTimeout(ctx, t, fn, keep) {
+  const arm = () => keep(setTimeout(() => (t - ctx.currentTime > 0.01 ? arm() : fn()), Math.max(0, t - ctx.currentTime) * 1000));
+  arm();
+}
+
 /** Stereo decaying-noise impulse: a plain 3 s hall for the reverb wash. */
 function impulse(ctx, seconds = 3) {
   const n = Math.floor(ctx.sampleRate * seconds), b = ctx.createBuffer(2, n, ctx.sampleRate);
@@ -200,7 +208,8 @@ export class Deck {
     // the last pass (after its wrap, before its end), so it fires just after that pass starts and
     // has the whole pass (8+ bars) of slack for timer jitter / background-tab throttling.
     if (l.n > 1 && l.n !== Infinity) {
-      this.loopTimer = setTimeout(() => { if (this.src === src) for (const x of this.sources()) x.loop = false; }, (lastPassAt(l) + 0.25 - now) * 1000);
+      ctxTimeout(this.ctx, lastPassAt(l) + 0.25, () => { if (this.src === src) for (const x of this.sources()) x.loop = false; },
+        (id) => { this.loopTimer = id; });
     }
   }
 

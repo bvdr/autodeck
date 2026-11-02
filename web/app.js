@@ -3,7 +3,7 @@
 // Timing math lives in schedule.js (pure, tested), lane geometry in lanes.js (pure, tested),
 // Web Audio plumbing in deck.js, everything else on the page in ui.js.
 import * as S from './schedule.js';
-import { Deck, loadTrack, laneText } from './deck.js';
+import { Deck, loadTrack, laneText, ctxTimeout } from './deck.js';
 import { Lane, laneLeft, mixProgress, mixTag, mixBars, incomingStart, isBeatmatched, mixesWith, mixBeat, mixAnnouncement } from './lanes.js';
 import { api, initUi, setState, getState, report, FX_LABEL, FX_ICON, icon, setOpener, toTab, setPick, pairOf, isLoved, autoLabel, fxOptionLabel, withThumbs, fxShape, setAir } from './ui.js';
 import { initOnboard, renderOnboard } from './onboard.js';
@@ -67,7 +67,7 @@ const status = (t, sticky = false) => {
   $('#status').textContent = t;
   if (t && !sticky) statusTimer = setTimeout(() => { $('#status').textContent = ''; }, 8000);
 };
-const at = (ctxTime, fn) => M.timers.push(setTimeout(fn, Math.max(0, ctxTime - now()) * 1000));
+const at = (ctxTime, fn) => ctxTimeout(M.ctx, ctxTime, fn, (id) => M.timers.push(id));
 const clearTimers = () => { M.timers.forEach(clearTimeout); M.timers = []; };
 const curId = () => M.decks[M.cur].info?.id;
 // Live = the mixer owns the screen (from the first song starting until it stops for good).
@@ -420,19 +420,54 @@ function helpButtons(items) {
 }
 
 // --- controls ---------------------------------------------------------------
+// Pause: the lamp (and Space) pause and resume the whole mixer. Never a cut (owner's call):
+// the output fades over FADE_BARS bars of the song on air, then the AudioContext is suspended,
+// which freezes every scheduled mix, loop and countdown with it (they all run on ctx time).
+// Play and resume fade back in the same way.
+const FADE_BARS = 2;
+const fadeSecs = () => FADE_BARS * 240 / (M.decks[M.cur]?.info?.bpm_playing || 120);
+function fadeTo(v, secs) {
+  const g = M.out.gain, t = now();
+  g.cancelScheduledValues(t);
+  g.setValueAtTime(g.value, t); // from wherever it is: pressed again mid-fade turns it around
+  g.linearRampToValueAtTime(v, t + secs);
+}
+async function togglePause() {
+  clearTimeout(M.suspendTimer);
+  M.paused = !M.paused;
+  document.body.classList.toggle('paused', M.paused);
+  $('#play').setAttribute('aria-label', M.paused ? 'Resume' : 'Pause');
+  if (M.paused) {
+    const secs = fadeSecs();
+    fadeTo(0, secs);
+    M.suspendTimer = setTimeout(() => M.ctx.suspend(), secs * 1000 + 50);
+    status('Paused', true);
+  } else {
+    await M.ctx.resume();
+    fadeTo(1, fadeSecs());
+    status('');
+  }
+}
+
 async function play() {
-  if (live()) return;
+  if (live()) { togglePause(); return; }
   $('#play').disabled = true;
   try {
     // Autoplay policy: the AudioContext must be created inside the click.
     if (!M.ctx) {
       M.ctx = new AudioContext();
       const master = new GainNode(M.ctx);
+      // The very last node (after the echo tail too): only Play / Pause fades touch it.
+      M.out = new GainNode(M.ctx);
+      M.out.connect(M.ctx.destination);
       // Live performance FX on the master bus, after both decks, so the owner's hands never
       // fight a scheduled transition's automation (which lives on the deck nodes).
-      M.live = liveFx(M.ctx, master);
+      M.live = liveFx(M.ctx, master, M.out);
       M.decks = [0, 1].map((i) => new Deck(M.ctx, master, $(`#deck${i}`)));
     }
+    M.paused = false;
+    M.out.gain.cancelScheduledValues(0);
+    M.out.gain.value = 0; // silent until the opener starts, then FADE_BARS bars up
     await M.ctx.resume();
     const s = await api('/api/state');
     setState(s);
@@ -444,6 +479,7 @@ async function play() {
     const first = O.id ? { id: O.id, title: O.title } : s.queue[0];
     if (!first) throw new Error('Nothing ready to play yet — add songs first.');
     await startSong(first, O.id ? O.at : null, O.id === first.id ? O.info : null);
+    fadeTo(1, fadeSecs());
   } catch (e) {
     status(e.message, true);
     $('#play').disabled = false;
@@ -464,7 +500,9 @@ function setLive(on) {
   mo = { plan: null, beat: null }; ghost = null;
   stripKey[0] = stripKey[1] = ''; // section buttons re-evaluated in the new mode
   closeLoopMenu();
-  $('#play').disabled = on;
+  // Live, the lamp is the Pause / Resume button (togglePause); idle, it's PLAY.
+  $('#play').disabled = false;
+  if (!on) { M.paused = false; document.body.classList.remove('paused'); $('#play').removeAttribute('aria-label'); }
   for (const el of ['#xfader', '#live-filter', '#live-echo']) $(el).disabled = !on;
   if (on) {
     show('#lane-note', false);
@@ -1089,15 +1127,15 @@ document.addEventListener('pointerdown', (e) => {
 });
 
 // --- live FX: filter knob + echo throw ----------------------------------------
-function liveFx(ctx, input) {
+function liveFx(ctx, input, output) {
   const hp = new BiquadFilterNode(ctx, { type: 'highpass', frequency: S.HP_IDLE });
   const lp = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: S.LP_IDLE });
   const send = new GainNode(ctx, { gain: 0 });
   const delay = new DelayNode(ctx, { maxDelayTime: 2, delayTime: 0.5 });
   const fb = new GainNode(ctx, { gain: S.ECHO_FEEDBACK });
-  input.connect(hp).connect(lp).connect(ctx.destination);
+  input.connect(hp).connect(lp).connect(output);
   lp.connect(send).connect(delay).connect(fb).connect(delay);
-  delay.connect(ctx.destination);
+  delay.connect(output);
   return { hp, lp, send, delay };
 }
 const filterKnob = $('#live-filter');
@@ -1244,8 +1282,8 @@ $('#alt-btn').addEventListener('click', () => {
 });
 document.addEventListener('keydown', (e) => {
   const typing = e.target.closest?.('input, select, textarea, button, [role="listbox"], [contenteditable]');
-  // Space plays (before the first song), "/" jumps to search: the design's keyboard hints.
-  if (e.key === ' ' && !typing && !live() && O.id) { e.preventDefault(); play(); }
+  // Space plays (before the first song) and pauses / resumes once live, "/" jumps to search: the design's keyboard hints.
+  if (e.key === ' ' && !typing && (live() || O.id)) { e.preventDefault(); play(); }
   if (e.key === '/' && !e.target.closest?.('input, textarea, select')) { e.preventDefault(); focusSearch(); }
 });
 initOnboard({ api, setOpener, last: getState });
