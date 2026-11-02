@@ -10,7 +10,7 @@ sections, picks an order that flows, and blends every song into the next on the 
 You can let it run on its own, or steer it: reorder Up next, pick the next effect, pick a mood or
 party style, loop a section, or let an AI assistant DJ through MCP.
 
-![autodeck on the desktop: the ON AIR deck, the cued next song and Up next](docs/screenshots/desktop.png)
+![autodeck on the desktop: a beat blend from deck B into deck A, Up next and the Uplift playlist](docs/screenshots/desktop.jpg)
 
 <img src="docs/screenshots/phone.png" alt="autodeck at phone width" width="300">
 
