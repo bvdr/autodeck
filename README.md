@@ -1,40 +1,16 @@
 # autodeck
 
-> **Beta.** autodeck is a personal project that is still changing quickly. Expect rough edges and
-> bugs. Use it at your own risk: it comes with no warranty (see [License](#license)).
+An auto-DJ for Apple Silicon Macs. Give it a YouTube playlist and it plays the songs as one
+beatmatched mix.
 
-autodeck is an auto-DJ for your Mac. Point it at a YouTube or YouTube Music playlist and it plays
-the songs as one continuous mix, the way a DJ would: it finds each song's beats, bars, key and
-sections, picks an order that flows, and blends every song into the next on the beat.
+> **Beta.** Use it at your own risk.
 
-You can let it run on its own, or steer it: reorder Up next, pick the next effect, pick a mood or
-party style, loop a section, or let an AI assistant DJ through MCP.
-
-![autodeck on the desktop: a beat blend from deck B into deck A, Up next and the Uplift playlist](docs/screenshots/desktop.jpg)
-
-<img src="docs/screenshots/phone.png" alt="autodeck at phone width" width="300">
-
-**What it does**
-- **Imports** songs from YouTube / YouTube Music links, playlists or your Liked Music (via yt-dlp).
-- **Analyzes** each song locally: beat and bar grid (beat_this), tempo, key, sections, loudness,
-  genre (Discogs-EffNet) and language (Whisper tiny).
-- **Mixes** two decks in the browser with Web Audio: tempo-matched blends rendered with Rubber Band,
-  bass swaps, echo outs, and vocal swaps using stems split by Demucs.
-- **Learns** which pairs worked from your ratings, and suggests songs from moods, genres and
-  party styles (Last.fm and public playlists).
-- **Stays local.** The server only listens on `127.0.0.1`. Nothing about your library leaves your Mac
-  except the YouTube downloads and optional Last.fm lookups.
-
-Runs on macOS with Apple Silicon.
+![autodeck mixing two songs](docs/screenshots/desktop.jpg)
 
 ## Download
 
-Get the latest DMG from [Releases](https://github.com/bvdr/autodeck/releases) (beta builds are marked pre-release), open it and drag
-autodeck to Applications. The first launch installs the audio libraries and models (about 1.5 GB) into
-`~/Library/Application Support/autodeck/`. See [Mac app](#mac-app) for what's inside.
-
-autodeck downloads audio from YouTube for your personal listening. Respect YouTube's terms and the
-rights of the artists whose music you play.
+Get the DMG from [Releases](https://github.com/bvdr/autodeck/releases) and drag autodeck to
+Applications. The first launch downloads about 1.5 GB of audio libraries and models.
 
 ## One-time setup
 
